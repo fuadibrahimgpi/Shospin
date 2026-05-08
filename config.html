@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Configurações - MedScan AI</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+
+    .container {
+      background: white;
+      border-radius: 16px;
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+      max-width: 600px;
+      width: 100%;
+      padding: 40px;
+    }
+
+    h1 {
+      font-size: 28px;
+      color: #1a202c;
+      margin-bottom: 8px;
+    }
+
+    .subtitle {
+      color: #718096;
+      margin-bottom: 32px;
+      font-size: 14px;
+    }
+
+    .form-group {
+      margin-bottom: 24px;
+    }
+
+    label {
+      display: block;
+      font-weight: 600;
+      color: #2d3748;
+      margin-bottom: 8px;
+      font-size: 14px;
+    }
+
+    input {
+      width: 100%;
+      padding: 12px 16px;
+      border: 2px solid #e2e8f0;
+      border-radius: 8px;
+      font-size: 14px;
+      transition: all 0.2s;
+      font-family: 'Courier New', monospace;
+    }
+
+    input:focus {
+      outline: none;
+      border-color: #667eea;
+      box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+    }
+
+    .help-text {
+      font-size: 12px;
+      color: #718096;
+      margin-top: 6px;
+    }
+
+    .help-text a {
+      color: #667eea;
+      text-decoration: none;
+    }
+
+    .help-text a:hover {
+      text-decoration: underline;
+    }
+
+    .button-group {
+      display: flex;
+      gap: 12px;
+      margin-top: 32px;
+    }
+
+    button {
+      flex: 1;
+      padding: 12px 24px;
+      border: none;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .btn-primary {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+    }
+
+    .btn-primary:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 10px 20px rgba(102, 126, 234, 0.3);
+    }
+
+    .btn-secondary {
+      background: #f7fafc;
+      color: #4a5568;
+      border: 2px solid #e2e8f0;
+    }
+
+    .btn-secondary:hover {
+      background: #edf2f7;
+    }
+
+    .status-message {
+      padding: 12px 16px;
+      border-radius: 8px;
+      font-size: 14px;
+      margin-top: 16px;
+      display: none;
+    }
+
+    .status-message.success {
+      background: #f0fdf4;
+      color: #166534;
+      border: 1px solid #bbf7d0;
+      display: block;
+    }
+
+    .status-message.error {
+      background: #fef2f2;
+      color: #991b1b;
+      border: 1px solid #fecaca;
+      display: block;
+    }
+
+    .info-box {
+      background: #eff6ff;
+      border: 1px solid #bfdbfe;
+      border-radius: 8px;
+      padding: 16px;
+      margin-bottom: 24px;
+    }
+
+    .info-box h3 {
+      font-size: 14px;
+      color: #1e40af;
+      margin-bottom: 8px;
+    }
+
+    .info-box p {
+      font-size: 13px;
+      color: #1e3a8a;
+      line-height: 1.6;
+    }
+
+    .info-box ol {
+      margin-left: 20px;
+      margin-top: 8px;
+    }
+
+    .info-box li {
+      font-size: 13px;
+      color: #1e3a8a;
+      margin-bottom: 4px;
+    }
+  </style>
+</head>
+
+<body>
+  <div class="container">
+    <h1>⚙️ Configurações</h1>
+    <p class="subtitle">Configure sua chave API do Google Cloud</p>
+
+    <div class="info-box">
+      <h3>📌 Como obter sua chave API?</h3>
+      <ol>
+        <li>Acesse <a href="https://aistudio.google.com/app/apikey" target="_blank">Google AI Studio</a></li>
+        <li>Clique em "Get API Key" ou "Create API Key"</li>
+        <li>Copie a chave gerada</li>
+        <li>Cole no campo abaixo</li>
+      </ol>
+    </div>
+
+    <form id="configForm">
+      <div class="form-group">
+        <label for="apiKey">Chave API do Google Gemini</label>
+        <input type="text" id="apiKey" name="apiKey" placeholder="AIza..." required>
+        <p class="help-text">
+          Sua chave será armazenada de forma segura no navegador.
+          <a href="https://aistudio.google.com/app/apikey" target="_blank">Obter chave →</a>
+        </p>
+      </div>
+
+      <div class="button-group">
+        <button type="submit" class="btn-primary">💾 Salvar Configurações</button>
+        <button type="button" id="testBtn" class="btn-secondary">🧪 Testar</button>
+      </div>
+    </form>
+
+    <div id="statusMessage" class="status-message"></div>
+  </div>
+
+  <script src="scripts/config.js"></script>
+</body>
+
+</html>

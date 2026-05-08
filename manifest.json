@@ -1,0 +1,68 @@
+{
+  "manifest_version": 3,
+  "name": "Shosp Oftalmologia - Transcrição",
+  "version": "5.1.2",
+  "description": "Transcrição de consultas e OCR de exames com IA para sistema Shosp (v5.1.2)",
+  "permissions": [
+    "activeTab",
+    "storage",
+    "scripting",
+    "tabs"
+  ],
+  "host_permissions": [
+    "https://sistema.shosp.com.br/*",
+    "https://*.shosp.com.br/*",
+    "https://generativelanguage.googleapis.com/*"
+  ],
+  "action": {
+    "default_title": "Shosp Transcrição",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "background": {
+    "service_worker": "dist/background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://*.shosp.com.br/*"],
+      "js": ["dist/content.js"],
+      "css": ["styles/content.css"],
+      "run_at": "document_idle"
+    }
+  ],
+  "options_page": "config.html",
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "commands": {
+    "toggle-recording": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+M",
+        "mac": "Command+Shift+M"
+      },
+      "description": "Iniciar/parar gravação"
+    },
+    "capture-exam": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+C",
+        "mac": "Command+Shift+C"
+      },
+      "description": "Capturar exame"
+    },
+    "inject-all": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+V",
+        "mac": "Command+Shift+V"
+      },
+      "description": "Injetar todos os dados"
+    }
+  }
+}

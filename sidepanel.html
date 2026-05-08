@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Robô Oftalmológico</title>
+  <link rel="stylesheet" href="styles/sidepanel.css">
+</head>
+
+<body>
+  <div class="container">
+    <!-- Seletor de Modo -->
+    <div class="mode-selector">
+      <button id="audioModeBtn" class="mode-btn active" data-mode="audio">
+        <svg class="mode-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
+          <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+          <line x1="12" y1="19" x2="12" y2="23" />
+        </svg>
+        <span>Áudio</span>
+      </button>
+      <button id="cameraModeBtn" class="mode-btn" data-mode="camera">
+        <svg class="mode-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <rect x="2" y="3" width="20" height="14" rx="2" ry="2" />
+          <circle cx="12" cy="10" r="3" />
+        </svg>
+        <span>Câmera</span>
+      </button>
+    </div>
+
+    <!-- ========== MODO ÁUDIO ========== -->
+    <div id="audioSection" class="section">
+      <div class="capture-section">
+        <button id="recordBtn" class="record-btn">
+          <svg class="mic-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
+            <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+            <line x1="12" y1="19" x2="12" y2="23" />
+            <line x1="8" y1="23" x2="16" y2="23" />
+          </svg>
+        </button>
+        <p id="statusText" class="status-text">Clique para iniciar o ditado</p>
+        <p id="timerText" class="timer-text hidden">00:00</p>
+      </div>
+
+      <!-- Indicador de Processamento Áudio -->
+      <div id="processingIndicator" class="processing hidden">
+        <div class="spinner"></div>
+        <p id="processingStatus">Processando...</p>
+      </div>
+
+      <!-- Tipo de Consulta -->
+      <div id="consultationType" class="consultation-type hidden">
+        <span class="type-badge primeira">Primeira Consulta</span>
+      </div>
+
+      <!-- Campos de Áudio -->
+      <div id="audioFieldsContainer" class="fields-container hidden">
+        <!-- Campos de Primeira Consulta -->
+        <div id="primeiraConsultaFields" class="fields-group">
+          <div class="field">
+            <label>HDA</label>
+            <textarea id="hdaField" rows="3" placeholder="História da Doença Atual"></textarea>
+          </div>
+          <div class="field">
+            <label>Medicações em Uso</label>
+            <textarea id="medicacoesField" rows="2" placeholder="Medicações"></textarea>
+          </div>
+          <div class="field">
+            <label>Antecedentes Oftalmológicos</label>
+            <textarea id="antecedentesOftField" rows="2" placeholder="Antecedentes Oftalmológicos"></textarea>
+          </div>
+          <div class="field">
+            <label>Doenças Sistêmicas</label>
+            <textarea id="doencasSistemicasField" rows="2" placeholder="Doenças Sistêmicas"></textarea>
+          </div>
+          <div class="field">
+            <label>Antecedentes Familiares</label>
+            <textarea id="antecedentesFamField" rows="2" placeholder="Antecedentes Familiares"></textarea>
+          </div>
+          <div class="field">
+            <label>C.I.D. (Diagnóstico) - <i>Busca manual no Shosp</i></label>
+            <div style="display: flex; gap: 8px; align-items: flex-start;">
+              <textarea id="diagnosticoField" rows="2" placeholder="Ex: Miopia, Astigmatismo" style="flex: 1;"></textarea>
+              <button id="btnSearchCid" class="btn btn-secondary" style="padding: 8px 12px; min-width: 80px; height: 100%;">Buscar</button>
+            </div>
+          </div>
+          <div class="field">
+            <label>Conduta</label>
+            <textarea id="condutaField" rows="3" placeholder="Diagnósticos, orientações, encaminhamentos, retorno"></textarea>
+          </div>
+          <div class="field">
+            <label>Tratamento</label>
+            <textarea id="medicamentosPrescritosField" rows="3" placeholder="Medicações e procedimentos a serem realizados no tratamento"></textarea>
+          </div>
+        </div>
+
+        <!-- Campos de Retorno -->
+        <div id="retornoFields" class="fields-group hidden">
+          <div class="field">
+            <label>Retorno</label>
+            <textarea id="retornoField" rows="3" placeholder="Descrição do Retorno"></textarea>
+          </div>
+          <div class="field">
+            <label>Medicações em Uso</label>
+            <textarea id="medicacoesRetornoField" rows="2" placeholder="Medicações"></textarea>
+          </div>
+          <div class="field">
+            <label>C.I.D. (Diagnóstico) - <i>Busca manual no Shosp</i></label>
+            <div style="display: flex; gap: 8px; align-items: flex-start;">
+              <textarea id="diagnosticoRetornoField" rows="2" placeholder="Ex: Miopia, Astigmatismo" style="flex: 1;"></textarea>
+              <button id="btnSearchCidRetorno" class="btn btn-secondary" style="padding: 8px 12px; min-width: 80px; height: 100%;">Buscar</button>
+            </div>
+          </div>
+          <div class="field">
+            <label>Conduta</label>
+            <textarea id="condutaRetornoField" rows="3" placeholder="Diagnósticos, orientações, encaminhamentos, retorno"></textarea>
+          </div>
+          <div class="field">
+            <label>Tratamento</label>
+            <textarea id="medicamentosPrescritosRetornoField" rows="3" placeholder="Medicações e procedimentos a serem realizados no tratamento"></textarea>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ========== MODO CÂMERA ========== -->
+    <div id="cameraSection" class="section hidden">
+      <!-- Área de Vídeo -->
+      <div class="camera-section">
+        <div class="video-container">
+          <video id="cameraVideo" autoplay playsinline muted></video>
+          <div id="cameraOverlay" class="camera-overlay">
+            <div class="camera-loading">
+              <div class="spinner"></div>
+              <p>Iniciando câmera...</p>
+            </div>
+          </div>
+        </div>
+        <canvas id="captureCanvas" width="3840" height="2160" style="display:none;"></canvas>
+
+        <!-- Status da Câmera -->
+        <div class="camera-status">
+          <p id="cameraStatusText">Aponte para o ticket TOPCON ou autorefrator</p>
+          <div id="cameraProgress" class="camera-progress hidden">
+            <div class="progress-bar">
+              <div id="progressFill" class="progress-fill"></div>
+            </div>
+            <span id="attemptCount">Tentativa 1/5</span>
+          </div>
+        </div>
+
+        <!-- Botões da Câmera -->
+        <div class="camera-buttons">
+          <button id="startCameraBtn" class="btn btn-primary">
+            <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="10" />
+              <circle cx="12" cy="12" r="3" />
+            </svg>
+            Iniciar Câmera
+          </button>
+          <button id="manualCaptureBtn" class="btn btn-primary hidden">
+            <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="10" />
+              <circle cx="12" cy="12" r="3" />
+            </svg>
+            Capturar Agora
+          </button>
+          <button id="stopCameraBtn" class="btn btn-secondary hidden">Parar</button>
+        </div>
+      </div>
+
+      <!-- Overlay de Processamento (fora do video-container para garantir visibilidade) -->
+      <div id="processingOverlay" class="processing-overlay hidden">
+        <div class="processing-content">
+          <div class="processing-spinner-ring">
+            <svg viewBox="0 0 50 50" class="processing-svg-spinner">
+              <circle cx="25" cy="25" r="20" fill="none" stroke="rgba(255,255,255,0.15)" stroke-width="4"/>
+              <circle cx="25" cy="25" r="20" fill="none" stroke="white" stroke-width="4" stroke-linecap="round" class="processing-arc"/>
+            </svg>
+            <span id="processingIcon" class="processing-step-icon">&#128248;</span>
+          </div>
+          <p id="processingStepText" class="processing-step-text">Processando...</p>
+          <div class="processing-steps-track">
+            <div class="processing-steps-bar">
+              <div id="processingStepsFill" class="processing-steps-fill"></div>
+            </div>
+            <span id="processingStepLabel" class="processing-step-label">Etapa 1 de 7</span>
+          </div>
+          <span id="processingTimer" class="processing-timer">0s</span>
+        </div>
+      </div>
+
+      <!-- Campos de Exames -->
+      <div id="examFieldsContainer" class="fields-container hidden">
+        <div class="exam-results">
+          <!-- Tonometria -->
+          <div id="tonometriaSection" class="exam-section hidden">
+            <h4 class="exam-title">Tonometria (mmHg)</h4>
+            <div class="exam-values">
+              <div class="exam-value">
+                <label>OD</label>
+                <input type="text" id="tonoOdField" readonly>
+              </div>
+              <div class="exam-value">
+                <label>OE</label>
+                <input type="text" id="tonoOeField" readonly>
+              </div>
+            </div>
+          </div>
+
+          <!-- Paquimetria -->
+          <div id="paquimetriaSection" class="exam-section hidden">
+            <h4 class="exam-title">Paquimetria (μm)</h4>
+            <div class="exam-values">
+              <div class="exam-value">
+                <label>OD</label>
+                <input type="text" id="paquiOdField" readonly>
+              </div>
+              <div class="exam-value">
+                <label>OE</label>
+                <input type="text" id="paquiOeField" readonly>
+              </div>
+            </div>
+          </div>
+
+          <!-- Refração -->
+          <div id="refracaoSection" class="exam-section hidden">
+            <h4 class="exam-title">Refração</h4>
+            <div class="refraction-grid">
+              <div class="refraction-eye">
+                <label>OD</label>
+                <div class="refraction-values">
+                  <input type="text" id="refOdEsf" placeholder="Esf" readonly>
+                  <input type="text" id="refOdCil" placeholder="Cil" readonly>
+                  <input type="text" id="refOdEixo" placeholder="Eixo" readonly>
+                </div>
+              </div>
+              <div class="refraction-eye">
+                <label>OE</label>
+                <div class="refraction-values">
+                  <input type="text" id="refOeEsf" placeholder="Esf" readonly>
+                  <input type="text" id="refOeCil" placeholder="Cil" readonly>
+                  <input type="text" id="refOeEixo" placeholder="Eixo" readonly>
+                </div>
+              </div>
+            </div>
+
+            <!-- Opção para injetar em receita de óculos -->
+            <div id="receitaOculosOption" class="receita-option hidden">
+              <label class="checkbox-label">
+                <input type="checkbox" id="injectReceitaCheckbox" checked>
+                <span>RECEITA DE ÓCULOS</span>
+              </label>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ========== ÁREA COMUM ========== -->
+    <!-- Resumo de Dados Coletados -->
+    <div id="dataSummary" class="data-summary hidden">
+      <h4>Dados Coletados</h4>
+      <div class="summary-badges">
+        <span id="audioBadge" class="summary-badge hidden">Áudio</span>
+        <span id="cameraBadge" class="summary-badge hidden">Exames</span>
+      </div>
+    </div>
+
+    <!-- Botões de Ação -->
+    <div id="actionButtons" class="action-buttons hidden">
+      <button id="injectAllBtn" class="btn btn-primary">Injetar Todos no Shosp</button>
+      <button id="clearBtn" class="btn btn-secondary">Limpar Tudo</button>
+    </div>
+
+    <!-- Mensagem de Sucesso -->
+    <div id="successMessage" class="success-message hidden">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
+        <polyline points="22 4 12 14.01 9 11.01" />
+      </svg>
+      <span>Dados injetados com sucesso!</span>
+    </div>
+  </div>
+
+  <!-- Gatilhos clínicos — carregado PRIMEIRO (normalizeText + arrays de comandos) -->
+  <script src="config/clinical-triggers.js"></script>
+
+  <!-- AI Engine -->
+  <script src="dist/Logger.js"></script>
+  <script src="dist/ApiService.js"></script>
+  <script src="dist/DecisionEngine.js"></script>
+  <script src="dist/geminiService.js"></script>
+
+  <!-- Side Panel Modules (ordem importa!) -->
+  <script src="scripts/sidepanel-constants.js"></script>
+  <script src="scripts/state-manager.js"></script>
+  <script src="scripts/sidepanel-hooks.js"></script>
+  <script src="scripts/sidepanel-hook-runner.js"></script>
+  <script src="scripts/sidepanel-audio.js"></script>
+  <script src="scripts/sidepanel-camera.js"></script>
+  <script src="scripts/sidepanel-injection.js"></script>
+  <script src="scripts/sidepanel-init.js"></script>
+</body>
+
+</html>

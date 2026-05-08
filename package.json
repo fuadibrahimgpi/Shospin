@@ -1,0 +1,15 @@
+{
+  "name": "shosp-extension",
+  "version": "5.1.2",
+  "private": true,
+  "description": "Extensão Chrome MV3 para automação de prontuário oftalmológico no SHOSP (transcrição por voz + OCR de ticket TOPCON via Gemini).",
+  "scripts": {
+    "check": "node scripts-dev/check.js",
+    "test": "node scripts-dev/test.js",
+    "test:integration": "node utils/integration-test.js",
+    "test:hooks": "node utils/hooks-test.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

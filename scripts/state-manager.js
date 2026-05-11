@@ -62,6 +62,7 @@ const StateManager = {
     opacidadeCapsulaDetectada = false;
     dilatacaoDetectada        = false;
     fundoscopiaDetectada      = false;
+    consultaEncerradaDetectada = false; // CRÍTICO: permite STOP nas consultas seguintes da mesma sessão
 
     // Transcript e buffer de voz
     recognizedText   = '';

@@ -303,3 +303,9 @@ Posso ajudar:           'posso ajudar em alguma coisa mais',
 **Sintoma:** `BLEFARITE_TRATAMENTO_PADRAO` aparece mesmo sem o médico prescrever
 **Causa:** lógica antiga usava `if (!campoTratamento.value)` sem verificar o Gemini
 **Solução atual:** só preenche se `audioData?.dados?.tratamento` existir
+
+### Caso 4 — STOP não dispara em consultas após a primeira da sessão ⭐
+**Sintoma:** gatilho de encerramento não dispara a partir da 2ª consulta, médico precisa clicar manualmente
+**Causa:** `consultaEncerradaDetectada` era setada como `true` na 1ª consulta e **não era resetada** em `StateManager.resetSession()`. O guard do hook STOP (`(s) => s.consultaEncerradaDetectada`) bloqueava todos os disparos subsequentes na mesma sessão do Chrome.
+**Arquivo corrigido:** `scripts/state-manager.js` — adicionado `consultaEncerradaDetectada = false` no bloco de reset de flags
+**Data:** 2026-05-11

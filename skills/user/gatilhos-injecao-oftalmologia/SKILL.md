@@ -309,3 +309,15 @@ Posso ajudar:           'posso ajudar em alguma coisa mais',
 **Causa:** `consultaEncerradaDetectada` era setada como `true` na 1ª consulta e **não era resetada** em `StateManager.resetSession()`. O guard do hook STOP (`(s) => s.consultaEncerradaDetectada`) bloqueava todos os disparos subsequentes na mesma sessão do Chrome.
 **Arquivo corrigido:** `scripts/state-manager.js` — adicionado `consultaEncerradaDetectada = false` no bloco de reset de flags
 **Data:** 2026-05-11
+
+### Caso 5 — Dilatação falsa disparada ao prescrever colírio de blefarite ⭐
+**Sintoma:** Hook de dilatação dispara com cmd `"pingar o colirio"` quando médico está prescrevendo tratamento de blefarite (3x/dia), interrompendo a consulta prematuramente
+**Causa:** `'pingar o colirio'`, `'vou pingar o colirio'`, `'pingar colirio'` e `'vou pingar os colirios'` eram genéricos demais — aparecem tanto em prescrição de blefarite quanto em dilataçcão
+**Arquivo corrigido:** `config/clinical-triggers.js` — removidas as 4 variantes genéricas. Mantidas apenas formas que combinam dilation explícita: `'vou pingar para dilatar'`, `'vou colocar o colirio para dilatar'`
+**Data:** 2026-05-11
+
+### Caso 6 — injectAll injeta dados de áudio durante pausa de dilatação ⭐
+**Sintoma:** Quando a câmera captura OCR enquanto a dilatação está pendente, o `injectAll()` chamado pela câmera encontra `audioData` setado (por `displayAudioResults`) e injeta conduta/tratamento de uma consulta que ainda não terminou
+**Causa:** `injectAll()` não tinha guard para `dilatacaoDetectada` — apenas `processAudioInBackground` bloqueava o caminho de áudio, mas o caminho de câmera contornava esse bloqueio
+**Arquivo corrigido:** `scripts/sidepanel-injection.js` — adicionado guard no topo de `injectAll()`: quando `dilatacaoDetectada=true`, o áudio é temporariamente removido e apenas a câmera é injetada; o `audioData` é restaurado para injeção manual ao final da consulta
+**Data:** 2026-05-11

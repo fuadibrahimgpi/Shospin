@@ -134,6 +134,26 @@ async function injectAll() {
     throw new Error('Revisão manual obrigatória');
   }
 
+  // Guard de dilatação: se a consulta ainda não encerrou (paciente foi dilatar),
+  // o audioData contém dados parciais — NÃO injetar conduta/tratamento ainda.
+  // Permite injeção de camera (exames OCR) mas exclui o áudio desta chamada.
+  // O áudio permanece disponível para quando o paciente retornar e a gravação reiniciar.
+  if (dilatacaoDetectada && audioData && !audioData._dilatacaoConcluidaManualmente) {
+    console.warn('[InjectAll] Dilatação pendente — excluindo áudio desta injeção (apenas câmera será enviada).');
+    audioDataInjected = true; // marcar como "já tratado" para evitar auto-injeção duplicada
+    injectAll._running = false;
+    // Re-chamar sem o audioData para injetar apenas câmera
+    const _audioDataBackup = audioData;
+    audioData = null;
+    try {
+      await injectAll();
+    } finally {
+      audioData = _audioDataBackup;
+      audioDataInjected = false; // restaurar para que o médico possa injetar manualmente ao final
+    }
+    return;
+  }
+
   // 1. Buscar aba do SHOSP
   // Tenta padrões do mais específico ao mais geral para não perder a aba.
   let tabs;
@@ -583,56 +603,58 @@ function showError(message) {
 // INJEÇÃO DIRETA (durante gravação, sem parar)
 // ============================================================================
 
-function injectExamesNormaisDirect() {
-  chrome.runtime.sendMessage({
-    action: 'injectExamesViaBackground',
+async function _getShospTab() {
+  const tabs = await chrome.tabs.query({ url: '*://*.shosp.com.br/*' });
+  return tabs.length > 0 ? tabs[0] : null;
+}
+
+async function injectExamesNormaisDirect() {
+  const tab = await _getShospTab();
+  if (!tab) { statusText.textContent = 'Gravando... (Shosp não encontrado)'; return; }
+  const response = await sendToTab(tab.id, {
+    action: 'injectExamesNormais',
     data: {
       biomicroscopia: getBiomicroscopiaComLente(BIOMICROSCOPIA_NORMAL),
-      fundoscopia: fundoscopiaDetectada ? FUNDOSCOPIA_NORMAL : null
-    }
-  }, (response) => {
-    if (chrome.runtime.lastError) {
-      statusText.textContent = 'Gravando... (exames não injetados)';
-    } else if (response?.success) {
-      statusText.textContent = 'Gravando... (exames injetados)';
-      setTimeout(() => { if (isRecording) statusText.textContent = 'Gravando...'; }, 2000);
-    } else {
-      statusText.textContent = 'Gravando... (exames não injetados)';
-    }
+      fundoscopia: fundoscopiaDetectada ? FUNDOSCOPIA_NORMAL : null,
+    },
   });
+  if (response?.success) {
+    statusText.textContent = 'Gravando... (exames injetados)';
+    setTimeout(() => { if (isRecording) statusText.textContent = 'Gravando...'; }, 2000);
+  } else {
+    statusText.textContent = 'Gravando... (exames não injetados)';
+  }
 }
 
-function injectBlefariteDirect() {
-  chrome.runtime.sendMessage({
-    action: 'injectExamesViaBackground',
+async function injectBlefariteDirect() {
+  const tab = await _getShospTab();
+  if (!tab) { statusText.textContent = 'Gravando... (Shosp não encontrado)'; return; }
+  const response = await sendToTab(tab.id, {
+    action: 'injectExamesNormais',
     data: {
       biomicroscopia: getBiomicroscopiaComLente(BIOMICROSCOPIA_BLEFARITE),
-      fundoscopia: FUNDOSCOPIA_NORMAL  // Blefarite afeta biomicroscopia, fundoscopia continua normal
-    }
-  }, (response) => {
-    if (chrome.runtime.lastError) {
-      statusText.textContent = 'Gravando... (exame não injetado)';
-    } else if (response?.success) {
-      statusText.textContent = 'Gravando... (blefarite + fundoscopia injetadas)';
-      setTimeout(() => { if (isRecording) statusText.textContent = 'Gravando...'; }, 2000);
-    } else {
-      statusText.textContent = 'Gravando... (exame não injetado)';
-    }
+      fundoscopia: FUNDOSCOPIA_NORMAL,
+    },
   });
+  if (response?.success) {
+    statusText.textContent = 'Gravando... (blefarite + fundoscopia injetadas)';
+    setTimeout(() => { if (isRecording) statusText.textContent = 'Gravando...'; }, 2000);
+  } else {
+    statusText.textContent = 'Gravando... (exame não injetado)';
+  }
 }
 
-function injectReceitaOlhoIrritadoDirect() {
-  chrome.runtime.sendMessage({
-    action: 'injectReceitaViaBackground',
-    data: { receita: RECEITA_OLHO_IRRITADO }
-  }, (response) => {
-    if (chrome.runtime.lastError) {
-      statusText.textContent = 'Gravando... (receita não injetada)';
-    } else if (response?.success) {
-      statusText.textContent = 'Gravando... (receita injetada e impressa)';
-      setTimeout(() => { if (isRecording) statusText.textContent = 'Gravando...'; }, 3000);
-    } else {
-      statusText.textContent = 'Gravando... (receita não injetada)';
-    }
+async function injectReceitaOlhoIrritadoDirect() {
+  const tab = await _getShospTab();
+  if (!tab) { statusText.textContent = 'Gravando... (Shosp não encontrado)'; return; }
+  const response = await sendToTab(tab.id, {
+    action: 'injectReceitaOlhoIrritado',
+    data: { receita: RECEITA_OLHO_IRRITADO },
   });
+  if (response?.success) {
+    statusText.textContent = 'Gravando... (receita injetada e impressa)';
+    setTimeout(() => { if (isRecording) statusText.textContent = 'Gravando...'; }, 3000);
+  } else {
+    statusText.textContent = 'Gravando... (receita não injetada)';
+  }
 }

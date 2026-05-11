@@ -50,8 +50,6 @@ const STOP_COMMANDS = [
   'pode ir ate a recepcao',
   'ate a proxima consulta',
   'ate o proximo retorno',
-  'ate a proxima',
-  'ate o proximo',
   'nos vemos em breve',
   'qualquer duvida me procura',
   'qualquer duvida me liga',
@@ -124,14 +122,10 @@ const STOP_COMMANDS = [
   'pode comprar os oculos',
   'pode trocar os oculos',
   'vai fazer os oculos',
-  'faz os oculos',
-  'troca os oculos',
-  'pode pingar sem dor',
-  'pode pingar sem do',
-  'pode pingar sem problema',
-  'pode usar sem dor',
-  'pode usar sem problema',
-  'pode usar a vontade',
+  'pode ir na farmacia',
+  'vai la na farmacia',
+  'pode ir la na farmacia',
+  'pode ir ate a farmacia',
   'volta aqui se nao melhorar',
   'volta aqui se piorar',
   'volta se nao melhorar',
@@ -140,31 +134,21 @@ const STOP_COMMANDS = [
   'pode voltar se piorar',
   'volta aqui se necessario',
   'volta se necessario',
-  'tudo bom entao',
-  'ta bom entao',
-  'ficou claro entao',
-  'ficou alguma duvida',
   'bom viagem',
   'boa viagem',
   'bom viagem pro senhor',
   'boa viagem pro senhor',
   'bom viagem pra senhora',
   'boa viagem pra senhora',
-  'bom dia pro senhor',
-  'bom dia pra senhora',
-  'boa tarde pro senhor',
-  'boa tarde pra senhora',
-  'boa noite pro senhor',
-  'boa noite pra senhora',
-  'ta bom bom',
-  'ta otimo bom',
-  'ta certo bom',
+  'ficou alguma duvida',
+  'ficou alguma duvida pra senhora',
+  'ficou alguma duvida pro senhor',
+  'tudo bom entao',
+  'tudo certo entao',
+  'ta bom entao',
   'ate mais',
   'ate logo',
-  'ate mais ver',
-  'usa no que precisa',
-  'usa quando precisar',
-  'usa sempre que precisar',
+  'tchau',
 ];
 
 // ============================================================================
@@ -221,12 +205,10 @@ const DILATACAO_COMMANDS = [
   'colirio dilatador',
   'vou pingar para dilatar',
   'vou colocar o colirio para dilatar',
-  'vou pingar o colirio',
-  'vou pingar os colirios',
-  'pingar o colirio',
-  'pingar colirio',
-  'pode ir la fora para pingar',
-  'vai la fora para pingar o colirio',
+  // REMOVIDOS por serem genéricos demais e causarem falso positivo quando o médico
+  // prescreve colírio de blefarite ou lubrificante:
+  //   'vou pingar o colirio', 'vou pingar os colirios', 'pingar o colirio', 'pingar colirio'
+  // Manter apenas as formas que combinam explicitamente com dilatação:
   'pingou o colirio',
   'coloquei o colirio',
   'ja coloquei o colirio',
@@ -254,10 +236,13 @@ const DILATACAO_COMMANDS = [
 // Ambas as palavras devem estar presentes na mesma fonte de texto.
 
 const DILATACAO_COMBOS = [
-  ['colirio', 'la fora'],
+  // Apenas combos com palavras específicas de dilatação — "dilatar" e "pupila"
+  // são inequívocos. Os combos anteriores com 'pingar', 'efeito' e 'la fora'
+  // foram removidos: essas palavras aparecem em contextos não-dilatação
+  // (prescrição de colírios, "fazer efeito" de qualquer medicamento, "la fora"
+  // referindo-se a outros locais), causando falsos positivos em consultas longas
+  // onde o texto acumulado contém "colirio" de prescrição junto com termos genéricos.
   ['colirio', 'dilatar'],
-  ['pingar', 'colirio'],
-  ['colirio', 'efeito'],
   ['pupila', 'dilatar'],
 ];
 

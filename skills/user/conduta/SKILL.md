@@ -183,10 +183,21 @@ Use sempre a estrutura `Prescrição de óculos`, especificando o tipo quando po
 | Médico menciona apenas longe | `Prescrição de óculos para longe` |
 | Médico menciona apenas perto | `Prescrição de óculos para perto` |
 | Paciente já usa óculos e médico muda o grau | `Prescrição de óculos [tipo]` |
+| Médico não vai prescrever (óculos não indicado) | `Sem prescrição de óculos` |
 
 Quando forem prescritos óculos multifocais, progressivos ou bifocais, isso deve ficar explicitamente documentado na conduta como `Prescrição de óculos multifocais`, salvo se o médico usar outro tipo específico que deva ser preservado.
 
 Se o tipo de óculos estiver ambíguo, use `Prescrição de óculos` e não invente o tipo.
+
+### Inferência de prescrição de óculos
+
+Em consultas de refração, é possível inferir a prescrição de óculos quando o médico não verbaliza explicitamente mas o contexto é inequívoco. Infira `Prescrição de óculos` quando:
+
+- Houve refração (ticket TOPCON ou refração subjetiva na consulta), **e**
+- O médico orientou o paciente a ir a uma ótica ou comprar óculos (mesmo de forma coloquial), **e**
+- Não houve declaração de que não vai prescrever.
+
+Não infira prescrição quando o médico não mencionou óculos de nenhuma forma.
 
 ## Retornos
 
@@ -404,3 +415,18 @@ Antes de finalizar a conduta, confirme:
 
 - **Erro observado**: o campo de tratamento frequentemente criava associações medicamentosas sem prescrição explícita.
 - **Correção aplicada**: adicionada regra anti-associação para impedir combinação de colírios, princípios ativos ou medicamentos quando o médico prescreveu itens separados ou mencionou termos genéricos.
+
+### 2026-05-11 — Atualização de grau listada como opção válida
+
+- **Erro observado**: a tabela de prescrição de óculos continha a linha `Atualização de grau` como opção de registro, em contradição direta com a regra que proibio este termo.
+- **Correção aplicada**: removida esta entrada da tabela; adicionada regra de inferência de prescrição de óculos para capturar casos em que o médico não verbaliza mas o contexto é inequívoco.
+
+### 2026-05-11 — Prescrição de óculos não capturada quando não verbalizada
+
+- **Erro observado**: quando o médico realizou refração e orientou ótica sem dizer explicitamente "prescrevo óculos", o campo conduta ficava sem prescrição.
+- **Correção aplicada**: adicionada regra de inferência condicional (3 condições obrigatórias) para capturar esses casos.
+
+### 2026-05-11 — `injectExamesNormais` marcado incorretamente
+
+- **Erro observado**: a frase "tudo em paz com o olho" estava sendo usada como gatilho único para marcar `injectExamesNormais: true`, mesmo quando o médico prescrevia lubrificante ou encaminhava.
+- **Correção aplicada**: adicionada condição extra: a flag só pode ser verdadeira se não houver tratamento ou encaminhamento ativo.

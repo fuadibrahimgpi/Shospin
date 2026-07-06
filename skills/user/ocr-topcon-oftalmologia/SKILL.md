@@ -68,6 +68,85 @@ Antes de gerar o JSON final, monte mentalmente uma transcrição curta das linha
 
 Esses textos devem aparecer em `debug_leitura`. Se não houver texto confiável para um campo, use `null` e registre o motivo.
 
+## Auto-regulação por feedback (loop de aprendizado)
+
+Esta skill mantém memória de erros passados para melhorar com retroalimentação. Dois arquivos sustentam o loop:
+
+- `licoes-aprendidas.md` — regras destiladas dos erros recorrentes. **Deve ser lido antes de cada extração** e aplicado como camada extra de validação.
+- `feedback-refracao.jsonl` — log append-only com cada extração e a correção marcada pelo médico.
+
+### Antes de extrair
+
+1. Leia `licoes-aprendidas.md` (mesma pasta da SKILL.md).
+2. Para cada regra ali listada, verifique se o gatilho está presente no ticket atual. Se sim, aplique-a obrigatoriamente além das regras desta SKILL.md.
+3. Em caso de conflito entre uma lição aprendida e uma regra base, **prevalece a mais conservadora** (a que bloqueia injeção ou usa `null`).
+
+### Depois de extrair — registro
+
+Após apresentar o JSON ao médico, registre uma linha em `feedback-refracao.jsonl` com este formato:
+
+```json
+{"id":"<timestamp_iso>","input_resumo":"<trecho literal das linhas usadas, max 200 chars>","output":<json_extraido>,"correcao":null,"consolidado":false}
+```
+
+Use `id` no formato ISO 8601 com segundos (ex: `2026-05-20T14:32:05`). Mantenha `correcao: null` enquanto o médico ainda não revisou.
+
+### Marcação de correto/incorreto
+
+Quando o médico revisar e disser o que estava certo/errado (campo a campo), preencha o campo `correcao` da última linha do JSONL com:
+
+```json
+{
+  "od": {
+    "esf": {"correto": true},
+    "cil": {"correto": false, "valor_correto": -3.50, "motivo_erro": "truncamento_de_-3.50_para_-0.50"},
+    "eixo": {"correto": true},
+    "se": {"correto": true}
+  },
+  "oe": { "...": "..." },
+  "observacao_geral": "string ou null"
+}
+```
+
+Convenções:
+
+- `correto: true` → não preencher `valor_correto` nem `motivo_erro`.
+- `correto: false` → **sempre** preencher `valor_correto` (o que era certo) e `motivo_erro` (categoria curta, snake_case).
+- Se um campo não foi extraído (era `null` correto), use `{"correto": true, "era_null": true}`.
+- `observacao_geral`: usar para erros que não cabem em um campo único (ex.: `"lateralidade_invertida_OD_OE"`).
+
+**Categorias sugeridas de `motivo_erro`**: `truncamento_cilindro`, `cilindro_fantasma`, `eixo_inventado`, `esfera_sinal_errado`, `lateralidade_trocada`, `linha_de_medicao_em_vez_de_media`, `se_calculado_em_vez_de_lido`, `ceratometria_lida_como_refracao`, `outro`.
+
+### Consolidação em lições
+
+Quando o usuário pedir "consolida as lições" (ou equivalente):
+
+1. Leia todas as linhas de `feedback-refracao.jsonl` onde `consolidado: false` e há ao menos um `correto: false`.
+2. Agrupe os erros por `motivo_erro`.
+3. Para cada grupo com **≥2 ocorrências**, gere uma lição nova ou atualize uma existente em `licoes-aprendidas.md` no formato:
+
+   ```markdown
+   ### <motivo_erro em texto humano>
+
+   - **Regra**: <ação concreta a tomar para evitar o erro>
+   - **Origem**: <N> correções entre <data_primeira> e <data_ultima>
+   - **Como aplicar**: <gatilho visual ou lógico que ativa a regra>
+   ```
+
+4. Erros com 1 única ocorrência **não viram lição ainda** — apenas após repetição, para evitar regras frágeis.
+5. Após consolidar, marque `consolidado: true` nas linhas processadas.
+6. Reporte ao médico: quantas lições novas, quantas atualizadas, quantos erros ainda isolados (1 ocorrência).
+
+### Quando uma lição "expira"
+
+Se uma lição existe e os últimos **5 casos** que ativaram seu gatilho foram extraídos corretamente sem precisar dela, marque-a como `<!-- candidata_a_remocao -->` e avise o médico. Não remova automaticamente.
+
+### Convivência com a Validação final obrigatória
+
+As lições de `licoes-aprendidas.md` são uma camada **adicional**, não substituem o checklist final. Após aplicar as lições, execute igualmente a validação final.
+
+---
+
 ## Regra CYL — leitura da coluna de cilindro do ticket TOPCON
 
 O cabeçalho da coluna de cilindro no ticket TOPCON é sempre `CYL: (−)` (notação negativa). Cada linha de medida tem 3 colunas: **S** (esfera), **C** (cilindro), **A** (eixo). Para evitar cilindro fantasma, siga rigorosamente:
@@ -111,7 +190,7 @@ Nunca use uma linha que contenha apenas `S.E.` como fonte de ESF, CIL ou EIXO.
 | `esf` | Copie com sinal. Zero pode ser `"plano"` se estiver assim no ticket. Se sinal ausente, só infira se ESF puder ser derivado com segurança de `SE - CIL/2`; se não, use `null`. |
 | `cil` | Deve ser negativo, zero ou `null`. Se vier positivo em notação de cilindro positivo, converta para negativo somente se todos os campos necessários para transposição forem visíveis; caso contrário, bloqueie injeção. |
 | `eixo` | Inteiro entre 1 e 180. Se `cil` for `0` ou `null`, `eixo` deve ser `null`. |
-| `se` | Leia do ticket. Não calcule. Se ausente, use `null`. |
+| `se` | Leia do ticket. Não calcule. Se ausente ou ilegível, use `null`. **Nunca copie a esfera para `se`**: se `cil != 0` e `se == esf`, é matematicamente impossível — descarte como alucinação e use `null`. |
 
 ### CIL zero
 
@@ -306,10 +385,31 @@ Retorne apenas JSON válido, sem comentários fora do JSON.
 }
 ```
 
+## Campo `cid_refracao` — computado pelo serviço, não pela IA
+
+O campo `cid_refracao` **não** faz parte do JSON que a IA deve gerar. Ele é adicionado deterministicamente pela camada de serviço (`geminiService.js → _inferCidRefracao`) após a validação dos dados de refração.
+
+A IA não deve tentar emitir CIDs. Qualquer tentativa de preencher `cid_refracao` no JSON de saída será ignorada (o serviço sobrescreve o campo).
+
+**Lógica de inferência (aplicada pelo serviço):**
+
+| Condição | CID adicionado |
+|---|---|
+| `esf > 0` em qualquer olho | H52.0 — Hipermetropia |
+| `esf < 0` em qualquer olho | H52.1 — Miopia |
+| `\|cil\| ≥ 0.25` em qualquer olho | H52.2 — Astigmatismo |
+| `\|SE_OD − SE_OE\| > 1.50D` | H52.3 — Anisometropia |
+| Ambos os olhos com `esf = 0` e `cil = 0/null` | `[]` (emetropia, nenhum CID) |
+
+- Campo preenchido apenas quando `_captureFailed === false`.
+- Se um olho está ausente (`null`), é ignorado na análise.
+- Deduplicação automática contra CIDs da transcrição clínica feita no momento da injeção.
+
 ## Validação final obrigatória
 
 Antes de entregar o JSON, execute mentalmente esta lista:
 
+- `licoes-aprendidas.md` foi lido e suas regras aplicáveis foram aplicadas?
 - O tipo do equipamento foi identificado?
 - Lensômetro foi rejeitado como autorefrator?
 - Ticket invertido foi reorientado?
@@ -419,3 +519,25 @@ Resultado:
 - `paquimetria: null`;
 - `_bloquear_injecao: true`;
 - `_aviso: "Ticket de lensômetro CL-200. Não é ticket de autorefrator TOPCON."`.
+
+---
+
+## Histórico de Erros
+
+### 2026-06-12 — Ocorrência Nº 2 (verify inverte sinal da esfera + se calculado) e Nº 3 (média divergente de medições unânimes)
+- **Erro observado (Nº 2)**: em 2 capturas consecutivas (13:28:17 e 13:28:32), a 2ª chamada (verify) leu OD `-1.00` onde o ticket imprimia `+1.00` e reportou `se=-2.25`/`-2.12`. O valor `-2.12` não é passo de 0.25D — é exatamente `-1.00 + (-2.25/2) = -2.125`: o verify **calculou** o se em vez de transcrever, fabricando coerência com o próprio erro de sinal. Resultado: 2 leituras corretas bloqueadas (`motivo_erro: esfera_sinal_errado` + `se_calculado_em_vez_de_lido`).
+- **Erro observado (Nº 3)**: captura 13:24:17 — medições OD c=`-2.25` ×3 unânimes, "média" lida como `-2.00`; a tolerância `allClose ≤ 0.50D` mantinha a média errada silenciosamente.
+- **Ponto exato na skill**: `_compareRefractionAgainstVerify` (sem tratamento para flip puro de sinal) e `_processEye` (média prioritária mesmo contra medições unânimes) em `geminiService.js`.
+- **Causa raiz (Nº 2)**: prior do modelo favorece miopia (esfera negativa); em impressão térmica o traço vertical do "+" sai fraco. O verify, ao errar o sinal, completa o `se` por aritmética em vez de leitura, anulando o cross-check.
+- **Nível de resposta aplicado**: Nível 2 — Revisão Estrutural.
+- **Correção aplicada (v5.3.4)**: (a) flag `signFlip` no mismatch de esfera + `_tiebreakSphereSign`: 3ª chamada focada APENAS no caractere de sinal e magnitude da coluna S; decisão 2-de-3, com guarda de magnitude (±0.25D) para garantir que a 3ª leu a célula em disputa; (b) unanimidade das 3 medições sobrepõe a média em S, C e A; (c) prompts principal e verify ganharam instrução explícita de leitura do sinal ("+" tem traço vertical e horizontal, "−" só horizontal) e proibição de calcular o `se`.
+- **Regra preventiva adicionada**: sim — lições "Sinal da esfera invertido pela verificação" e "Média divergente de medições unânimes" em `licoes-aprendidas.md`. O desempate 2-de-3 **não** reabre a brecha da Ocorrência Nº 1: usa evidência externa (3ª leitura), nunca auto-coerência da 1ª.
+
+### 2026-05-21 — T3+T7 — Ocorrência Nº 1 (alucinação math-consistent em esfera)
+- **Erro observado**: 1ª leitura alucinou ESF do OE como -0.75 (ticket real: 0.00). Verify retornou -0.00 (correto). Sistema injetou valor alucinado no prontuário com aviso "matematicamente consistente — não bloqueado".
+- **Ponto exato na skill**: `_compareRefractionAgainstVerify` + caller em `geminiService.js`. Política downgradeava mismatch de esfera para aviso quando 1ª leitura passava em `_isEyeMathConsistent` (|esf+cil/2−se|≤0.15D).
+- **Contexto de input**: ticket TOPCON normal, sem ambiguidade visual. Modelo alucinou esfera + S.E. coerente entre si.
+- **Causa raiz**: heurística math-consistency mede coerência **interna** da 1ª leitura, que é precisamente o que o prior de auto-coerência do modelo imita melhor durante alucinação. Confundiu coerência com verdade. Verify externo é o único sinal independente.
+- **Nível de resposta aplicado**: Nível 2 — Revisão Estrutural (refinou regressão da lição anterior, não simples remendo).
+- **Correção aplicada**: ramo de Esfera em `_compareRefractionAgainstVerify` agora retorna `severity: 'hard'` sempre. Math-consistency exception fica restrita a CIL e EIXO. Comentários e JSDoc atualizados.
+- **Regra preventiva adicionada**: sim — lição "Alucinação math-consistent em esfera" em `licoes-aprendidas.md`. Princípio generalizado: **coerência interna da 1ª leitura não vale contra discordância da 2ª, para campos clinicamente críticos**. Em futuras adições, qualquer novo campo crítico (grau de óculos, dose, lateralidade) deve seguir essa política.

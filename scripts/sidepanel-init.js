@@ -31,7 +31,8 @@ injectAllBtn.addEventListener('click', async () => {
   try { await injectAll(); } catch (e) { console.log('[UI] Erro na injeção manual:', e.message); }
 });
 
-clearBtn.addEventListener('click', clearAll);
+// Limpeza manual descarta também a fase 1 de dilatação persistida (novo paciente)
+clearBtn.addEventListener('click', () => clearAll({ clearAudio: true, clearCamera: true, discardDilatacao: true }));
 
 // ============================================================================
 // SELETOR DE MODO
@@ -92,4 +93,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         .catch(e => { console.log('[Keyboard] Erro na injeção:', e.message); sendResponse({ ok: false }); });
       return true; // canal assíncrono — não fechar antes da Promise resolver
   }
+});
+
+// ============================================================================
+// HANDSHAKE COM O BACKGROUND
+// ============================================================================
+// Avisa o background que os listeners acima já estão registrados. Se o painel
+// foi aberto por um atalho de teclado, o background reenvia a ação pendente
+// ao receber este sinal (em vez de esperar um timeout fixo).
+chrome.runtime.sendMessage({ action: 'panelReady' }).catch(() => {
+  /* background inativo — sem ação pendente para receber */
 });

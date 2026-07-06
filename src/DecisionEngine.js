@@ -57,7 +57,7 @@
   }
 
   // Vocabulário clínico oftalmológico mínimo esperado em uma transcrição real.
-  const _CLINICAL_VOCAB_RE = /\b(visao|vista|vistas|olho|olhos|ocular|oculares|retina|cornea|corneal|cristalino|macula|macular|nervo|pressao|tonometria|fundoscopia|dilata|colirio|biometria|refracao|catarata|glaucoma|astigmatismo|miopia|hipermetropia|cirurgia|lio|acuidade|fotofobia|lacrimejamento|conjuntiva|conjuntival|iris|esclerotica|pupila|pupilar|blefarite|calazio|ceratocone|biomicroscopia|campimetria|pachimetria|oct|lente|lentes|oftalmologico|oftalmologica|intraocular|periocular|refrac)\b/g;
+  const _CLINICAL_VOCAB_RE = /\b(visao|vista|vistas|olho|olhos|ocular|oculares|retina|cornea|corneal|cristalino|macula|macular|nervo|pressao|tonometria|fundoscopia|dilata|colirio|biometria|refracao|catarata|glaucoma|astigmatismo|miopia|hipermetropia|cirurgia|lio|acuidade|fotofobia|lacrimejamento|conjuntiva|conjuntival|iris|esclerotica|pupila|pupilar|blefarite|calazio|ceratocone|biomicroscopia|campimetria|pachimetria|oct|lente|lentes|oftalmologico|oftalmologica|intraocular|periocular|refrac|oculo|oculos|grau|graus|consulta|consultas|retorno|retornos|receita|receitas|exame|exames|paciente|pacientes|medico|medica|medicos|medicas|doutor|doutora|doutores|doutoras)\b/g;
 
   // Indicadores de ruído: palavrões ou tokens claramente não-clínicos e incoerentes.
   const _NOISE_INDICATOR_RE = /\b(merda|porra|caralho|puta|fodase|foda.se|cacete|desgraça|desgraca|inferno|droga)\b/;
@@ -104,14 +104,39 @@
   }
 
   /**
-   * Guard 1: injectBlefarite só pode ser true se "blefarite" ou "meibomite"
-   * aparecem literalmente na transcrição.
+   * Guard 1: blefarite só é válida se há evidência clínica na transcrição.
+   * Aceita: (a) palavra literal "blefarite"/"meibomite"; (b) descritores clínicos
+   * da pálpebra (inflamacao palpebral, palpebra inflamada, bordo palpebral);
+   * (c) padrão de tratamento inequívoco: compressa morna + higiene palpebral.
+   * Remove flag E entrada do diagnóstico quando nenhum sinal está presente.
    */
   function _guardBlefariteLiteral(cloned, ctx, log) {
-    if (cloned.injectBlefarite !== true) return;
-    if (!/blefarite|meibomite/i.test(ctx.transcribedText || '')) {
+    const rawText = ctx.transcribedText || '';
+    const normText = _normalizeForGuard(rawText);
+
+    const hasBlefariteKeyword =
+      // (a) palavras-diagnóstico explícitas
+      /blefarite|meibomite|disfun[çc][ãa]o\s+de\s+meibom/i.test(rawText) ||
+      // (b) descritores clínicos da pálpebra (sem acentos, já normalizados)
+      /inflamacao\s+(da\s+)?palpebra|palpebra\s+inflamada|inflamacao\s+palpebral|bordo\s+palpebral/.test(normText) ||
+      // (c) padrão de tratamento inequívoco de blefarite
+      (/compressa/.test(normText) && /higiene\s+palpebral/.test(normText)) ||
+      // (d) shampoo — em oftalmologia indica higiene palpebral (retorno de blefarite sem repetir diagnóstico)
+      /shampoo/.test(normText);
+
+    if (cloned.injectBlefarite === true && !hasBlefariteKeyword) {
       cloned.injectBlefarite = false;
-      log.push('injectBlefarite revertido — palavra-chave ausente na transcrição');
+      log.push('injectBlefarite revertido — nenhuma evidência clínica de blefarite na transcrição');
+    }
+
+    // Remove blefarite do diagnóstico se foi inferida sem nenhuma evidência.
+    if (!hasBlefariteKeyword && cloned.dados && cloned.dados.diagnostico) {
+      const lines = cloned.dados.diagnostico.split('\n');
+      const filtered = lines.filter(l => !/blefarite|meibomite/i.test(l));
+      if (filtered.length !== lines.length) {
+        cloned.dados.diagnostico = filtered.join('\n').trim() || null;
+        log.push('Blefarite removida do diagnóstico — nenhuma evidência clínica na transcrição');
+      }
     }
   }
 
@@ -136,43 +161,210 @@
   }
 
   /**
-   * Guard 3: normaliza termos proibidos de óculos na conduta.
-   * Remove "Atualização de grau", "Mudança de grau", "Novo grau", "Ajuste de grau"
-   * e os substitui por "Prescrição de óculos" — jamais devem aparecer na conduta.
+   * Guard 3 (intercalado): move itens da LISTA NEGRA da conduta (ações físicas
+   * do paciente) para tratamento quando o LLM os alocou incorretamente.
+   * Também substitui termos de grau proibidos por "Prescrição de óculos".
+   * Padrões são inequívocos e sem exceção — independem do contexto clínico.
+   * Documentado em 2026-05-13 e recorrente em 2026-05-14.
    */
-  function _guardTermosOculosProibidos(cloned, _ctx, log) {
+  function _guardCondutaContaminada(cloned, _ctx, log) {
     if (!cloned.dados || !cloned.dados.conduta) return;
-    const TERMOS_PROIBIDOS_RE = /^(?:atualiza[çc][ãa]o de grau|mudan[çc]a de grau|novo grau|ajuste de grau)\b/i;
-    const linhas = cloned.dados.conduta.split('\n');
-    let alterado = false;
-    const normalizadas = linhas.map(linha => {
+
+    // Fix B2: substituir termos de grau proibidos (restauração do _guardTermosOculosProibidos)
+    const TERMOS_GRAU_RE = /^(?:atualiza[çc][ãa]o de grau|mudan[çc]a de grau|novo grau|ajuste de grau)\b/i;
+    const linhasConduta = cloned.dados.conduta.split('\n');
+    let grauAlterado = false;
+    const linhasCorrigidas = linhasConduta.map(linha => {
       const trimmed = linha.trim();
-      if (TERMOS_PROIBIDOS_RE.test(trimmed)) {
+      if (TERMOS_GRAU_RE.test(trimmed)) {
+        grauAlterado = true;
         log.push(`Termo proibido "${trimmed}" substituído por "Prescrição de óculos" na conduta`);
-        alterado = true;
         return 'Prescrição de óculos';
       }
       return linha;
     });
-    if (alterado) {
-      cloned.dados.conduta = normalizadas.join('\n');
+    if (grauAlterado) {
+      cloned.dados.conduta = linhasCorrigidas.join('\n');
+    }
+
+    const LISTA_NEGRA = [
+      /compressa\s+(morna|quente|fria|[uú]mida)/i,
+      /higiene\s+palpebral/i,
+      // "de neném"/"nenê" — variante falada real (log 2026-07-03: "shampoo de nenem")
+      /shampoo\s+(infantil|neutro|de\s+beb[êe]|de\s+nen[eéê]m?)/i,
+      /sabonete\s+palpebral/i,
+      /lubrificante\s+ocular/i,
+      /[oô]mega[\s-]*3/i,
+    ];
+
+    const condutaLines = cloned.dados.conduta.split('\n');
+    const keepInConduta = [];
+    const moveToTratamento = [];
+
+    for (const line of condutaLines) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      if (LISTA_NEGRA.some(re => re.test(trimmed))) {
+        moveToTratamento.push(trimmed);
+      } else {
+        keepInConduta.push(trimmed);
+      }
+    }
+
+    if (moveToTratamento.length === 0) return;
+
+    cloned.dados.conduta = keepInConduta.join('\n').trim() || null;
+
+    const existingLines = cloned.dados.tratamento
+      ? cloned.dados.tratamento.split('\n').map(l => l.replace(/\s+/g, ' ').trim()).filter(Boolean)
+      : [];
+
+    for (const item of moveToTratamento) {
+      const norm = item.replace(/\s+/g, ' ').toLowerCase();
+      if (!existingLines.some(l => l.replace(/\s+/g, ' ').toLowerCase() === norm)) {
+        existingLines.push(item);
+      }
+    }
+
+    cloned.dados.tratamento = existingLines.join('\n');
+    log.push(`Conduta contaminada: ${moveToTratamento.length} item(ns) movido(s) para tratamento — "${moveToTratamento.join('; ')}"`);
+  }
+
+  /**
+   * Guard 5: corrige "Sem prescrição de óculos" → "Manutenção do óculos atual"
+   * quando o transcript indica que o paciente já usa óculos e o médico manteve
+   * o grau. O LLM confunde "não precisa trocar o grau" com ausência de indicação.
+   */
+  function _guardManutencaoOculos(cloned, ctx, log) {
+    if (!cloned.dados || !cloned.dados.conduta) return;
+
+    const conduta = cloned.dados.conduta;
+    const temSemPrescricao =
+      /sem\s+prescri[çc][ãa]o\s+de\s+[oó]culos/i.test(conduta) ||
+      /n[aã]o\s+houve\s+prescri[çc][ãa]o\s+de\s+[oó]culos/i.test(conduta);
+    if (!temSemPrescricao) return;
+
+    const norm = _normalizeForGuard(ctx.transcribedText || '');
+
+    // Frases que indicam manutenção do grau atual (paciente já usa óculos).
+    const MANUTENCAO_RE = [
+      /nao\s+precisa\s+trocar\s+(o\s+)?grau/,
+      /grau\s+(ta|esta|está|esta)\s+(parecido|igual|similar|bom)/,
+      /grau\s+praticamente\s+igual/,
+      /grau\s+nao\s+mudou/,
+      /oculos\s+(ainda\s+)?(servem|serve|ta\s+bom|esta\s+bom)/,
+      /mant[eé](m|r)\s+(os\s+)?oculos/,
+      /continuar\s+(com\s+)?(os\s+)?oculos\s+(atuais?|que\s+tem)/,
+      /nao\s+precisa\s+(fazer|comprar|trocar)\s+(novo\s+)?oculos/,
+      /pode\s+continuar\s+com\s+(os\s+)?oculos/,
+    ];
+
+    if (!MANUTENCAO_RE.some(re => re.test(norm))) return;
+
+    cloned.dados.conduta = conduta
+      .replace(/sem\s+prescri[çc][ãa]o\s+de\s+[oó]culos/gi, 'Manutenção do óculos atual')
+      .replace(/n[aã]o\s+houve\s+prescri[çc][ãa]o\s+de\s+[oó]culos/gi, 'Manutenção do óculos atual');
+
+    log.push('Guard 5: "Sem prescrição de óculos" → "Manutenção do óculos atual" — transcript indica manutenção de grau');
+  }
+
+  /**
+   * Guard de dilatação: quando o médico vai dilatar, conduta e tratamento
+   * pertencem ao pós-dilatação. Zera ambos para evitar injeção prematura.
+   * Roda antes dos demais guards de conduta para evitar trabalho desnecessário.
+   */
+  function _guardDilatacao(cloned, ctx, log) {
+    const flags = ctx.hookFlags || {};
+    const dilatacao = !!(cloned.dilatacaoDetectada || flags.dilatacaoDetectada);
+    if (!dilatacao || !cloned.dados) return;
+
+    const changed = [];
+    if (cloned.dados.conduta != null) { cloned.dados.conduta = null; changed.push('conduta'); }
+    if (cloned.dados.tratamento != null) { cloned.dados.tratamento = null; changed.push('tratamento'); }
+    // Fix E2: zerar também medicamentos_prescritos (chave legada que displayAudioResults lê como fallback)
+    if (cloned.dados.medicamentos_prescritos != null) { cloned.dados.medicamentos_prescritos = null; changed.push('medicamentos_prescritos'); }
+    // Descrição dos exames (biomicroscopia/fundoscopia) é feita após a dilatação —
+    // na fase 1 injeta-se apenas a entrevista.
+    if (cloned.dados.biomicroscopia != null) { cloned.dados.biomicroscopia = null; changed.push('biomicroscopia'); }
+    if (cloned.dados.fundoscopia != null) { cloned.dados.fundoscopia = null; changed.push('fundoscopia'); }
+    if (changed.length) {
+      log.push(`Dilatação: ${changed.join(', ')} zerado(s) — pertencem ao pós-dilatação`);
     }
   }
 
   /**
-   * Guard 4: quando dilatação foi detectada (hook ou IA), nula conduta,
-   * tratamento e medicamentos_prescritos — o médico ainda não concluiu.
+   * Guard 4: garante indicação sobre óculos na conduta.
+   * Só dispara quando a conduta já contém ao menos uma DECISÃO CLÍNICA
+   * (retorno, encaminhamento, exame solicitado, suspensão) — evita adicionar
+   * a nota em condutas compostas apenas por orientações procedimentais
+   * (compressa, higiene) onde óculos simplesmente não foi discutido.
    */
-  function _guardDilatacao(cloned, ctx, log) {
-    const flags = ctx.hookFlags || {};
-    const dilatacao = flags.dilatacaoDetectada || cloned.dilatacaoDetectada;
-    if (!dilatacao || !cloned.dados) return;
-    cloned.dados.conduta = null;
-    cloned.dados.tratamento = null;
-    if (cloned.dados.medicamentos_prescritos !== undefined) {
-      cloned.dados.medicamentos_prescritos = null;
+  function _guardOculosNaConduta(cloned, _ctx, log) {
+    if (cloned.noiseDetected || cloned.revisao_manual) return;
+    const conduta = cloned.dados && cloned.dados.conduta;
+    if (!conduta) return;
+    if (/prescri[çc][ãa]o de [oó]culos|manuten[çc][ãa]o do [oó]culos/i.test(conduta)) return;
+    // Se há tratamento farmacológico, a consulta é de patologia — óculos irrelevante.
+    // Evita confusão: "Não houve prescrição de óculos" sendo lido como negação de medicamento.
+    if (cloned.dados.tratamento) return;
+    // Só adicionar quando há ao menos uma decisão clínica — não para condutas
+    // com orientações procedimentais puras (compressa, higiene palpebral, etc.)
+    const temDecisaoClinica = /retorno\b|encaminhamento|solicitar|suspender\b|manter\b|alta\b|avalia[çc][ãa]o|campo visual|tonometria|prescrição/i.test(conduta);
+    if (!temDecisaoClinica) return;
+    cloned.dados.conduta = conduta.trimEnd() + '\nNão houve prescrição de óculos';
+    log.push('"Não houve prescrição de óculos" adicionado à conduta');
+  }
+
+  /**
+   * Guard 6: Presbiopia obrigatória quando (a) óculos multifocal/progressivo/bifocal
+   * é prescrito na conduta, OU (b) "presbiopia" é mencionada explicitamente na transcrição.
+   * Ambas as opções exigem a menção de "óculos para perto" na consulta.
+   * Garante que o diagnóstico contém "H524 - Presbiopia".
+   */
+  function _guardPresbiopiaObrigatoria(cloned, ctx, log) {
+    if (!cloned.dados) return;
+
+    const condutaNorm = _normalizeForGuard(cloned.dados.conduta || '');
+    const transcricaoNorm = _normalizeForGuard(ctx.transcribedText || '');
+
+    // Limpa pontuações da transcrição para busca robusta de termos próximos.
+    const cleanText = transcricaoNorm.replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?]/g, " ");
+    const hasOculosParaPerto = /oculos\s+(?:[a-z]+\s+){0,6}perto|perto\s+(?:[a-z]+\s+){0,6}oculos/.test(cleanText);
+
+    const hasMultifocal = /multifocal|progressiv|bifocal/.test(condutaNorm);
+    const hasPresbiopiaNoTexto = /presbiop/.test(transcricaoNorm);
+
+    // Presbiopia só é elegível se houver menção a óculos para perto AND (multifocal/progressivo ou menção explícita de presbiopia)
+    const canHavePresbiopia = hasOculosParaPerto && (hasMultifocal || hasPresbiopiaNoTexto);
+
+    const diagnostico = cloned.dados.diagnostico || '';
+    const hasPresbiopia = /h52\.?4|presbiop/i.test(diagnostico);
+
+    if (canHavePresbiopia) {
+      if (!hasPresbiopia) {
+        const lines = diagnostico ? diagnostico.split('\n') : [];
+        lines.push('H524 - Presbiopia');
+        cloned.dados.diagnostico = lines.join('\n').trim();
+
+        const motivo = hasMultifocal
+          ? 'prescrição de óculos multifocal/progressivo na conduta'
+          : 'menção explícita de presbiopia na transcrição';
+        log.push(`Diagnóstico de Presbiopia (H52.4) adicionado automaticamente — ${motivo}`);
+      }
+    } else {
+      if (hasPresbiopia) {
+        const lines = diagnostico.split('\n');
+        const filtered = lines.filter(l => !/h52\.?4|presbiop/i.test(l));
+        // Fix A5: só remove presbiopia se sobrarem outros diagnósticos.
+        // Se era a única entrada, manter — evitar nular o diagnóstico inteiro.
+        if (filtered.length > 0) {
+          cloned.dados.diagnostico = filtered.join('\n').trim();
+          log.push('Presbiopia removida do diagnóstico — critérios de elegibilidade não atendidos (sem multifocal ou menção explícita de presbiopia)');
+        } else {
+          log.push('Presbiopia mantida no diagnóstico — era a única entrada; critérios não atendidos mas remoção causaria diagnóstico nulo');
+        }
+      }
     }
-    log.push('Conduta/tratamento omitidos — flag de dilatação/espera ativa');
   }
 
   /**
@@ -199,22 +391,14 @@
       out.injectBlefarite = false;
     }
 
-    return out;
-  }
-
-  /**
-   * Guard 5: injectExamesNormais não pode ser true quando há tratamento ativo
-   * ou encaminhamento na conduta — indicam achado que contradiz "todos normais".
-   */
-  function _guardExamesNormaisComTratamento(cloned, _ctx, log) {
-    if (cloned.injectExamesNormais !== true) return;
-    const temTratamento = !!(cloned.dados && cloned.dados.tratamento);
-    const temEncaminhamento = !!(cloned.dados && cloned.dados.conduta &&
-      /encaminhamento/i.test(cloned.dados.conduta));
-    if (temTratamento || temEncaminhamento) {
-      cloned.injectExamesNormais = false;
-      log.push('injectExamesNormais revertido — há tratamento ativo ou encaminhamento na conduta');
+    // Dilatação: a descrição dos exames pertence ao pós-dilatação — nenhuma
+    // injeção de biomicroscopia/fundoscopia (normais ou blefarite) na fase 1.
+    if (out.dilatacao) {
+      out.injectExamesNormais = false;
+      out.injectBlefarite     = false;
     }
+
+    return out;
   }
 
   // ------------------------------------------------------------------
@@ -238,14 +422,19 @@
     }
 
     if (cloned && cloned.dados) {
+      _guardDilatacao(cloned, ctx, guardsApplied);
       _guardBlefariteLiteral(cloned, ctx, guardsApplied);
       _guardAssociacaoATB(cloned, ctx, guardsApplied);
-      _guardTermosOculosProibidos(cloned, ctx, guardsApplied);
-      _guardDilatacao(cloned, ctx, guardsApplied);
+      _guardCondutaContaminada(cloned, ctx, guardsApplied);
+      _guardManutencaoOculos(cloned, ctx, guardsApplied);
+      // Guard de óculos e presbiopia só se não há dilatação
+      const flags = ctx.hookFlags || {};
+      const dilatacao = !!(cloned.dilatacaoDetectada || flags.dilatacaoDetectada);
+      if (!dilatacao) {
+        _guardOculosNaConduta(cloned, ctx, guardsApplied);
+        _guardPresbiopiaObrigatoria(cloned, ctx, guardsApplied);
+      }
     }
-
-    // Guard 5 roda fora do bloco dados pois modifica flag de topo
-    _guardExamesNormaisComTratamento(cloned, ctx, guardsApplied);
 
     const injectFlags = _reconcileInjectFlags(cloned || {}, ctx);
 

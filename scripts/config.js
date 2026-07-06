@@ -15,6 +15,8 @@ document.addEventListener('DOMContentLoaded', () => {
       if (result.geminiApiKey) {
         apiKeyInput.value = result.geminiApiKey;
         showStatus('✅ Chave API carregada do armazenamento.', 'success');
+      } else {
+        showStatus('ℹ️ Nenhuma chave configurada. Obtenha uma em aistudio.google.com/apikey e salve aqui.', 'error');
       }
     } catch (err) {
       console.error('[Config] Erro ao carregar chave:', err);
@@ -64,7 +66,11 @@ document.addEventListener('DOMContentLoaded', () => {
         } else if (response.status === 403) {
           showStatus('❌ Chave API sem permissão. Verifique as configurações no Google AI Studio.', 'error');
         } else if (response.status === 429) {
-          showStatus('⚠️ Rate limit atingido, mas a chave parece válida. Aguarde e tente novamente.', 'success');
+          if (errorData.includes('depleted') || errorData.includes('credits') || errorData.includes('billing')) {
+            showStatus('❌ Créditos esgotados no Google AI Studio. Por favor, recarregue seus créditos pré-pagos ou use outra chave.', 'error');
+          } else {
+            showStatus('⚠️ Rate limit atingido, mas a chave parece válida. Aguarde e tente novamente.', 'success');
+          }
         } else {
           showStatus(`❌ Erro ${response.status}: ${errorData.substring(0, 100)}`, 'error');
         }

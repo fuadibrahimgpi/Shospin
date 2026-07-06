@@ -1,5 +1,5 @@
 ---
-name: conduta
+name: conduta-tratamento-oftalmologia
 description: "Extrai, normaliza e valida o campo conduta em consultas oftalmológicas. Use quando o usuário apresentar transcrição de consulta, resumo clínico ou saída estruturada e precisar separar conduta de tratamento, registrar retornos, encaminhamentos, prescrição de óculos, solicitação de exames, orientações verbais, suspensão de medicação e descartar logística operacional. Também use para evitar expressões proibidas como atualização de grau e para marcar revisão manual quando a conduta estiver ambígua."
 metadata:
   author: fuad-ibrahim
@@ -65,6 +65,7 @@ Não inclua em `conduta`:
 - Retornos condicionais vagos quando já existe retorno com prazo.
 - Frases genéricas sem decisão clínica: `acompanhar`, `observar`, `orientado`, sem objeto ou prazo.
 - Valores isolados de exame sem decisão médica explícita.
+- Detalhes técnicos sobre o óculos prescrito: tipo de revestimento (antirreflexo), filtro de luz azul, tamanho/campo da lente, qualidade da lente, marca ou material. Esses detalhes são padrão da ótica e nunca entram em `conduta`, mesmo que o médico os tenha comentado com o paciente.
 
 ## Separação entre conduta e tratamento
 
@@ -130,45 +131,78 @@ tratamento: "Lubrificante ocular 1 gota AO 6/6h"
 
 ## Orientações e explicações verbais do médico
 
-Orientações verbais informais sobre cuidado físico, higiene, compressa, proteção ocular, mudança comportamental, sinais de alerta, natureza do diagnóstico, prognóstico, necessidade de acompanhamento ou justificativa de exames devem entrar em `conduta`, mesmo quando ditas de forma coloquial.
+Orientações verbais sobre mudança comportamental, proteção ocular, sinais de alerta, natureza do diagnóstico, prognóstico, necessidade de acompanhamento ou justificativa de exames devem entrar em `conduta`, mesmo quando ditas de forma coloquial.
 
-Normalize orientações práticas com o prefixo `Orientado` ou `Orientada`, usando forma impessoal e clínica.
+> ⚠️ **Exceção crítica:** compressa morna, higiene palpebral, shampoo, lubrificante ocular e ômega 3 são **ações físicas executadas pelo paciente** — pertencem sempre ao campo `tratamento`, mesmo que o médico as tenha orientado verbalmente.
 
-Normalize explicações clínicas com o prefixo `Explicado` ou `Esclarecido`, mantendo texto curto e útil para prontuário.
+Todas as explicações e orientações verbais do médico ao paciente devem ser fundidas em **uma única linha de texto corrido**, separadas por ponto e vírgula, iniciando com o prefixo `Orientado:`.
+
+- Se houver apenas um item, escreva como linha única normal.
+- Se não houver nenhum, não gere essa linha.
+- Mantenha cada fragmento curto e telegráfico — sem frases completas com sujeito e verbo.
 
 Exemplos:
 
 ```text
-"Pega um algodão com água morna e deixa dois minutinhos."
-conduta: "Orientado compressa morna 2 min"
-
-"Faz uma espuma com shampoo infantil e lava os cílios."
-conduta: "Orientado higiene palpebral com shampoo infantil"
-
 "Evita coçar os olhos."
-conduta: "Orientado evitar coçar os olhos"
-
-"Expliquei que é uma catarata inicial e que por enquanto vamos acompanhar."
-conduta: "Explicado diagnóstico de catarata inicial e necessidade de acompanhamento"
+conduta: "Orientado: evitar coçar os olhos"
 
 "Se tiver dor forte, piora da visão ou vermelhidão importante, procura atendimento."
-conduta: "Orientado procurar atendimento se dor intensa, piora visual ou hiperemia importante"
+conduta: "Orientado: procurar atendimento se dor intensa, piora visual ou hiperemia"
+
+"Expliquei que é uma catarata inicial e que por enquanto vamos acompanhar."
+conduta: "Orientado: catarata inicial, acompanhamento por enquanto"
+
+"A dor de cabeça que você sente é pelo grau dos olhos — com os óculos novos deve melhorar."
+conduta: "Orientado: cefaleia relacionada ao grau refrativo"
+
+Múltiplos itens combinados:
+conduta: "Orientado: glaucoma assintomático com PO normal requer acompanhamento; catarata senil com cirurgia apenas se sintomática."
+⚠️ Nota: orientações sobre adaptação a multifocal/escolha de lente NÃO entram nessa linha — ver seção "Exceção: orientações sobre uso dos óculos" abaixo.
+
+"Pega um algodão com água morna e deixa dois minutinhos." (compressa)
+tratamento: "Compressa morna 2 min — 2x/dia"   ← vai em TRATAMENTO, não conduta
+
+"Faz uma espuma com shampoo infantil e lava os cílios." (higiene)
+tratamento: "Higiene palpebral com shampoo infantil"   ← vai em TRATAMENTO, não conduta
 ```
 
 ### Exceção: orientações sobre uso dos óculos
 
-Desconsidere orientações meramente operacionais ou adaptativas sobre uso dos óculos, mesmo que tenham sido ditas pelo médico.
+Nunca detalhe orientações operacionais ou adaptativas sobre uso dos óculos, mesmo que tenham sido ditas pelo médico. Isso inclui qualquer tipo de instrução sobre **como usar**, **como adaptar** e **como escolher** óculos, armação ou lentes — postura, técnica de adaptação, prazo, preço, tamanho, curvatura ou material.
 
-Não inclua em `conduta`:
+Nunca crie uma linha `Orientado` separada para esse conteúdo e nunca detalhe:
 
-- `Usar os óculos para perto`.
-- `Usar os óculos para longe`.
-- `Usar os óculos para dirigir`.
-- `Testar adaptação dos óculos`.
-- `Conferir os óculos após ficarem prontos`.
-- `Voltar se não adaptar aos óculos`, quando for apenas orientação de adaptação.
+- `Usar os óculos para perto` / `para longe` / `para dirigir`.
+- `Testar adaptação dos óculos` / `Conferir os óculos após ficarem prontos`.
+- `Orientado sobre uso de óculos multifocais conforme necessidade`.
+- `Orientado sobre adaptação a óculos multifocais` (postura, posição da cabeça, técnica).
+- `Orientado sobre escolha de lentes e armação` (preço, tamanho, curvatura, material).
 
-Essas orientações não substituem a conduta de prescrição. Se os óculos foram prescritos, registre apenas a prescrição adequada, por exemplo `Prescrição de óculos multifocais`.
+Em vez de omitir ou detalhar, registre a orientação de forma **genérica**, como sufixo da própria linha de prescrição:
+
+- Se o médico deu **qualquer** orientação sobre uso/adaptação/escolha (mesmo breve) → acrescente `" com orientações sobre o uso"` à prescrição.
+- Se o médico **não** deu nenhuma orientação sobre uso → registre apenas a prescrição, sem sufixo.
+
+```text
+Entrada:
+Médico prescreve multifocal, orienta sobre uso conforme necessidade, explica que não deve olhar para baixo ao andar e aconselha sobre armação (evitar extremos de preço e curvatura).
+
+Saída:
+conduta: "Prescrição de óculos multifocais com orientações sobre o uso"
+descartado: null
+```
+
+```text
+Entrada:
+Médico prescreve óculos para longe, sem nenhuma orientação adicional sobre uso.
+
+Saída:
+conduta: "Prescrição de óculos para longe"
+descartado: null
+```
+
+O tipo (multifocal ou não) continua sendo a informação clínica central — o sufixo apenas sinaliza, de forma genérica, que houve orientação sem reproduzir seu conteúdo.
 
 ## Regra de óculos
 
@@ -183,11 +217,46 @@ Use sempre a estrutura `Prescrição de óculos`, especificando o tipo quando po
 | Médico menciona apenas longe | `Prescrição de óculos para longe` |
 | Médico menciona apenas perto | `Prescrição de óculos para perto` |
 | Paciente já usa óculos e médico muda o grau | `Prescrição de óculos [tipo]` |
+| Paciente já usa óculos e médico MANTÉM o grau atual | `Manutenção do óculos atual` |
 | Médico não vai prescrever (óculos não indicado) | `Sem prescrição de óculos` |
+
+⚠️ **DISTINÇÃO CRÍTICA — "Manutenção do óculos atual" vs "Sem prescrição de óculos":**
+
+`Manutenção do óculos atual` → paciente JÁ USA óculos e médico mantém o grau atual.
+Sinais: "não precisa trocar o grau", "o grau está parecido", "grau praticamente igual",
+"os óculos ainda servem", "mantém os óculos que tem", "pode continuar com os óculos atuais".
+
+`Sem prescrição de óculos` → médico declara que o paciente NÃO PRECISA DE ÓCULOS.
+Sinais: "não precisa de óculos", "grau não justifica óculos", "sem indicação de óculos no momento".
+
+❌ ERRO CRÍTICO: "não precisa trocar o grau" ≠ "Sem prescrição de óculos".
+"Não precisa trocar o grau" = paciente já usa óculos e vai CONTINUAR com os mesmos → `Manutenção do óculos atual`.
 
 Quando forem prescritos óculos multifocais, progressivos ou bifocais, isso deve ficar explicitamente documentado na conduta como `Prescrição de óculos multifocais`, salvo se o médico usar outro tipo específico que deva ser preservado.
 
 Se o tipo de óculos estiver ambíguo, use `Prescrição de óculos` e não invente o tipo.
+
+⚠️ **Regra de simplicidade — sem detalhes técnicos do óculos:** a conduta registra apenas SE a lente é multifocal ou não, nunca como ela é feita. Não inclua revestimento antirreflexo, filtro de luz azul, tamanho/campo de lente, qualidade ou marca — isso é padrão de ótica e não é decisão clínica.
+
+- Se o médico não especificar multifocal/progressivo/bifocal → `Prescrição de óculos`.
+- Se o médico especificar multifocal/progressivo/bifocal → `Prescrição de óculos multifocais` (ou o tipo dito).
+- Comentários do médico sobre antirreflexo, filtro azul, qualidade de lente, tamanho de campo, etc. são descartados, independentemente de serem recomendados ou desaconselhados pelo médico.
+
+⚠️ **Regra estrita para "multifocais" — só com palavra explícita:**
+
+`Prescrição de óculos multifocais` exige que o médico tenha usado **explicitamente** uma das palavras: *multifocal*, *progressivo*, *lente progressiva*, *bifocal* — ou descrito claramente longe + perto na mesma armação.
+
+**Não qualifica como multifocal:**
+
+| Situação | Resultado correto |
+|---|---|
+| ADD/adição no ticket de refração sem o médico mencionar tipo | `Prescrição de óculos` |
+| Médico diz "vou mudar o grau" sem especificar tipo | `Prescrição de óculos` |
+| Médico diz "vai pra ótica fazer óculos" (tipo não dito) | `Prescrição de óculos` |
+| Médico diz "precisa de óculos para longe" | `Prescrição de óculos para longe` |
+| Médico diz "vou passar óculos para perto" | `Prescrição de óculos para perto` |
+
+ADD no ticket é uma medida da prescrição, não indica que o óculos prescrito é multifocal. O médico pode ter ADD na refração e prescrever apenas óculos para perto (monofocal) ou nada.
 
 ### Inferência de prescrição de óculos
 
@@ -201,7 +270,7 @@ Não infira prescrição quando o médico não mencionou óculos de nenhuma form
 
 ## Retornos
 
-Registre retornos com prazo definido.
+Registre retornos com prazo definido. Nunca acrescente contexto diagnóstico ao retorno — o diagnóstico pertence a outro campo.
 
 Normalizações recomendadas:
 
@@ -341,9 +410,11 @@ Entrada:
 Médico orienta compressa morna, higiene palpebral com shampoo infantil, lubrificante ocular, ômega 3, dermatologista e retorno em seis meses.
 
 Saída:
-conduta: "Encaminhamento: Dermatologista\nOrientado compressa morna\nOrientado higiene palpebral com shampoo infantil\nRetorno 6 meses"
-tratamento_sugerido: "Lubrificante ocular\nÔmega 3"
+conduta: "Encaminhamento: Dermatologista\nRetorno 6 meses"
+tratamento_sugerido: "Compressa morna\nHigiene palpebral com shampoo infantil\nLubrificante ocular\nÔmega 3"
 descartado: null
+
+⚠️ Nota: compressa morna e higiene palpebral são ações físicas do paciente → TRATAMENTO, não conduta.
 ```
 
 ### Óculos
@@ -396,6 +467,8 @@ Antes de finalizar a conduta, confirme:
 - Explicações clínicas relevantes dadas ao paciente foram incluídas.
 - Orientações meramente adaptativas ou operacionais sobre uso dos óculos foram descartadas.
 - Retorno condicional vago foi descartado se havia retorno com prazo.
+- Retorno não contém complemento diagnóstico (`Retorno anual`, nunca `Retorno anual para acompanhamento de X`).
+- Todas as orientações e explicações verbais foram fundidas em uma única linha `Orientado:` com fragmentos separados por ponto e vírgula.
 - Ambiguidades relevantes geraram `revisao_manual: true`.
 
 ## Histórico de erros cobertos
@@ -426,7 +499,44 @@ Antes de finalizar a conduta, confirme:
 - **Erro observado**: quando o médico realizou refração e orientou ótica sem dizer explicitamente "prescrevo óculos", o campo conduta ficava sem prescrição.
 - **Correção aplicada**: adicionada regra de inferência condicional (3 condições obrigatórias) para capturar esses casos.
 
+### 2026-05-18 — Explicações ao paciente não eram injetadas na conduta
+
+- **Erro observado**: quando o médico explica algo ao paciente (diagnóstico, cefaleia, prognóstico, sinais de alerta), essas explicações não apareciam no campo conduta.
+- **Causa raiz**: o prompt do Gemini em geminiService.js tinha apenas uma linha vaga sem exemplos ou formato para esse tipo de entrada. O modelo não sabia gerar "Explicado..." ou "Orientado...".
+- **Correção aplicada**: expandida a instrução de explicações ao paciente no prompt do Gemini com prefixos (`Orientado/Explicado/Esclarecido`), exemplos concretos incluindo cefaleia, e entradas nos exemplos do teste obrigatório.
+- **Inconsistência corrigida**: o SKILL.md mostrava "Orientado compressa morna" como conduta, contradizendo o código (DecisionEngine._guardCondutaContaminada move compressa/higiene para tratamento). Corrigido para alinhar SKILL.md com comportamento real.
+
 ### 2026-05-11 — `injectExamesNormais` marcado incorretamente
 
 - **Erro observado**: a frase "tudo em paz com o olho" estava sendo usada como gatilho único para marcar `injectExamesNormais: true`, mesmo quando o médico prescrevia lubrificante ou encaminhava.
 - **Correção aplicada**: adicionada condição extra: a flag só pode ser verdadeira se não houver tratamento ou encaminhamento ativo.
+
+### 2026-06-16 — Detalhes técnicos de lente injetados na conduta
+
+- **Erro observado**: médico comentou que antirreflexo e filtro de luz azul seriam "jogar dinheiro fora" (desaconselhando o item), mas a conduta injetada ficou "Orientado sobre escolha de lentes multifocais (qualidade, antirreflexo, filtro azul)", como se fosse uma orientação positiva — perdendo a polaridade da fala e incluindo detalhe técnico que não deveria estar em conduta.
+- **Causa raiz**: a regra de fusão de orientações verbais (`Orientado:`) não excluía explicitamente comentários sobre revestimento/filtro/qualidade de lente, então o modelo registrava esses detalhes como se fossem decisão clínica.
+- **Correção aplicada**: adicionada regra explícita — conduta de óculos registra apenas se é multifocal ou não; detalhes técnicos de lente (antirreflexo, filtro azul, tamanho de campo, qualidade, marca) nunca entram em conduta, independente de terem sido recomendados ou desaconselhados pelo médico. Mesma regra adicionada em `src/geminiService.js`.
+
+### 2026-06-17 — Óculos convencional classificado incorretamente como multifocal
+
+- **Erro observado**: óculos convencionais (sem o médico dizer multifocal/progressivo) sendo registrados como `Prescrição de óculos multifocais`, possivelmente por ADD presente no ticket de refração ou menção isolada a "grau de perto".
+- **Causa raiz**: a regra de inferência listava "ADD" e "perto/longe" como gatilhos para tipo específico, sem distinguir que ADD é medida e não tipo de lente. O modelo extrapolava para "multifocais" qualquer óculos com componente de perto.
+- **Correção aplicada**: adicionada regra crítica explícita em `geminiService.js` e `SKILL.md` — "Prescrição de óculos multifocais" só quando o médico usar explicitamente a palavra multifocal/progressivo/bifocal, ou descrever longe+perto na mesma armação. ADD sozinho, "grau de perto" isolado, ou tipo não verbalizado → `Prescrição de óculos` (sem qualificador).
+
+### 2026-06-17 — Orientações de uso, adaptação e escolha de óculos injetadas na conduta
+
+- **Erro observado**: médico orientou sobre uso do multifocal conforme necessidade, adaptação (não olhar para baixo ao andar) e escolha de armação (evitar extremos de preço, tamanho e curvatura). Essas três orientações apareceram como linhas `Orientado` na conduta.
+- **Causa raiz**: a regra de exceção listava apenas casos operacionais genéricos (usar para perto, testar adaptação) mas não cobria explicitamente orientações sobre modo de uso, técnica de adaptação e critérios de escolha de armação.
+- **Correção aplicada**: expandida a regra "Exceção: orientações sobre uso dos óculos" para cobrir todos os três tipos. Adicionado exemplo concreto mostrando que essas linhas vão para `descartado`. A mesma regra foi adicionada explicitamente em `src/geminiService.js`.
+
+### 2026-05-27 — "Manutenção do óculos atual" classificada erroneamente como "Sem prescrição de óculos"
+
+- **Erro observado**: médico disse "não precisa trocar o grau não" em consulta de retorno com paciente que já usa óculos. O modelo classificou como "Sem prescrição de óculos" em vez de "Manutenção do óculos atual".
+- **Causa raiz**: a tabela de óculos não continha a linha "Manutenção do óculos atual" e não havia distinção explícita entre as duas situações. O modelo inferiu "Sem prescrição" porque viu "não precisa" sem o contexto de que se tratava de não precisar TROCAR.
+- **Correção aplicada**: adicionada linha "Manutenção do óculos atual" na tabela e bloco de distinção crítica com exemplos de sinais discriminativos. A mesma distinção foi adicionada em `src/geminiService.js` no `_buildConsultationPrompt`.
+
+### 2026-07-02 — Orientações de uso do óculos: de "descartar tudo" para "sufixo genérico"
+
+- **Pedido do usuário**: para prescrição de óculos, a única informação clínica necessária é se é multifocal ou não. Orientações sobre adaptação/uso podem ser mencionadas de forma genérica, sem detalhar o conteúdo — nunca omitidas por completo quando existirem.
+- **Comportamento anterior**: quando o médico dava qualquer orientação sobre uso, adaptação ou escolha de óculos, a regra mandava descartar completamente essa informação, registrando apenas `Prescrição de óculos [tipo]` — sem nenhum sinal de que orientação foi dada.
+- **Correção aplicada**: a regra "Exceção: orientações sobre uso dos óculos" foi reformulada — quando houver qualquer orientação de uso/adaptação/escolha, acrescentar o sufixo genérico `" com orientações sobre o uso"` à própria linha de prescrição (ex.: `Prescrição de óculos multifocais com orientações sobre o uso`), sem detalhar o conteúdo. Sem orientação → prescrição pura, sem sufixo. Detalhes técnicos de lente (antirreflexo, filtro azul, tamanho, qualidade, marca) continuam sendo descartados por completo, sem sufixo — essa categoria não mudou. Mesma regra atualizada em `src/geminiService.js`.

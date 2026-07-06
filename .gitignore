@@ -4,3 +4,10 @@ node_modules/
 dist/
 archive/
 .claude/
+
+# Cópia aninhada desatualizada — NUNCA editar; a fonte é a raiz do repositório
+shosp-extension-v5.1.0/
+
+# Artefatos de trabalho locais
+scratch/
+*.bak

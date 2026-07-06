@@ -288,11 +288,14 @@
   <!-- Gatilhos clínicos — carregado PRIMEIRO (normalizeText + arrays de comandos) -->
   <script src="config/clinical-triggers.js"></script>
 
-  <!-- AI Engine -->
-  <script src="dist/Logger.js"></script>
-  <script src="dist/ApiService.js"></script>
-  <script src="dist/DecisionEngine.js"></script>
-  <script src="dist/geminiService.js"></script>
+  <!-- AI Engine (ordem importa: utils → agentes → fachada) -->
+  <script src="src/Logger.js"></script>
+  <script src="src/ApiService.js"></script>
+  <script src="src/DecisionEngine.js"></script>
+  <script src="src/gemini-json-utils.js"></script>
+  <script src="src/gemini-exam-agent.js"></script>
+  <script src="src/gemini-interview-agent.js"></script>
+  <script src="src/geminiService.js"></script>
 
   <!-- Side Panel Modules (ordem importa!) -->
   <script src="scripts/sidepanel-constants.js"></script>

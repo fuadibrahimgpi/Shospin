@@ -3,343 +3,347 @@ name: transcricao-consulta-oftalmologia
 description: >
   Extrai dados estruturados de transcrições de consultas médicas oftalmológicas
   para injeção em prontuários. Use esta skill sempre que o usuário apresentar
-  uma transcrição de consulta, gerada por reconhecimento de voz ou digitada, e
-  precisar organizar os dados em campos como HDA, antecedentes, medicações em
-  uso, diagnóstico, conduta e tratamento. Esta versão mantém as regras gerais
-  de transcrição, classificação de tipo de consulta, anti-alucinação, flags de
-  injeção automática e formato JSON final. Para preencher ou revisar o campo
-  conduta, use em conjunto a skill conduta-oftalmologica.
+  uma transcrição de consulta (gerada por reconhecimento de voz ou digitada) e
+  precisar organizar os dados em campos como HDA, diagnóstico, conduta e
+  tratamento. Também use quando houver dúvida sobre o tipo de consulta
+  (primeira consulta vs retorno), sobre o que vai em conduta vs tratamento,
+  ou sobre como registrar negativas do paciente. Esta skill contém todas as
+  regras anti-alucinação, classificação de tipo de consulta, separação
+  conduta/tratamento e flags de injeção automática (exames normais, blefarite,
+  dilatação).
 ---
 
 # Transcrição de Consulta Oftalmológica
 
-## Visão geral
+## Visão Geral
 
-Esta skill organiza dados extraídos de transcrições de consultas médicas oftalmológicas nos seguintes campos para injeção em prontuário.
+Esta skill organiza dados extraídos de transcrições de consultas médicas
+oftalmológicas nos seguintes campos para injeção em prontuário:
 
-**Primeira consulta:** `hda`, `medicacoes_em_uso`, `antecedentes_oftalmologicos`, `alteracoes_sistemicas`, `antecedentes_familiares`, `diagnostico`, `conduta`, `tratamento`
+**Primeira consulta:** `hda`, `medicacoes_em_uso`, `antecedentes_oftalmologicos`,
+`alteracoes_sistemicas`, `antecedentes_familiares`, `diagnostico`, `conduta`, `tratamento`
 
 **Retorno:** `retorno`, `medicacoes_em_uso`, `diagnostico`, `conduta`, `tratamento`
 
-**Conclusão:** `retorno`, `diagnostico`, `conduta`, `tratamento`
+---
 
-## Regras anti-alucinação críticas
+## REGRAS ANTI-ALUCINAÇÃO (CRÍTICAS)
 
-1. A transcrição pode conter erros de reconhecimento de voz. Palavras sem sentido devem ser ignoradas, não interpretadas.
-   - `"beleza"` isolado: ignore.
-   - `"microscínio"`: provavelmente erro; não invente medicamento.
+1. A transcrição pode conter **erros de reconhecimento de voz** — palavras sem sentido devem ser IGNORADAS, não interpretadas.
+   - `"beleza"` isolado → ignore
+   - `"microscínio"` → provavelmente erro, não invente medicamento
 
-2. Se não há informação clara, use `null`. Nunca invente.
+2. Se não há informação clara → use `null`. **NUNCA invente.**
 
-3. Extraia apenas fatos claros, não interpretações de texto confuso.
+3. Extraia apenas FATOS CLAROS, não interpretações de texto confuso.
 
 4. Use terminologia médica correta e concisa.
 
-5. Nunca infira nomes de medicamentos não ditos explicitamente.
-   - Paciente disse `"lubrificante"`: registre `lubrificante ocular`, não invente marca.
-   - Paciente disse `"colírio amarelo"`: registre `colírio para pressão` ou a expressão dita, sem inferir marca.
-   - Paciente disse `"aquele remédio"`: não escreva nome específico.
+5. **NUNCA infira nomes de medicamentos não ditos explicitamente:**
+   - ❌ Paciente disse `"lubrificante"` → NÃO escreva `"Artelac"` ou qualquer marca
+   - ❌ Paciente disse `"colírio amarelo"` → NÃO escreva `"Xalatan"`
+   - ❌ Paciente disse `"aquele remédio"` → NÃO escreva nenhum nome
+   - ✅ Registre exatamente o que foi dito: `"lubrificante ocular"`, `"colírio para pressão"`
 
-6. Nunca crie associação medicamentosa se ela não foi explicitamente prescrita.
-   - Se o médico prescreveu `dorzolamida` e `timolol` como itens separados, não escreva `dorzolamida + timolol`.
-   - Só registre associação fixa, combinação ou fórmula composta se isso tiver sido verbalizado claramente.
+---
 
-## Regra de fontes
+## REGRA DE FONTES
 
 | Campo | Fonte |
 |---|---|
-| `hda`, `retorno`, `antecedentes_*`, `alteracoes_sistemicas` | O que o paciente relata |
-| `medicacoes_em_uso` | Paciente ou médico revisando prontuário |
-| `diagnostico`, `conduta`, `tratamento` | O que o médico diz, prescreve ou orienta |
+| `hda`, `retorno`, `antecedentes_*`, `alteracoes_sistemicas` | O que o **PACIENTE** relata |
+| `medicacoes_em_uso` | Paciente OU médico revisando prontuário |
+| `diagnostico`, `conduta`, `tratamento` | O que o **MÉDICO** diz/prescreve |
 
-## Classificação do tipo de consulta
+---
 
-### Retorno
+## CLASSIFICAÇÃO DO TIPO DE CONSULTA
 
-Use `retorno` quando houver:
+### ★ REGRA DE PRIORIDADE MÁXIMA — SOBREPÕE TODOS OS OUTROS CRITÉRIOS
+Se o médico perguntou **explicitamente** sobre doenças sistêmicas **OU** medicamentos sistêmicos
+(ex: *"alguma doença?"*, *"toma remédio?"*, *"tem diabetes?"*, *"precisa ir ao médico sempre?"*) →
+**SEMPRE `primeira_consulta`**, mesmo que a consulta pareça curta ou focada.
+Perguntas sistêmicas são marcador DEFINITIVO de anamnese — retornos NUNCA repetem esse levantamento.
+Não é necessário levantamento completo: **uma pergunta sistêmica já é suficiente**.
 
-- Evidência de vínculo com este serviço: `"da última vez que veio aqui"`, `"o exame que eu pedi"`, `"vim no retorno"`.
-- Consulta focada sem anamnese sistemática completa.
-- Revisão de resultado de exame com atualização de prescrição.
-- Consulta curta voltada a problema pontual.
+### ▶ RETORNO — use quando (e a regra acima NÃO se aplica):
+- Evidência de vínculo com este serviço: *"da última vez que veio aqui"*, *"o exame que eu pedi"*, *"vim no retorno"*
+- Consulta focada sem nenhuma pergunta sistêmica
+- Revisão de resultado de exame + atualização de prescrição
+- Consulta curta voltada a problema pontual
 
-### Primeira consulta
+### ▶ PRIMEIRA CONSULTA — use quando:
+- A regra de prioridade acima se aplica (perguntas sistêmicas), **OU**
+- Médico levanta antecedentes pessoais (cirurgias, histórico oftalmológico), **OU**
+- Médico pergunta antecedentes familiares (glaucoma na família, etc.)
+- **NÃO é necessário levantamento completo** — perguntar sobre UMA área já define primeira consulta
 
-Use `primeira_consulta` quando o médico levantar anamnese sistemática, especialmente:
+### ▶ CONCLUSAO — use quando:
+- Apenas leitura de resultado de exame + conduta final, sem anamnese
 
-- Antecedentes pessoais.
-- Doenças sistêmicas.
-- Cirurgias.
-- Medicações.
-- Antecedentes familiares, como glaucoma na família.
+### ⚠️ Erros comuns de classificação:
+- ❌ Médico pergunta sobre queixa atual → sozinho NÃO é primeira_consulta
+- ❌ Paciente consultou em outro local → pode ainda ser retorno aqui
+- ❌ Consulta curta e focada **sem perguntas sistêmicas** → NÃO é primeira_consulta → é retorno
+- ❌ Dúvida sem anamnese sistemática completa → retorno
+- ❌ "Anamnese breve" não significa retorno — se houver pergunta sistêmica, é primeira_consulta
 
-### Conclusão
+---
 
-Use `conclusao` quando houver apenas leitura de resultado de exame e conduta final, sem anamnese.
+## CAMPOS — DEFINIÇÕES E REGRAS
 
-### Erros comuns de classificação
+### `hda` (História da Doença Atual)
 
-- Médico perguntar sobre queixa atual, sozinho, não transforma a consulta em primeira consulta.
-- Paciente ter consultado em outro local não impede que seja retorno neste serviço.
-- Consulta curta e focada sem anamnese sistemática deve ser classificada como retorno.
-- Dúvida sem anamnese sistemática completa deve ser classificada como retorno.
+**Definição:** Narrativa subjetiva do paciente sobre a queixa que motivou a consulta — o que ele sente, desde quando, e como evoluiu.
 
-## Campos, definições e regras
+**Fonte:** Exclusivamente o relato do **PACIENTE**. Nunca inclua achados de exame ou interpretação do médico.
 
-### `hda`
+#### ✅ O que VAI na HDA:
+- Queixa principal: sintomas relatados pelo próprio paciente (*"visão embaçada"*, *"dor de cabeça"*, *"olho vermelho"*)
+- Tempo de evolução da queixa atual (*"há cerca de 1 ano"*, *"desde a semana passada"*)
+- Fatores de piora ou melhora relatados pelo paciente (*"piora ao usar microscópio"*, *"melhora com descanso"*)
+- Outras queixas associadas à consulta atual
 
-`hda` é a narrativa subjetiva do paciente sobre a queixa que motivou a consulta: o que sente, desde quando e como evoluiu.
-
-Fonte: exclusivamente relato do paciente. Nunca inclua achados de exame ou interpretação do médico.
-
-Inclua em `hda`:
-
-- Queixa principal relatada pelo paciente.
-- Tempo de evolução da queixa atual.
-- Fatores de piora ou melhora relatados pelo paciente.
-- Outras queixas associadas à consulta atual.
-
-Não inclua em `hda`:
-
+#### ❌ O que NÃO vai na HDA (vai em outro campo):
 | Informação | Campo correto |
 |---|---|
-| Pressão ocular medida hoje | Diagnóstico apenas se o médico interpretar |
-| Consulta anterior em outro serviço | `antecedentes_oftalmologicos` |
-| Diagnóstico prévio | `antecedentes_oftalmologicos` |
-| História familiar ocular | `antecedentes_familiares` |
-| Doenças sistêmicas | `alteracoes_sistemicas` |
-| Interpretação do médico | `diagnostico` |
+| Pressão ocular medida hoje | → resultado de exame, não narrativa; vai implícito no diagnóstico |
+| Consulta anterior em outro serviço | → `antecedentes_oftalmologicos` |
+| Diagnóstico prévio (glaucoma, catarata, etc.) | → `antecedentes_oftalmologicos` |
+| História familiar de doença ocular | → `antecedentes_familiares` |
+| Doenças sistêmicas do paciente | → `alteracoes_sistemicas` |
+| Interpretação do médico sobre os achados | → `diagnostico` |
 
-Exemplo correto:
+#### Exemplos:
 
-```text
-"Desconforto ocular, dor de cabeça e visão embaçada há cerca de 1 ano, agravado pelo trabalho com microscópio."
+**❌ Errado — mistura queixa, exame e antecedente:**
+```
+"Desconforto ocular, dor de cabeça e visão embaçada há 1 ano, agravado pelo trabalho
+com microscópio. Pressão ocular costuma ser alta, hoje 23 e 22 mmHg. Em 2018, realizou
+consulta com especialista em Goiânia devido à história familiar de glaucoma."
 ```
 
-### `retorno`
+**✅ Correto — apenas o relato subjetivo do paciente:**
+```
+"Desconforto ocular, dor de cabeça e visão embaçada há cerca de 1 ano,
+agravado pelo trabalho com microscópio."
+```
+*(A pressão de hoje vai no diagnóstico. A consulta de 2018 vai em antecedentes_oftalmologicos.)*
 
-Use `retorno` para resumir a evolução ou motivo do retorno conforme relato do paciente e contexto da consulta.
-
-Inclua:
-
-- Evolução desde a última consulta.
-- Resultado de tratamento anterior relatado pelo paciente.
-- Queixa atual em seguimento.
-- Motivo do retorno.
-
-Não inclua:
-
-- Conduta nova.
-- Diagnóstico médico.
-- Prescrição nova.
-- Resultado objetivo de exame sem interpretação verbalizada.
+---
 
 ### `medicacoes_em_uso`
-
-Inclua apenas medicamentos oftalmológicos que o paciente já usava antes desta consulta.
+Apenas medicamentos **oftalmológicos** que o paciente já usava **antes** desta consulta.
 
 Capture de qualquer fonte:
+- Paciente relata: *"eu uso Xalatan todo dia"*
+- Médico revisa: *"você está usando Xalatan, Combigan..."*
+- Médico confirma: *"continua com o Lumigan?"*
+- Paciente confirma ao ser perguntado: *"sim, uso o colírio amarelo"*
 
-- Paciente relata: `"eu uso Xalatan todo dia"`.
-- Médico revisa: `"você está usando Xalatan, Combigan"`.
-- Médico confirma: `"continua com o Lumigan?"`.
-- Paciente confirma ao ser perguntado.
+Formato: nome + posologia quando mencionados → `"Xalatan 1 gota OE à noite"`
+Sem posologia → só o nome → `"Xalatan, Timoptol"`
 
-Formato:
-
-- Nome e posologia quando mencionados: `"Xalatan 1 gota OE à noite"`.
-- Sem posologia: `"Xalatan, Timoptol"`.
-
-Não inclua medicamentos sistêmicos em `medicacoes_em_uso`. Eles vão em `alteracoes_sistemicas`.
+❌ NÃO inclui medicamentos sistêmicos (insulina, metformina, losartan) → vão em `alteracoes_sistemicas`
 
 ### `alteracoes_sistemicas`
+Doenças sistêmicas + medicamentos sistêmicos em uso.
+Formato sugerido: `"DM em uso de insulina e metformina, HAS em uso de losartan"`
 
-Inclua doenças sistêmicas e medicamentos sistêmicos em uso.
-
-Formato sugerido:
-
-```text
-"DM em uso de insulina e metformina, HAS em uso de losartan"
-```
-
-### `antecedentes_oftalmologicos`
-
-Inclua diagnósticos, cirurgias, tratamentos, acompanhamento prévio, trauma ocular ou consultas oftalmológicas relevantes anteriores à consulta atual.
-
-### `antecedentes_familiares`
-
-Inclua doenças oftalmológicas familiares, especialmente glaucoma, cegueira, doenças retinianas hereditárias ou outras condições mencionadas.
-
-### Negativas do paciente
-
+### Negativas do paciente — frases EXATAS:
 | O que o paciente disse | O que registrar |
 |---|---|
 | Nega colírio/remédio para os olhos | `"Nega uso de medicações oculares"` |
-| Nega qualquer remédio | `medicacoes_em_uso: "Nega uso de medicações oculares"` e `alteracoes_sistemicas: "Nega comorbidades"` |
+| Nega qualquer remédio | `medicacoes_em_uso: "Nega uso de medicações oculares"` + `alteracoes_sistemicas: "Nega comorbidades"` |
 | Nunca fez cirurgia/tratamento | `"Nega diagnósticos e procedimentos oftalmológicos prévios"` |
 | Não tem doença | `"Nega comorbidades"` |
 | Família sem problema de visão | `"Nega diagnósticos oftalmológicos familiares"` |
 
-## Diagnóstico
+### Afirmativas ambíguas — sem nome de doença:
+Quando o paciente confirma uso de remédio sistêmico ou acompanhamento médico regular mas **não nomeia** a doença, registre a informação disponível — **não use "Nega comorbidades"**:
 
-O campo `diagnostico` deve conter diagnósticos, suspeitas diagnósticas e interpretações clínicas verbalizadas pelo médico.
+| O que o paciente disse | O que registrar |
+|---|---|
+| Confirma tomar remédio mas não nomeia | `"Usa medicação sistêmica (doença não especificada)"` |
+| Confirma ir ao médico regularmente + tomar remédio | `"Faz acompanhamento clínico regular com uso de medicação sistêmica (patologia não identificada na consulta)"` |
+| Afirma ter doença sistêmica mas não especifica | `"Relata comorbidade sistêmica não especificada"` |
 
-Regras:
+> ⚠️ **Regra:** se há QUALQUER indício afirmativo de doença/remédio sistêmico na transcrição, mesmo com STT ruidoso, **NÃO use "Nega comorbidades"**. Prefira registrar a dúvida com a informação disponível.
 
-- Se o médico ditar o CID, registre o CID junto ao diagnóstico.
-- Se o médico não ditar o CID, não invente o CID.
-- Diagnóstico textual sem CID é permitido.
-- Nunca converta diagnóstico em CID por conhecimento próprio.
-- Se houver diagnóstico incerto, use a formulação mais fiel possível ao que foi dito e marque `revisao_manual: true`.
+---
 
-## Conduta
+## CONDUTA vs TRATAMENTO — REGRA ABSOLUTA
 
-Para preencher ou revisar `dados.conduta`, aplique a skill `conduta-oftalmologica`.
+### CONDUTA e TRATAMENTO — delegação obrigatória
 
-Resumo mínimo obrigatório:
+> ⚠️ **A alocação dos campos `conduta` e `tratamento` é sempre resolvida
+> pela skill `conduta-tratamento-oftalmologia`.**
+>
+> Nunca tente classificar esses campos diretamente aqui.
+> Passe o trecho relevante da transcrição para aquela skill e use o output
+> dela para preencher os dois campos.
 
-- Conduta vem do médico.
-- Conduta inclui decisões clínicas, orientações e explicações dadas ao paciente.
-- Conduta inclui retornos, encaminhamentos, solicitação de exames, prescrição de óculos, suspensão de medicação e orientações não farmacológicas.
-- Orientações e explicações clínicas dadas ao paciente devem ser injetadas em `conduta`.
-- Desconsidere apenas orientações meramente operacionais ou adaptativas sobre uso dos óculos.
-- Se forem prescritos óculos multifocais, progressivos ou bifocais, documente explicitamente: `Prescrição de óculos multifocais`, salvo tipo específico diferente dito pelo médico.
-- Nunca use `Atualização de grau`, `Mudança de grau`, `Novo grau` ou `Ajuste de grau`.
-- Medicamentos, colírios, lubrificantes, suplementos e posologias vão em `tratamento`, não em `conduta`.
-- Logística operacional da clínica deve ser descartada.
+---
 
-## Tratamento
+## EXEMPLO DE REFERÊNCIA — BLEFARITE
 
-O campo `tratamento` deve conter apenas medicamentos, colírios, pomadas, lubrificantes, suplementos ou medicações orais prescritas ou mantidas pelo médico, com posologia quando disponível.
+```
+conduta:    "Encaminhamento: Dermatologista"
+            "Prescrição de óculos"
+            "Retorno 6 meses"
 
-Inclua:
-
-- Colírios e pomadas novos ou mantidos.
-- Medicamentos orais com posologia.
-- Lubrificantes oculares.
-- Ômega 3 e suplementos.
-- Continuidade de medicação quando o médico verbalizar manutenção.
-
-Se nenhum tratamento medicamentoso foi prescrito, use `null`.
-
-### Regra anti-associação
-
-Nunca crie associação de medicamentos, colírios ou princípios ativos se isso não foi explicitamente prescrito pelo médico.
-
-Se o médico mencionar dois medicamentos separadamente, registre separadamente.
-
-```text
-Médico: "Use dorzolamida e timolol."
-
-tratamento: "Dorzolamida\nTimolol"
+tratamento: "Compressa morna 2 min — 2x/dia"
+            "Higiene palpebral com shampoo infantil — 2-3x/dia"
+            "Lubrificante ocular 1 gota AO 6-8x/dia"
+            "Ômega 3 1000mg — 1cp almoço e 1cp jantar por 30 dias"
 ```
 
-Não escreva:
+---
 
-```text
-"Dorzolamida + Timolol"
-```
-
-Só use `+`, `associação`, `combinado`, `associação fixa` ou nome comercial de combinação quando o médico falar isso claramente.
-
-## Flags de injeção automática
+## FLAGS DE INJEÇÃO AUTOMÁTICA
 
 ### `injectExamesNormais`
+`true` SOMENTE se o médico afirma que **TODOS** os exames estão normais, sem exceção.
 
-Marque `true` somente se o médico afirmar que todos os exames estão normais, sem exceção.
+✅ Correto marcar `true`:
+- *"exames normais"*, *"fundo de olho normal"*, *"biomicroscopia normal"*
 
-Pode marcar `true` quando o médico disser:
-
-- `"exames normais"`.
-- `"fundo de olho normal"`, `"biomicroscopia normal"` e demais exames relevantes normais.
-
-Não marque `true` quando:
-
-- `"tirando X tudo normal"`: há alteração.
-- `"os outros exames estão tranquilos"`: há exceção.
-- `"exame de pressão normal"`: apenas um exame.
-- Há diagnóstico ocular ativo, como catarata, glaucoma, cicatriz ou blefarite.
-- Há qualquer alteração ocular conhecida.
+❌ NÃO marcar `true`:
+- *"tirando X tudo normal"* → há alteração
+- *"os outros exames estão tranquilos"* → há exceção
+- *"exame de pressão normal"* → só um exame
+- Paciente com diagnóstico ocular ativo (catarata, glaucoma, cicatriz)
+- **Regra:** se há QUALQUER alteração ocular conhecida → `false`
 
 ### `injectBlefarite`
+`true` APENAS se blefarite é diagnosticada **explicitamente** na fala do médico:
+- Médico usa a palavra: *"blefarite"*, *"blefaromeibomite"*, *"meibomite"*, *"disfunção de meibômio"*
+- Médico descreve achado palpebral inflamatório: *"pálpebra inflamada"*, *"bordo palpebral alterado"*
 
-Marque `true` se houver qualquer indicação de blefarite:
-
-- Diagnóstico: `"blefarite"`, `"blefaromeibomite"`, `"disfunção de meibômio"`, `"olho seco"`.
-- Tratamento típico: `"lavar com shampoo"`, `"compressa quente/morna"`, `"higiene palpebral"`.
-- Pálpebra inflamada mencionada pelo médico.
+❌ **NÃO marcar `true`** nas seguintes situações:
+- Médico orienta higiene palpebral ou compressa morna **sem nomear blefarite**
+- Paciente com olho irritado recebe instrução de higiene como medida genérica
+- *"olho seco"* isolado, sem menção de blefarite ou meibomite
+- Qualquer inferência: "sugere", "compatível", "pode ser" sem a palavra-chave
 
 ### `dilatacaoDetectada`
+`true` se médico menciona dilatar pupila ou usar colírio de dilatação.
 
-Marque `true` se o médico mencionar dilatar pupila ou usar colírio de dilatação.
+**Regra crítica (fase 1 — pausa para dilatação):** quando `dilatacaoDetectada: true`, defina SEMPRE:
+- `conduta: null`
+- `tratamento: null`
+- `biomicroscopia: null`
+- `fundoscopia: null`
+- `injectExamesNormais: false`
+- `injectBlefarite: false`
 
-### Exclusão mútua
+Conduta, tratamento e a descrição dos exames só podem ser determinados após
+o retorno do paciente da dilatação. **MAS a ENTREVISTA deve ser extraída
+normalmente**: `hda` (ou `retorno`), `medicacoes_em_uso`, antecedentes,
+`alteracoes_sistemicas`, `antecedentes_familiares` e `diagnostico` (se já
+mencionado) são preenchidos com o que foi dito antes da dilatação — a pausa
+NÃO descarta a entrevista; ela é injetada imediatamente no prontuário.
 
-`injectBlefarite` e `injectExamesNormais` são mutuamente exclusivos.
+### Marcador `[RETORNO DA DILATACAO]` (fase 2 — pós-dilatação)
+Se a transcrição contém a linha `[RETORNO DA DILATACAO]`, o texto ANTES do
+marcador é a entrevista pré-dilatação e o texto DEPOIS é a continuação da
+MESMA consulta após a dilatação. Neste caso a dilatação JÁ OCORREU:
+- `dilatacaoDetectada: false` (a menos que uma NOVA dilatação seja anunciada
+  DEPOIS do marcador)
+- Menções a *"vai dilatar"/"vou dilatar"* ANTES do marcador NÃO contam
+- `conduta`, `tratamento`, `biomicroscopia` e `fundoscopia` são extraídos
+  normalmente, usando o texto COMPLETO (antes + depois do marcador)
+- `tipo_consulta` é classificado considerando a consulta inteira
 
-Se há blefarite, a biomicroscopia não é normal. Portanto, `injectExamesNormais = false`.
+### FLAGS DE DIAGNÓSTICO — Presbiopia (H52.4)
 
-## Dados objetivos de exame
+Inclua `"H524 - Presbiopia"` no campo `diagnostico` **somente** se PELO MENOS UM dos seguintes for verdadeiro:
 
-- Dados objetivos de exame, como PIO, acuidade visual, biomicroscopia, fundoscopia e refração, não vão em `hda`.
-- Só devem aparecer em `diagnostico`, `conduta` ou `tratamento` se o médico verbalizar interpretação, diagnóstico ou decisão baseada neles.
-- Não crie campo novo para exame físico.
-- Não transforme valores isolados em diagnóstico se o médico não disser.
+✅ **Incluir H524:**
+- Médico usa explicitamente a palavra *"presbiopia"* ou *"presbicia"*
+- Médico prescreve óculos para perto / multifocal / progressivo **EM RESPOSTA A UMA QUEIXA ATIVA de dificuldade para ver de perto nesta consulta** (queixa relatada pelo paciente nesta visita, não histórica)
+- Médico confirma dificuldade de acomodação relacionada à idade como achado novo desta consulta
 
-Exemplo:
+❌ **NÃO incluir H524:**
+- Paciente apenas menciona que *já usa* óculos de leitura / multifocal / progressivo na anamnese (histórico, sem nova queixa)
+- Médico renova receita de óculos sem discutir dificuldade de visão para perto como queixa ativa
+- Médico prescreve ou menciona óculos sem especificar tipo ("óculos", "lentes") — sem referência a perto, multifocal ou progressivo
+- Consulta sobre outro diagnóstico (blefarite, pterígio, catarata) em que óculos são prescritos mas o motivo não é visão de perto
+- A queixa de "dificuldade para perto" já era conhecida em consultas anteriores e não é o motivo desta visita
 
-```text
-"PIO 23/22" não vira glaucoma automaticamente.
+### ⚠️ Regra de exclusão mútua:
+`injectBlefarite` e `injectExamesNormais` são **MUTUAMENTE EXCLUSIVOS**.
+Se há blefarite → biomicroscopia NÃO é normal → `injectExamesNormais = false`.
+
+### `dados.biomicroscopia` — achados de segmento anterior
+
+#### ⚠️ REGRA DE FONTE — biomicroscopia (crítica)
+`dados.biomicroscopia` descreve EXCLUSIVAMENTE o que o **médico observou no exame atual**.
+
+❌ NUNCA inclua na biomicroscopia:
+- Achados relatados pelo **paciente** como histórico (ex: "olho ficou vermelho 3 dias atrás")
+- Diagnósticos de consultas anteriores em outros serviços
+- Qualquer informação subjetiva que não seja observação direta do médico no exame presente
+
+✅ Quando colocar onde:
+| Fonte | Campo |
+|---|---|
+| Paciente: "meu olho ficou vermelho há dias" | → `hda` |
+| Médico examinando: "hemorragia subconjuntival OD presente" | → `dados.biomicroscopia` |
+| Histórico em outro serviço: "operou retina em Palma" | → `antecedentes_oftalmologicos` |
+
+Popule este campo APENAS quando há achado específico de segmento anterior **detectado pelo médico no exame atual** (pterígio, pinguécula, leucoma, hemorragia subconjuntival observada, etc.).
+
+**Modelo base (sem blefarite):**
+`"AO: pterígio [localização] em crescimento; córnea transparente, câmara anterior formada, pupila regular e reagente, cristalino transparente"`
+
+**Modelo combinado (pterígio + blefarite concomitante):**
+`"AO: pterígio [localização] em crescimento; hiperemia e espessamento da margem palpebral, telangiectasias e disfunção de glândulas de meibômio com secreção espessa; córnea transparente, câmara anterior formada, pupila regular e reagente, cristalino transparente"`
+
+Quando `dados.biomicroscopia` está preenchido, ele **substitui** o template padrão de blefarite — não é necessário repetir os achados em outro campo.
+
+#### ⚠️ REGRA CRÍTICA — Paciente pseudofácico (pós-facectomia)
+
+Quando `antecedentes_oftalmologicos` contém **facectomia**, **cirurgia de catarata**, **facoemulsificação** ou equivalente:
+
+- **NUNCA escreva "catarata" na biomicroscopia** — após a cirurgia não há mais catarata, a lente natural foi removida
+- **NUNCA escreva "cristalino transparente"** — o cristalino natural não existe mais
+- Substitua obrigatoriamente por: `"pseudofácico, LIO bem posicionada"`
+
+| Situação do cristalino | O que escrever na biomicroscopia |
+|---|---|
+| Paciente sem cirurgia prévia | `cristalino transparente` |
+| Pós-facectomia (IOL implantada) | `pseudofácico, LIO bem posicionada` |
+| Pós-facectomia + opacidade de cápsula | `pseudofácico, opacidade de cápsula posterior` |
+
+**Exemplos:**
+
+❌ Errado — paciente operou catarata mas biomicroscopia diz "catarata" ou "cristalino transparente":
+```
+antecedentes_oftalmologicos: "Cirurgia de catarata AO — última há 3 meses"
+biomicroscopia: "... pupila regular e reagente, catarata"   ← ERRADO: não há mais catarata
+biomicroscopia: "... pupila regular e reagente, cristalino transparente"  ← ERRADO: cristalino foi removido
 ```
 
-Pode fundamentar `"suspeita de glaucoma"` apenas se o médico disser explicitamente.
+✅ Correto — paciente pseudofácico:
+```
+antecedentes_oftalmologicos: "Cirurgia de catarata AO — última há 3 meses"
+biomicroscopia: "AO: pterígio nasal; córnea transparente, câmara anterior formada,
+                 pupila regular e reagente, pseudofácico, LIO bem posicionada"
+```
 
-## Lateralidade
+> **Origem desta regra (2026-06-24):** paciente relatou "catarata os dois, as duas cirurgias" na anamnese histórica. O modelo usou este dado histórico para escrever "catarata" na biomicroscopia como se fosse achado atual do exame — erro de fonte. A menção de catarata na transcrição deve ir para `antecedentes_oftalmologicos`; a biomicroscopia deve refletir o estado atual (LIO implantada).
 
-- Preserve OD, OE e AO quando a lateralidade for clara.
-- `"Olho direito"`: OD.
-- `"Olho esquerdo"`: OE.
-- `"Ambos os olhos"` ou `"nos dois olhos"`: AO.
-- Nunca infira lateralidade.
-- Se a lateralidade for necessária e não estiver clara, registre sem lateralidade apenas se clinicamente aceitável e marque `revisao_manual: true`.
-- Se houver contradição de lateralidade, marque `revisao_manual: true`.
+Se não houver achado específico de segmento anterior → deixe `dados.biomicroscopia: null` (o sistema usará o template automático correto).
 
-## Conflitos e contradições
+---
 
-- Se o paciente nega algo, mas depois confirma algo específico, prefira a informação específica e mais recente.
-- Se o médico revisa o prontuário e o paciente confirma, registre como confirmado.
-- Se paciente e médico dizem coisas incompatíveis sem resolução, não escolha arbitrariamente.
-- Registre a informação mais segura e marque `revisao_manual: true`.
-- Não mescle informações contraditórias.
+## FORMATO DE SAÍDA — JSON
 
-## Segurança clínica e revisão manual
-
-Assinale `revisao_manual: true` sempre que houver risco ou incerteza.
-
-Situações para marcar revisão manual:
-
-- Medicamento mencionado de forma incompleta ou ambígua.
-- Possível associação medicamentosa não clara.
-- Lateralidade ambígua ou contraditória.
-- Posologia contraditória.
-- Diagnóstico incerto.
-- Transcrição muito ruidosa.
-- Conflito entre fala do paciente e revisão do médico sem resolução.
-- Dados importantes ausentes para injeção segura.
-- Conduta ambígua segundo a skill `conduta-oftalmologica`.
-
-Se tudo estiver claro e seguro, mantenha `revisao_manual: false` e `motivo_revisao_manual: null`.
-
-## Formato de saída JSON
-
-Todos os campos de texto devem ser strings, nunca arrays.
-
+Todos os campos de texto = **strings** (nunca arrays).
 Use `\n` para separar múltiplos itens dentro de um campo.
 
-O campo `_raciocinio` é apenas auditoria e não deve ser injetado no prontuário. Ele deve ser breve, objetivo e sem cadeia de pensamento extensa.
-
-### Primeira consulta
-
+### Primeira consulta:
 ```json
 {
   "tipo_consulta": "primeira_consulta",
@@ -350,20 +354,18 @@ O campo `_raciocinio` é apenas auditoria e não deve ser injetado no prontuári
     "alteracoes_sistemicas": "string ou null",
     "antecedentes_familiares": "string ou null",
     "diagnostico": "string ou null",
-    "conduta": "string com \\n entre itens, ou null",
-    "tratamento": "string com \\n entre itens, ou null"
+    "conduta": "string com \n entre itens, ou null",
+    "tratamento": "string com \n entre itens, ou null",
+    "biomicroscopia": "string ou null (preencher apenas quando há achado de segmento anterior: pterígio, pinguécula, leucoma, etc.)"
   },
   "injectExamesNormais": false,
   "injectBlefarite": false,
   "dilatacaoDetectada": false,
-  "revisao_manual": false,
-  "motivo_revisao_manual": null,
-  "_raciocinio": "explicação breve do raciocínio"
+  "_raciocinio": "explicação do raciocínio"
 }
 ```
 
-### Retorno
-
+### Retorno:
 ```json
 {
   "tipo_consulta": "retorno",
@@ -371,115 +373,168 @@ O campo `_raciocinio` é apenas auditoria e não deve ser injetado no prontuári
     "retorno": "string ou null",
     "medicacoes_em_uso": "string ou null",
     "diagnostico": "string ou null",
-    "conduta": "string com \\n entre itens, ou null",
-    "tratamento": "string com \\n entre itens, ou null"
+    "conduta": "string com \n entre itens, ou null",
+    "tratamento": "string com \n entre itens, ou null",
+    "biomicroscopia": "string ou null (preencher apenas quando há achado de segmento anterior: pterígio, pinguécula, leucoma, etc.)"
   },
   "injectExamesNormais": false,
   "injectBlefarite": false,
   "dilatacaoDetectada": false,
-  "revisao_manual": false,
-  "motivo_revisao_manual": null,
-  "_raciocinio": "explicação breve do raciocínio"
+  "_raciocinio": "explicação do raciocínio"
 }
 ```
 
-### Conclusão
+---
 
-```json
-{
-  "tipo_consulta": "conclusao",
-  "dados": {
-    "retorno": "string ou null",
-    "diagnostico": "string ou null",
-    "conduta": "string com \\n entre itens, ou null",
-    "tratamento": "string com \\n entre itens, ou null"
-  },
-  "injectExamesNormais": false,
-  "injectBlefarite": false,
-  "dilatacaoDetectada": false,
-  "revisao_manual": false,
-  "motivo_revisao_manual": null,
-  "_raciocinio": "explicação breve do raciocínio"
-}
+## CASOS DE REFERÊNCIA
+
+### Caso 1 — Primeira consulta com catarata
+```
+Médico: levantou HDA, antecedentes, família, examinou, diagnosticou catarata incipiente,
+        prescreveu óculos multifocais, retorno anual.
+
+Resultado:
+  tipo_consulta: "primeira_consulta"
+  diagnostico: "H250 - Catarata senil incipiente\nH524 - Presbiopia"
+  conduta: "Prescrição de óculos multifocais\nRetorno anual"
+  tratamento: null
+  injectExamesNormais: false  ← há alteração (catarata)
+  injectBlefarite: false
 ```
 
-## Casos de referência
+⚠️ O diagnóstico SEMPRE usa o formato "HXXX - Descrição". Catarata nuclear → H251.
+Ver regra completa de H524 na seção "FLAGS DE DIAGNÓSTICO — Presbiopia" abaixo.
 
-### Primeira consulta com catarata
+### Caso 2 — Retorno de blefarite
+```
+Médico: perguntou evolução, examinou pálpebras, confirmou blefarite,
+        orientou compressa + higiene, prescreveu lubrificante,
+        encaminhou para dermatologista, retorno em 6 meses.
 
-```text
-Médico levantou HDA, antecedentes, família, examinou, diagnosticou catarata incipiente, prescreveu óculos multifocais e retorno anual.
-
-tipo_consulta: "primeira_consulta"
-diagnostico: "Catarata incipiente"
-conduta: "Prescrição de óculos multifocais\nRetorno anual"
-tratamento: null
-injectExamesNormais: false
-injectBlefarite: false
+Resultado:
+  tipo_consulta: "retorno"
+  diagnostico: "H010 - Blefarite\nOlho seco"
+  conduta: "Encaminhamento: Dermatologista\nRetorno 6 meses"
+  tratamento: "Compressa morna 2 min — 2x/dia\nHigiene palpebral com shampoo infantil — 2-3x/dia\nLubrificante ocular 1 gota AO 6x/dia"
+  injectExamesNormais: false
+  injectBlefarite: true
 ```
 
-### Retorno de blefarite
+### Caso 3 — Consulta com exames normais
+```
+Médico: "biomicroscopia e fundoscopia normais, pressão normal,
+         grau estável, retorno em 1 ano."
 
-```text
-Médico perguntou evolução, examinou pálpebras, confirmou blefarite, orientou compressa e higiene, prescreveu lubrificante, encaminhou para dermatologista e retorno em 6 meses.
-
-tipo_consulta: "retorno"
-diagnostico: "Blefarite\nOlho seco"
-conduta: "Encaminhamento: Dermatologista\nOrientado compressa morna\nOrientado higiene palpebral\nRetorno 6 meses"
-tratamento: "Lubrificante ocular"
-injectExamesNormais: false
-injectBlefarite: true
+Resultado:
+  tipo_consulta: "retorno"
+  conduta: "Retorno anual"
+  tratamento: null
+  injectExamesNormais: true
+  injectBlefarite: false
 ```
 
-### Consulta com exames normais
+### Caso 5 — Primeira consulta com pressão limítrofe e história familiar de glaucoma
+```
+Paciente: refere desconforto ocular, dor de cabeça e visão embaçada há ~1 ano,
+          piora com uso de microscópio. Já fez consulta em 2018 em Goiânia por
+          suspeita de glaucoma. Mãe tem glaucoma. Pressão hoje: 23 e 22 mmHg.
 
-```text
-Médico: "biomicroscopia e fundoscopia normais, pressão normal, grau estável, retorno em 1 ano."
+hda:                      "Desconforto ocular, dor de cabeça e visão embaçada há
+                           cerca de 1 ano, agravado pelo trabalho com microscópio."
+antecedentes_oftalmol.:   "Acompanhamento por suspeita de glaucoma — consulta
+                           com especialista em Goiânia em 2018."
+antecedentes_familiares:  "Mãe com diagnóstico de glaucoma."
+diagnostico:              "H400 - Suspeita de glaucoma\nH529 - Refração NE"
 
-tipo_consulta: "retorno"
-conduta: "Retorno anual"
-tratamento: null
-injectExamesNormais: true
-injectBlefarite: false
+⚠️  Pressão de hoje (23/22 mmHg) NÃO vai na HDA — é dado de exame,
+    não relato do paciente. Aparece implicitamente no diagnóstico.
 ```
 
-### Paciente nega tudo
+### Caso 4 — Paciente nega tudo
+```
+Paciente: nega colírios, nega doenças, nega cirurgias, família sem problemas.
 
-```text
-Paciente nega colírios, nega doenças, nega cirurgias e família sem problemas.
-
-medicacoes_em_uso: "Nega uso de medicações oculares"
-antecedentes_oftalmologicos: "Nega diagnósticos e procedimentos oftalmológicos prévios"
-alteracoes_sistemicas: "Nega comorbidades"
-antecedentes_familiares: "Nega diagnósticos oftalmológicos familiares"
+Resultado:
+  medicacoes_em_uso: "Nega uso de medicações oculares"
+  antecedentes_oftalmologicos: "Nega diagnósticos e procedimentos oftalmológicos prévios"
+  alteracoes_sistemicas: "Nega comorbidades"
+  antecedentes_familiares: "Nega diagnósticos oftalmológicos familiares"
 ```
 
-### Pressão limítrofe e história familiar de glaucoma
+### Caso 6a — Retorno de blefarite + presbiopia ATIVA (H524 ✅)
+```
+Cenário: Retorno. Paciente com irritação ocular e dificuldade para perto
+(queixa ativa desta visita). Médico confirma blefarite, orienta compressa
+morna + higiene palpebral com shampoo infantil, prescreve lubrificante
+de uso contínuo, prescreve óculos só para perto COMO RESPOSTA à queixa.
 
-```text
-Paciente refere desconforto ocular, dor de cabeça e visão embaçada há cerca de 1 ano, com piora ao usar microscópio. Já fez consulta em 2018 em Goiânia por suspeita de glaucoma. Mãe tem glaucoma. Pressão hoje: 23 e 22 mmHg.
+Gatilho de H524: dificuldade de perto é queixa ativa + prescrição de óculos
+para perto nesta consulta.
 
-hda: "Desconforto ocular, dor de cabeça e visão embaçada há cerca de 1 ano, agravado pelo trabalho com microscópio."
-antecedentes_oftalmologicos: "Acompanhamento por suspeita de glaucoma, com consulta com especialista em Goiânia em 2018."
-antecedentes_familiares: "Mãe com diagnóstico de glaucoma."
-diagnostico: "Suspeita de glaucoma"
+⚠️ ERRO DOCUMENTADO (2026-05-13): modelo alocou compressa morna e higiene
+palpebral em CONDUTA. Correto é TRATAMENTO — o paciente executa fisicamente.
+
+Resultado CORRETO:
+  tipo_consulta: "retorno"
+  diagnostico: "H010 - Blefarite bilateral\nH524 - Presbiopia"
+  conduta: "Prescrição de óculos para perto"
+  tratamento: "Compressa morna 2 min — 2-3x/dia
+               Higiene palpebral com shampoo infantil — 1x/dia
+               Lubrificante ocular — uso contínuo"
+  injectBlefarite: true
+  injectExamesNormais: false
+
+❌ Resultado ERRADO que deve ser evitado:
+  conduta: "Prescrição de óculos para perto
+            Compressa morna 2 min — 3x/dia        ← ERRADO
+            Higiene palpebral com shampoo infantil ← ERRADO"
+  tratamento: "Lubrificante ocular — uso contínuo"
 ```
 
-Pressão de hoje não vai na HDA. É dado de exame e só aparece no diagnóstico se o médico verbalizar a interpretação.
+### Caso 6b — Retorno de blefarite, paciente já usa multifocal (H524 ❌)
+```
+Cenário: Retorno de blefarite. Paciente menciona na anamnese que usa óculos
+multifocais há 2 anos. Médico trata blefarite, renova receita dos óculos
+sem discussão nova sobre visão de perto. Não há queixa ativa de dificuldade
+para perto nesta consulta.
 
-## Histórico de erros mantidos nesta skill
+Resultado CORRETO:
+  tipo_consulta: "retorno"
+  diagnostico: "H010 - Blefarite bilateral"   ← SEM H524
+  injectBlefarite: true
+  injectExamesNormais: false
 
-### Atualização de grau
+❌ Resultado ERRADO: incluir H524 só porque o paciente mencionou multifocal
+na anamnese ou porque o médico renovou os óculos sem nova queixa de perto.
+```
 
-- Erro observado: campo `conduta` preenchido como `"Atualização de grau"` em vez de `"Prescrição de óculos [tipo]"`.
-- Correção: a regra detalhada fica na skill `conduta-oftalmologica`; esta skill mantém a proibição mínima.
+### Caso 7 — Pterígio com blefarite concomitante
+```
+Médico: "começo de pterígio nasal, pálpebra um pouco irritada — vou passar
+         compressa morna e shampoo de neném nos cílios, lubrificante."
 
-### Orientações verbais omitidas
+Resultado:
+  tipo_consulta: "primeira_consulta"
+  diagnostico: "H111 - Pterígio\nH010 - Blefarite"
+  conduta: "Retorno 2 semanas"
+  tratamento: "Compressa morna 2 min — 2x/dia\nHigiene palpebral com shampoo infantil — 3x/dia\nLubrificante ocular 1 gota AO ao longo do dia"
+  injectBlefarite: true
+  injectExamesNormais: false
+  dados.biomicroscopia: "AO: pterígio nasal em crescimento; hiperemia e espessamento da margem palpebral, telangiectasias e disfunção de glândulas de meibômio com secreção espessa; córnea transparente, câmara anterior formada, pupila regular e reagente, cristalino transparente"
+```
 
-- Erro observado: orientações verbais do médico, como compressa, higiene e proteção, foram omitidas de `conduta`.
-- Correção: esta skill determina que orientações e explicações clínicas sejam injetadas; a extração detalhada fica na skill `conduta-oftalmologica`.
+⚠️ `dados.biomicroscopia` NÃO é omitido quando `injectBlefarite = true`. Ambos coexistem: a flag dispara o tratamento automático de blefarite; o campo biomicroscopia garante que o pterígio apareça na descrição do exame.
 
-### Associação medicamentosa inventada
+---
 
-- Erro observado: tratamento preenchido com associação medicamentosa não prescrita.
-- Correção: regra anti-associação adicionada em `tratamento` e em regras anti-alucinação.
+## HISTÓRICO DE ERROS
+
+| Data | Tipo | Erro | Causa raiz | Correção aplicada |
+|---|---|---|---|---|
+| 2026-05-13 | Alocação errada | Compressa morna e higiene palpebral foram para CONDUTA | Modelo ignorou regra SEMPRE-TRATAMENTO; confundiu "orientação do médico" com "decisão clínica" | Lista negra da conduta + teste obrigatório reposicionado + Caso 6 adicionado |
+| 2026-05-14 | Alocação repetida | Compressa morna e higiene palpebral foram para CONDUTA novamente (erro idêntico ao de 2026-05-13) | Reforço de prompt insuficiente para prevenir recorrência | Guard `_guardCondutaContaminada` adicionado ao DecisionEngine — corrige no runtime independente do LLM |
+| 2026-05-15 | Classificação errada | Consulta de primeira vez classificada como `retorno` | Médico fez perguntas sistêmicas ("alguma doença?", "toma remédio?") mas a anamnese foi breve — IA pesou o critério "consulta focada" acima da presença de perguntas sistêmicas | Regra de prioridade máxima adicionada: perguntas sistêmicas = sempre `primeira_consulta`, independente de qualquer outro critério |
+| 2026-06-18 | Fonte errada na biomicroscopia | Hemorragia subconjuntival relatada pelo paciente como histórico ("olho ficou vermelho há dias") foi incluída na biomicroscopia | Regra de fonte da biomicroscopia estava implícita — IA inferiu achado de exame a partir de relato subjetivo | Regra explícita adicionada: `dados.biomicroscopia` = apenas observações do médico no exame atual; relato do paciente vai na HDA |
+| 2026-06-18 | Falso positivo opacidade cápsula | `opacidadeCapsulaDetectada=true` disparado pelo relato histórico do paciente ("fiz limpeza da lente") | `'limpeza da lente'` em OPACIDADE_CAPSULA_COMMANDS era genérico demais — aparece em histórico de pacientes pseudofácicos | Removido das triggers genéricas; adicionado LENTE_LIMPA_COMMANDS como sinal negativo explícito ("lente limpa") |
+| 2026-06-19 | Falso positivo H524 | Presbiopia (H524) inserida em consultaS onde paciente apenas menciona já usar multifocal/óculos para perto na anamnese, sem queixa ativa de dificuldade de perto nesta visita | Regra "obrigatória quando multifocal é prescrito" era ampla demais — disparava em renovação de receita e em menções históricas | Seção "FLAGS DE DIAGNÓSTICO — Presbiopia" adicionada com critérios explícitos; Caso 6 dividido em 6a (H524 ✅) e 6b (H524 ❌) |
+| 2026-06-24 | Fonte errada na biomicroscopia (paciente pseudofácico) | Paciente relatou "catarata os dois, as duas cirurgias" na anamnese → modelo escreveu "catarata" (ou "cristalino transparente") na biomicroscopia como se fosse achado atual | Dado histórico da anamnese (cirurgia prévia) foi confundido com achado de exame; a regra de fonte estava definida para "hemorragia subconjuntival" mas não cobria o caso de pseudofácico | Regra explícita adicionada na seção `dados.biomicroscopia`: pós-facectomia → "cristalino transparente" proibido → obrigatório "pseudofácico, LIO bem posicionada" |

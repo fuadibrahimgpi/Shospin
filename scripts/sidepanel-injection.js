@@ -453,22 +453,41 @@ async function injectAll(force = false) {
   const _temTratamentoAtivo = !!(audioData?.dados?.tratamento || audioData?.dados?.conduta?.match(/encaminhamento/i));
   const transcricaoNorm = normalizeText(recognizedText || '');
   const mencionouFundoNaFala = transcricaoNorm.includes('fundo') || transcricaoNorm.includes('fundoscop');
+
+  // Reconciliação de catarata a partir do diagnóstico do LLM.
+  // O cristalino dinâmico (getBiomicroscopiaComLente) depende de catarataDetectada,
+  // ligada apenas pelos gatilhos de voz. Quando a fala do médico é embaralhada pelo
+  // reconhecimento e o gatilho CATARATA_COMMANDS não dispara, o Gemini ainda diagnostica
+  // catarata (CID H25.x) e a biomicroscopia sairia com "cristalino transparente",
+  // contradizendo o diagnóstico. Aqui derivamos a flag do próprio diagnóstico.
+  // Respeita a prioridade da lente (opacidade cápsula > LIO > catarata): olho pseudofácico
+  // (LIO/opacidade já detectadas) NÃO recebe catarata — a menção seria histórica.
+  if (!catarataDetectada && !lioDetectada && !opacidadeCapsulaDetectada) {
+    const _cat = parseCatarataFromDiagnostico(audioData?.dados?.diagnostico);
+    if (_cat.detected) {
+      catarataDetectada = true;
+      if (!catarataGrau && _cat.grau) catarataGrau = _cat.grau;
+      console.log('[Catarata] Flag derivada do diagnóstico (gatilho de voz não disparou):', catarataGrau || '(grau não especificado)');
+    }
+  }
+
   if (!blefariteInjetada && !examesNormaisInjetados) {
     if (!audioData?.dilatacaoDetectada && audioData?.injectExamesNormais && !_temTratamentoAtivo) {
       combinedData.examesNormais = {
         biomicroscopia: getBiomicroscopiaComLente(BIOMICROSCOPIA_NORMAL),
         fundoscopia: (fundoscopiaDetectada || mencionouFundoNaFala) ? FUNDOSCOPIA_NORMAL : null
       };
-    } else if (audioData?.injectBlefarite) {
-      // Blefarite: biomicroscopia já realizada — injeta mesmo com dilatação pendente.
-      // Se Gemini gerou biomicroscopia personalizada (ex: pterígio + blefarite), usa ela.
-      // Caso contrário usa o template padrão de blefarite.
+    } else if (!audioData?.dilatacaoDetectada && audioData?.injectBlefarite) {
+      // Blefarite: se Gemini gerou biomicroscopia personalizada (ex: pterígio + blefarite),
+      // usa ela; caso contrário usa o template padrão de blefarite.
+      // Com dilatação pendente NÃO injeta — descrição de exames pertence à fase 2.
       const _bioBase = audioData?.dados?.biomicroscopia || BIOMICROSCOPIA_BLEFARITE;
       combinedData.examesNormais = {
         biomicroscopia: getBiomicroscopiaComLente(_bioBase),
         fundoscopia: FUNDOSCOPIA_NORMAL // blefarite sempre injeta fundoscopia normal
       };
-    } else if (audioData?.dados?.biomicroscopia || audioData?.dados?.fundoscopia) {
+    } else if (!audioData?.dilatacaoDetectada &&
+               (audioData?.dados?.biomicroscopia || audioData?.dados?.fundoscopia)) {
       // Biomicroscopia/fundoscopia personalizada gerada pelo Gemini (ex: pinguecula, pterígio, nevo)
       // Quando só fundoscopia foi preenchida (achado posterior com segmento anterior normal),
       // injeta o template normal de biomicroscopia para não deixar o campo em branco.
@@ -510,14 +529,17 @@ async function injectAll(force = false) {
     const tipo = audioData.tipo_consulta;
 
     const _dilatacao = !!audioData.dilatacaoDetectada;
-    const _PLACEHOLDER = 'Sem prescrição de medicação';
-    const _tratReal = (v) => (v && v !== _PLACEHOLDER) ? v : null;
+    // Sem tratamento ditado, o campo TRATAMENTO é injetado com o registro
+    // explícito "Sem prescrição de medicação" (mesmo texto que o painel exibe
+    // via displayAudioResults) — o prontuário nunca fica com tratamento em
+    // branco. Na dilatação (fase 1) permanece null: pertence ao pós-dilatação.
+    const _trat = (v) => _dilatacao ? null : (v || 'Sem prescrição de medicação');
     if (tipo === 'conclusao') {
       combinedData.audio = {
         tipo: 'conclusao',
         diagnostico: diagnosticoField.value || diagnosticoRetornoField.value || null,
         conduta: _dilatacao ? null : (condutaField.value || condutaRetornoField.value || null),
-        tratamento: _dilatacao ? null : _tratReal(medicamentosPrescritosField.value || medicamentosPrescritosRetornoField.value)
+        tratamento: _trat(medicamentosPrescritosField.value || medicamentosPrescritosRetornoField.value)
       };
     } else if (tipo === 'retorno') {
       combinedData.audio = {
@@ -526,7 +548,7 @@ async function injectAll(force = false) {
         uso: medicacoesRetornoField.value || null,
         diagnostico: diagnosticoRetornoField.value || null,
         conduta: _dilatacao ? null : (condutaRetornoField.value || null),
-        tratamento: _dilatacao ? null : _tratReal(medicamentosPrescritosRetornoField.value)
+        tratamento: _trat(medicamentosPrescritosRetornoField.value)
       };
     } else {
       // Mesclar com dados da fase 1 de dilatação (se o médico atendeu outro paciente
@@ -543,7 +565,7 @@ async function injectAll(force = false) {
         antecedentes_familiares: antecedentesFamField.value || _ph1?.antecedentes_familiares || null,
         diagnostico: diagnosticoField.value || _ph1?.diagnostico || null,
         conduta: _dilatacao ? null : (condutaField.value || null),
-        tratamento: _dilatacao ? null : _tratReal(medicamentosPrescritosField.value)
+        tratamento: _trat(medicamentosPrescritosField.value)
       };
     }
   }
@@ -615,7 +637,13 @@ async function injectAll(force = false) {
     // possa re-injetá-los caso o SHOSP descarte campos não salvos durante o período.
     // Em injeções normais (sem dilatação), limpar o dado persistido se existir.
     if (combinedData.audio && audioData?.dilatacaoDetectada) {
-      chrome.storage.local.set({ _shospDilatacaoPhase1: { audio: combinedData.audio, ts: Date.now() } });
+      // Preservar a transcrição da fase 1 já persistida pelo sidepanel-audio
+      // (acumula fases anteriores); fallback para o texto da sessão atual.
+      chrome.storage.local.set({ _shospDilatacaoPhase1: {
+        audio: combinedData.audio,
+        transcript: _phase1Data?.transcript || recognizedText || '',
+        ts: Date.now(),
+      } });
       console.log('[InjectAll] Dados da fase 1 (dilatação) salvos para re-injeção pós-dilatação.');
     } else {
       chrome.storage.local.remove('_shospDilatacaoPhase1');
@@ -755,6 +783,7 @@ function clearAll(options = { clearAudio: true, clearCamera: true }) {
       lastTriggerTime = 0;
       if (stopCommandTimeout) { clearTimeout(stopCommandTimeout); stopCommandTimeout = null; }
       stopPendingInfo = null;
+      stopGateOffset = 0;
       recognizedText = '';
     }
 
@@ -832,6 +861,13 @@ function clearAll(options = { clearAudio: true, clearCamera: true }) {
     // Privacidade: remover dados de raciocínio da IA do storage local
     if (clearAudio) {
       chrome.storage.local.remove(['lastGeminiReasoning', 'lastGeminiDate']);
+    }
+
+    // Limpeza manual (novo paciente): descartar fase 1 de dilatação persistida,
+    // para que a entrevista de um paciente não contamine a análise do próximo.
+    // O clearAll automático pós-injeção NÃO passa esta opção — preserva a fase 1.
+    if (options.discardDilatacao === true) {
+      chrome.storage.local.remove('_shospDilatacaoPhase1');
     }
 
     console.log('[ClearAll] Limpeza concluída', options);

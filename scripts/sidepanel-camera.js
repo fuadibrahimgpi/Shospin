@@ -8,177 +8,25 @@
  */
 
 // ============================================================================
-// VALIDAÇÃO CLÍNICA — OD/OE
+// VALIDAÇÃO BINÁRIA — APENAS REPASSA O RESULTADO DO GeminiService
 // ============================================================================
-
+//
+// v5.2 (REESCRITA): a validação clínica corretiva (negação de cilindro positivo,
+// anulação de par CIL/EIXO incompleto, cross-check inter-olhos, etc.) agora
+// vive em GeminiExamAgent._postProcessRefraction — determinístico e testável.
+//
+// Esta função é um passthrough fino: se o serviço sinalizou falha, propaga;
+// caso contrário devolve os dados como estão.
 function validateAndFixEyeSwap(data) {
   if (!data) return data;
-
-  let hasSuspiciousData = false;
-  const warnings = [];
-
-  // --- Sanitização de domínio ---
+  // Tratar strings residuais como null (defensivo — _postProcessRefraction já
+  // emite null nesses casos, mas mantemos por segurança)
   if (data.refracao) {
-    ['od', 'oe'].forEach(olho => {
-      const d = data.refracao[olho];
-      if (!d || typeof d !== 'object') return;
-
-      // Cilindro positivo → TOPCON usa sempre convenção negativa.
-      // Positivo = sinal de menos perdido na leitura; negamos o valor (não descartamos).
-      if (d.cil !== null && d.cil !== undefined) {
-        const cilNum = parseFloat(d.cil);
-        if (!isNaN(cilNum) && cilNum > 0) {
-          warnings.push(`${olho.toUpperCase()}: CIL positivo convertido para negativo (${cilNum} → ${-cilNum})`);
-          d.cil = -cilNum;
-        }
-      }
-
-      // Par CIL/EIXO incompleto
-      const temCil = d.cil !== null && d.cil !== undefined;
-      const temEixo = d.eixo !== null && d.eixo !== undefined;
-      if (temCil && !temEixo) {
-        warnings.push(`${olho.toUpperCase()}: CIL sem EIXO — par anulado`);
-        d.cil = null;
-        hasSuspiciousData = true;
-      } else if (!temCil && temEixo) {
-        warnings.push(`${olho.toUpperCase()}: EIXO sem CIL — par anulado`);
-        d.eixo = null;
-        hasSuspiciousData = true;
-      }
-
-      // Eixo fora de 1–180 (TOPCON nunca imprime eixo=0 ou negativo)
-      if (d.eixo != null) {
-        const eixo = parseInt(d.eixo);
-        if (isNaN(eixo) || eixo < 1 || eixo > 180) {
-          warnings.push(`${olho.toUpperCase()}: Eixo ${d.eixo} inválido — CIL e EIXO anulados`);
-          d.eixo = null;
-          d.cil  = null; // CIL sem eixo válido é injetável mas clinicamente incorreto
-          hasSuspiciousData = true;
-        } else {
-          d.eixo = eixo; // manter como número; parseRefEixo em content.js faz o arredondamento
-        }
-      }
-    });
-  }
-
-  // --- Validação de Equivalente Esférico (S.E.) ---
-  if (data.refracao) {
-    ['od', 'oe'].forEach(olho => {
-      const d = data.refracao[olho];
-      if (!d || typeof d !== 'object') return;
-      if (d.se == null || d.esf == null) return;
-
-      const esf = d.esf === 'plano' ? 0 : parseFloat(d.esf);
-      const cil = d.cil != null ? parseFloat(d.cil) : 0;
-      const seReportado = parseFloat(d.se);
-      if (isNaN(esf) || isNaN(seReportado)) return;
-
-      const seCalculado = esf + (cil / 2);
-      const diff = Math.abs(seReportado - seCalculado);
-
-      if (diff > 0.51) {
-        // SE inconsistente com ESF+CIL → descartar SE (campo derivado, mais sujeito a alucinação).
-        // NUNCA nulificar CIL/EIXO por causa de SE — ESF/CIL são medições primárias do TOPCON.
-        // Em SINGLE-PASS, o SE é frequentemente inventado com sinal trocado ou valor absurdo.
-        warnings.push(`${olho.toUpperCase()}: SE ${seReportado} inconsistente com ESF+CIL (calc=${seCalculado.toFixed(2)}) — SE descartado`);
-        d.se = null;
-      }
-    });
-  }
-
-  // --- Validação de refração: valores absurdos, idênticos, próximos ---
-  if (data.refracao) {
-    // Tratar strings como null
     if (typeof data.refracao.od === 'string') data.refracao.od = null;
     if (typeof data.refracao.oe === 'string') data.refracao.oe = null;
-
-    const od = data.refracao.od;
-    const oe = data.refracao.oe;
-
-    // Sanity check: valores absurdos
-    const checkAbsurd = (eye, name) => {
-      if (!eye || typeof eye !== 'object') return false;
-      const cil = eye.cil ? parseFloat(eye.cil) : 0;
-      const esf = eye.esf === 'plano' ? 0 : parseFloat(eye.esf);
-      if (Math.abs(cil) > 7.00 || Math.abs(esf) > 20.00) {
-        warnings.push(`${name} DESCARTADO: Valores absurdos detectados`);
-        return true;
-      }
-      return false;
-    };
-
-    if (checkAbsurd(od, 'OD')) { data.refracao.od = null; hasSuspiciousData = true; }
-    if (checkAbsurd(oe, 'OE')) { data.refracao.oe = null; hasSuspiciousData = true; }
-
-    // Comparação OD vs OE (se ambos ainda existem)
-    if (data.refracao.od && data.refracao.oe &&
-        typeof data.refracao.od === 'object' && typeof data.refracao.oe === 'object') {
-
-      const odR = data.refracao.od;
-      const oeR = data.refracao.oe;
-      const areIdentical = odR.esf === oeR.esf && odR.cil === oeR.cil && odR.eixo === oeR.eixo;
-      const isSimple = !odR.cil && !oeR.cil;
-
-      if (areIdentical && !isSimple) {
-        // Verificar linhas brutas do OCR
-        if (data.debug_leitura?.linha_od_texto && data.debug_leitura?.linha_oe_texto) {
-          const norm = (t) => (t || '').replace(/<[RL]>/gi, '').replace(/\b(OD|OE|R|L|RE|LE|RIGHT|LEFT)\b/gi, '').replace(/[\s.\-:]+/g, '').toLowerCase();
-          if (norm(data.debug_leitura.linha_od_texto) === norm(data.debug_leitura.linha_oe_texto)) {
-            warnings.push('OD e OE com texto raw idêntico — provável cópia da IA');
-            data._blockAutoInject = true;
-          } else {
-            warnings.push('OD e OE idênticos, mas linhas brutas distintas — astigmatismo simétrico confirmado');
-          }
-        } else {
-          const geminiSinalizou = data.refracao.oe?._copiaOD === true || data._aviso_inversao === true;
-          if (geminiSinalizou) {
-            warnings.push('Gemini sinalizou incerteza na leitura. Injeção bloqueada.');
-          } else {
-            warnings.push('OD e OE idênticos — sem linhas brutas para confirmar');
-          }
-          data._blockAutoInject = true;
-        }
-        hasSuspiciousData = true;
-      }
-
-      // Nível 2: valores muito parecidos
-      if (!areIdentical && odR.cil && oeR.cil && odR.eixo && oeR.eixo) {
-        const diffEsf = (odR.esf && oeR.esf)
-          ? Math.abs((odR.esf === 'plano' ? 0 : parseFloat(odR.esf)) - (oeR.esf === 'plano' ? 0 : parseFloat(oeR.esf)))
-          : 99;
-        const diffCil = Math.abs(parseFloat(odR.cil) - parseFloat(oeR.cil));
-        const diffEixo = Math.abs(parseInt(odR.eixo) - parseInt(oeR.eixo));
-        if (diffEsf <= 0.25 && diffCil <= 0.25 && diffEixo <= 15) {
-          warnings.push('OD e OE com refrações muito parecidas — verifique astigmatismo simétrico');
-        }
-      }
-    }
   }
-
-  if (hasSuspiciousData) {
-    data._validationWarnings = warnings;
-    data._hasSuspiciousData = true;
-  }
-
-  // --- Validação de paquimetria: faixa clínica 420–650 µm ---
-  if (data.paquimetria) {
-    ['od', 'oe'].forEach(olho => {
-      const val = data.paquimetria[olho];
-      if (val != null) {
-        const num = typeof val === 'string' ? parseFloat(val) : val;
-        if (!isNaN(num) && (num < 420 || num > 650)) {
-          warnings.push(`${olho.toUpperCase()}: Paquimetria ${num}µm fora da faixa válida (420–650) — descartada`);
-          data.paquimetria[olho] = null;
-          data._hasSuspiciousData = true;
-        }
-      }
-    });
-  }
-
-  if (data._hasSuspiciousData) {
-    data._validationWarnings = warnings;
-  }
-
+  // _captureFailed do serviço novo é o único sinal de bloqueio
+  if (data._captureFailed) data._blockAutoInject = true;
   return data;
 }
 
@@ -219,6 +67,11 @@ function openCameraPermissionPage() {
 // ============================================================================
 
 async function startCameraCapture() {
+  // Pausar reconhecimento de voz se gravação estiver ativa
+  if (isRecording && typeof pauseSpeechRecognition === 'function') {
+    pauseSpeechRecognition();
+  }
+
   try {
     cameraStatusText.textContent = 'Iniciando câmera...';
     cameraOverlay.classList.remove('hidden');
@@ -291,13 +144,18 @@ function stopCameraCapture() {
 
   cameraStatusText.textContent = 'Clique para iniciar câmera';
   cameraStatusText.style.color = '';
+
+  // Retomar reconhecimento de voz se foi pausado pela câmera
+  if (isRecording && isSpeechPausedByCamera && typeof resumeSpeechRecognition === 'function') {
+    resumeSpeechRecognition();
+  }
 }
 
 // ============================================================================
 // COMPRESSÃO DE IMAGEM
 // ============================================================================
 
-async function compressImageBlob(blob, maxDim = 2048, quality = 0.88) {
+async function compressImageBlob(blob, maxDim = 3840, quality = 0.98) {
   return new Promise((resolve, reject) => {
     const img = new Image();
     img.onload = () => {
@@ -399,7 +257,7 @@ async function captureAndProcess() {
 
     const NUM_CAPTURES = 3;
     const CAPTURE_DELAY = 200;  // +50ms entre capturas para estabilidade de foco
-    const MAX_IMAGE_DIM = 2048; // resolução alta para dígitos de ticket térmico legíveis
+    const MAX_IMAGE_DIM = 3840; // resolução altíssima para dígitos de ticket térmico legíveis (300dpi eq)
     const images = [];
 
     await new Promise(r => setTimeout(r, 1000)); // aguardar foco (era 800ms)
@@ -437,39 +295,35 @@ async function captureAndProcess() {
 
     updateProcessingStep(3);
 
-    // Enviar para Gemini
-    const examData = await window.GeminiService.extractExamsTwoPass(images, (phase) => {
-      if (phase === 'pass2') updateProcessingStep(4);
-    });
+    // Enviar para Gemini (v5.2: single-call, sem TWO-PASS)
+    updateProcessingStep(4);
+    const examData = await window.GeminiService.extractExams(images);
 
     updateProcessingStep(5);
 
-    // Validar
+    // Passthrough de validação (defensivo)
     const validated = validateAndFixEyeSwap(examData);
 
-    if (examData._aviso_inversao === true) {
-      validated._blockAutoInject = true;
-      validated._validationWarnings = validated._validationWarnings || [];
-      validated._validationWarnings.push('A IA sinalizou possível inversão OD/OE — verifique com o ticket físico.');
-    }
-
     updateProcessingStep(6);
-    displayCameraResults(validated);
-    cameraStatusText.textContent = 'Processamento concluído!';
 
     // Desligar câmera após processamento
     stopProcessingTimer();
     stopCameraCapture();
     processingOverlay.classList.add('hidden');
 
-    // Auto-injeção: câmera injeta SOMENTE seus próprios dados.
-    // Nunca inclui audioData — o áudio tem seu próprio ciclo (termina com stopRecording).
-    // Misturar os dois causaria clearAll no audioData durante gravação ativa.
-    if (validated._blockAutoInject) {
-      // Injeção SUSPENSA — o banner gerencia (botões Confirmar / Inverter / Limpar).
-      // NÃO chamar injectAll() aqui: causaria dupla injeção quando o usuário confirmasse.
-      showRefractionSuspectWarning(validated._validationWarnings || [], validated);
-    } else if (cameraData) {
+    // Caminho 1: captura falhou (duplicação detectada, valores absurdos, erro de API)
+    //            → mostrar mensagem "Refazer captura" e parar.
+    if (validated._captureFailed) {
+      showCaptureFailedMessage(validated._reason || 'Captura inválida. Refaça a foto.');
+      cameraStatusText.textContent = 'Captura falhou — refaça';
+      return;
+    }
+
+    // Caminho 2: captura OK → mostrar dados e auto-injetar
+    displayCameraResults(validated);
+    cameraStatusText.textContent = 'Processamento concluído!';
+
+    if (cameraData) {
       try { await injectAll(); } catch (e) { console.error('[Camera] Erro na auto-injeção:', e); }
     }
 
@@ -557,49 +411,31 @@ function formatCil(value) {
 }
 
 // ============================================================================
-// AVISO DE REFRAÇÃO SUSPEITA
+// MENSAGEM DE FALHA DE CAPTURA
 // ============================================================================
+//
+// v5.2 (REESCRITA): banner com 3 botões (Confirmar / Inverter / Limpar) foi
+// removido. Quando a captura falha (duplicação, dados absurdos, alucinação
+// detectada), mostramos apenas um aviso claro e um botão "Refazer captura".
+// Sem opções de "swap" ou "limpar OE" — a única ação confiável é nova foto.
 
-function showRefractionSuspectWarning(warnings, data) {
+function showCaptureFailedMessage(reason) {
   const existing = document.getElementById('refractionWarningBanner');
   if (existing) existing.remove();
-
-  pendingRefractionConfirmation = true;
-
-  const warningLines = (warnings || []).map(w => `<li style="margin:2px 0">${w}</li>`).join('');
-
-  let rawLinesHtml = '';
-  if (data.debug_leitura) {
-    rawLinesHtml = `
-      <div style="margin-top:8px;padding:6px 8px;background:#1a1a1a;border-radius:4px;font-family:monospace;font-size:11px;color:#e2e8f0">
-        <div><span style="color:#94a3b8">OD lido: </span>${data.debug_leitura.linha_od_texto || '—'}</div>
-        <div><span style="color:#94a3b8">OE lido: </span>${data.debug_leitura.linha_oe_texto || '—'}</div>
-      </div>`;
-  }
-
-  let inversaoHtml = '';
-  if (data._raciocinio_inversao) {
-    inversaoHtml = `
-      <div style="margin-top:8px;padding:6px 8px;background:#1c1917;border-radius:4px;font-size:11px;color:#d4d4d4">
-        <div style="color:#94a3b8;margin-bottom:2px">Como a IA identificou OD/OE:</div>
-        <div style="font-style:italic">${data._raciocinio_inversao}</div>
-      </div>`;
-  }
 
   const banner = document.createElement('div');
   banner.id = 'refractionWarningBanner';
   banner.innerHTML = `
     <div style="background:#7c2d12;border:1px solid #dc2626;border-radius:8px;padding:12px 14px;margin:10px 0;color:#fef2f2">
-      <div style="font-weight:700;font-size:13px;margin-bottom:6px">Refração suspeita — injeção pausada</div>
-      <ul style="margin:0;padding-left:16px;font-size:11px;opacity:0.9">${warningLines}</ul>
-      ${rawLinesHtml}
-      ${inversaoHtml}
-      <div style="margin-top:8px;font-size:11px;opacity:0.8">Compare os valores acima com o ticket físico antes de decidir.</div>
-      <div style="display:flex;gap:6px;margin-top:10px;flex-wrap:wrap">
-        <button id="confirmRefractionBtn" style="flex:1;min-width:90px;background:#166534;color:#fff;border:none;border-radius:6px;padding:7px 6px;font-size:12px;font-weight:600;cursor:pointer">Corretos — injetar</button>
-        <button id="swapRefractionBtn" style="flex:1;min-width:90px;background:#92400e;color:#fff;border:none;border-radius:6px;padding:7px 6px;font-size:12px;font-weight:600;cursor:pointer">Inverter OD↔OE e injetar</button>
-        <button id="clearRefractionBtn" style="flex:1;min-width:90px;background:#7f1d1d;color:#fff;border:none;border-radius:6px;padding:7px 6px;font-size:12px;font-weight:600;cursor:pointer">Limpar refração e injetar</button>
+      <div style="font-weight:700;font-size:13px;margin-bottom:6px">Captura inválida</div>
+      <div style="font-size:12px;opacity:0.95;margin-bottom:8px">${reason}</div>
+      <div style="font-size:11px;opacity:0.75;margin-bottom:10px">
+        Dicas: aproxime a câmera até o ticket ocupar ~70% do enquadramento,
+        evite reflexos no papel térmico e verifique se o ticket está plano.
       </div>
+      <button id="retryCaptureBtn" style="width:100%;background:#1d4ed8;color:#fff;border:none;border-radius:6px;padding:8px;font-size:13px;font-weight:600;cursor:pointer">
+        Refazer captura
+      </button>
     </div>`;
 
   const container = document.getElementById('examFieldsContainer');
@@ -609,40 +445,11 @@ function showRefractionSuspectWarning(warnings, data) {
     document.body.appendChild(banner);
   }
 
-  document.getElementById('confirmRefractionBtn').addEventListener('click', async () => {
-    pendingRefractionConfirmation = false;
+  document.getElementById('retryCaptureBtn').addEventListener('click', () => {
     banner.remove();
-    try { await injectAll(); } catch (e) { console.error('[Refraction] Erro:', e); }
-  });
-
-  document.getElementById('swapRefractionBtn').addEventListener('click', async () => {
-    pendingRefractionConfirmation = false;
-    banner.remove();
-    // Troca OD↔OE nos dados e nos campos do sidepanel
-    if (cameraData?.refracao) {
-      const tmp = cameraData.refracao.od;
-      cameraData.refracao.od = cameraData.refracao.oe;
-      cameraData.refracao.oe = tmp;
-      // Atualizar campos visuais
-      document.getElementById('refOdEsf').value = formatEsf(cameraData.refracao.od?.esf);
-      document.getElementById('refOdCil').value = formatCil(cameraData.refracao.od?.cil);
-      document.getElementById('refOdEixo').value = cameraData.refracao.od?.eixo != null ? cameraData.refracao.od.eixo + '°' : '';
-      document.getElementById('refOeEsf').value = formatEsf(cameraData.refracao.oe?.esf);
-      document.getElementById('refOeCil').value = formatCil(cameraData.refracao.oe?.cil);
-      document.getElementById('refOeEixo').value = cameraData.refracao.oe?.eixo != null ? cameraData.refracao.oe.eixo + '°' : '';
+    // Reativar fluxo de câmera para nova captura
+    if (typeof startCameraCapture === 'function') {
+      startCameraCapture();
     }
-    try { await injectAll(); } catch (e) { console.error('[Refraction] Erro inverso:', e); }
-  });
-
-  document.getElementById('clearRefractionBtn').addEventListener('click', async () => {
-    pendingRefractionConfirmation = false;
-    banner.remove();
-    ['refOdEsf', 'refOdCil', 'refOdEixo', 'refOeEsf', 'refOeCil', 'refOeEixo'].forEach(id => {
-      const el = document.getElementById(id);
-      if (el) el.value = '';
-    });
-    if (cameraData?.refracao) { cameraData.refracao.od = null; cameraData.refracao.oe = null; }
-    if (cameraData) cameraData.injectReceita = false;
-    try { await injectAll(); } catch (e) { console.error('[Refraction] Erro:', e); }
   });
 }

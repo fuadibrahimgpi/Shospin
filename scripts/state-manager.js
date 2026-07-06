@@ -28,8 +28,10 @@ const _FLAG_MAP = {
   catarataGrau:              () => catarataGrau,
   lioDetectada:              () => lioDetectada,
   opacidadeCapsulaDetectada: () => opacidadeCapsulaDetectada,
+  lenteLimpaDetectada:       () => lenteLimpaDetectada,
   dilatacaoDetectada:        () => dilatacaoDetectada,
   fundoscopiaDetectada:      () => fundoscopiaDetectada,
+  consultaEncerradaDetectada: () => consultaEncerradaDetectada,
 };
 
 // Setters separados porque JS não permite `eval` em strict mode sem wrapper.
@@ -42,8 +44,10 @@ const _FLAG_SETTERS = {
   catarataGrau:                v => { catarataGrau = v; },
   lioDetectada:                v => { lioDetectada = v; },
   opacidadeCapsulaDetectada:   v => { opacidadeCapsulaDetectada = v; },
+  lenteLimpaDetectada:         v => { lenteLimpaDetectada = v; },
   dilatacaoDetectada:          v => { dilatacaoDetectada = v; },
   fundoscopiaDetectada:        v => { fundoscopiaDetectada = v; },
+  consultaEncerradaDetectada:  v => { consultaEncerradaDetectada = v; },
 };
 
 const StateManager = {
@@ -52,17 +56,16 @@ const StateManager = {
    * Não toca em permissionChecked, mediaRecorder, streams ou dados já injetados.
    */
   resetSession() {
-    // Flags de hooks
-    examesNormaisInjetados    = false;
-    blefariteInjetada         = false;
-    receitaOlhoIrritadoInjetada = false;
-    catarataDetectada         = false;
-    catarataGrau              = null;
-    lioDetectada              = false;
-    opacidadeCapsulaDetectada = false;
-    dilatacaoDetectada        = false;
-    fundoscopiaDetectada      = false;
-    consultaEncerradaDetectada = false; // CRÍTICO: permite STOP nas consultas seguintes da mesma sessão
+    // Flags de hooks — dirigido por SESSION_FLAG_DEFAULTS (sidepanel-constants.js).
+    // CRÍTICO: consultaEncerradaDetectada precisa voltar a false para permitir
+    // STOP nas consultas seguintes; lenteLimpaDetectada precisa voltar a false
+    // para não bloquear o hook de opacidade de cápsula no próximo paciente.
+    // Falha alto se uma flag nova no registro canônico não tiver setter aqui.
+    for (const [name, defaultValue] of Object.entries(SESSION_FLAG_DEFAULTS)) {
+      const setter = _FLAG_SETTERS[name];
+      if (!setter) throw new Error(`StateManager.resetSession: flag '${name}' sem setter em _FLAG_SETTERS`);
+      setter(defaultValue);
+    }
 
     // Transcript e buffer de voz
     recognizedText   = '';
@@ -81,9 +84,20 @@ const StateManager = {
     // Cooldown e debounce de parada
     lastTriggerTime = 0;
     if (stopCommandTimeout) { clearTimeout(stopCommandTimeout); stopCommandTimeout = null; }
+    stopPendingInfo = null;
+    stopGateOffset = 0;
 
     // Contador de erros no-speech
     noSpeechCount = 0;
+    isSpeechBackingOff = false;
+
+    // Timer de auto-recuperação do Speech (pode ter ficado pendente da sessão anterior)
+    if (speechRecoveryTimer) { clearTimeout(speechRecoveryTimer); speechRecoveryTimer = null; }
+
+    // Auto-stop por silêncio — cancelar timers da sessão anterior
+    lastSpeechTime = 0;
+    if (silenceCheckInterval) { clearInterval(silenceCheckInterval); silenceCheckInterval = null; }
+    if (silencePendingStop) { clearTimeout(silencePendingStop); silencePendingStop = null; }
   },
 
   /** Delega ao snapshot serializável do __shospState bridge. */

@@ -15,40 +15,25 @@
 // ============================================================================
 // ESTADO COMPARTILHADO — referência única lida e escrita pelos hooks
 // ============================================================================
-// Os hooks recebem este objeto por referência — mutações são refletidas
-// nas flags globais via getters/setters, sem quebrar compatibilidade com o
-// código existente que lê as variáveis diretamente (ex: fundoscopiaDetectada).
+// Os hooks recebem este objeto por referência — mutações são refletidas em
+// SessionFlags. Os acessores das flags são GERADOS do registro canônico
+// SESSION_FLAG_DEFAULTS (flag nova entra aqui automaticamente).
 
-const HOOK_STATE = {
-  get catarataDetectada()        { return catarataDetectada; },
-  set catarataDetectada(v)       { catarataDetectada = v; },
-  get catarataGrau()             { return catarataGrau; },
-  set catarataGrau(v)            { catarataGrau = v; },
-  get lioDetectada()             { return lioDetectada; },
-  set lioDetectada(v)            { lioDetectada = v; },
-  get opacidadeCapsulaDetectada(){ return opacidadeCapsulaDetectada; },
-  set opacidadeCapsulaDetectada(v){ opacidadeCapsulaDetectada = v; },
-  get lenteLimpaDetectada()      { return lenteLimpaDetectada; },
-  set lenteLimpaDetectada(v)     { lenteLimpaDetectada = v; },
-  get examesNormaisInjetados()   { return examesNormaisInjetados; },
-  set examesNormaisInjetados(v)  { examesNormaisInjetados = v; },
-  get blefariteInjetada()        { return blefariteInjetada; },
-  set blefariteInjetada(v)       { blefariteInjetada = v; },
-  get fundoscopiaDetectada()     { return fundoscopiaDetectada; },
-  set fundoscopiaDetectada(v)    { fundoscopiaDetectada = v; },
-  get receitaOlhoIrritadoInjetada(){ return receitaOlhoIrritadoInjetada; },
-  set receitaOlhoIrritadoInjetada(v){ receitaOlhoIrritadoInjetada = v; },
-  get dilatacaoDetectada()       { return dilatacaoDetectada; },
-  set dilatacaoDetectada(v)      { dilatacaoDetectada = v; },
-  get consultaEncerradaDetectada(){ return consultaEncerradaDetectada; },
-  set consultaEncerradaDetectada(v){ consultaEncerradaDetectada = v; },
-  get despedidaNaSessao()        { return despedidaNaSessao; },
-  set despedidaNaSessao(v)       { despedidaNaSessao = v; },
-  get fase2DilatacaoAtiva()      { return fase2DilatacaoAtiva; },
-  set fase2DilatacaoAtiva(v)     { fase2DilatacaoAtiva = v; },
-  get lastTriggerTime()          { return lastTriggerTime; },
-  set lastTriggerTime(v)         { lastTriggerTime = v; },
-};
+const HOOK_STATE = {};
+for (const _flagName of Object.keys(SESSION_FLAG_DEFAULTS)) {
+  Object.defineProperty(HOOK_STATE, _flagName, {
+    get: () => SessionFlags[_flagName],
+    set: (v) => { SessionFlags[_flagName] = v; },
+    enumerable: true,
+  });
+}
+// lastTriggerTime (cooldown unificado) não é flag de sessão — ponte manual
+// para a variável em sidepanel-constants.js.
+Object.defineProperty(HOOK_STATE, 'lastTriggerTime', {
+  get: () => lastTriggerTime,
+  set: (v) => { lastTriggerTime = v; },
+  enumerable: true,
+});
 
 // ============================================================================
 // HOOKS REGISTRADOS

@@ -61,41 +61,29 @@ let cameraStream = null;
 let captureInterval = null;
 let captureTimeout = null;
 
-// Flags de detecção de gatilhos (resetadas a cada gravação)
-let examesNormaisInjetados = false;
-let blefariteInjetada = false;
-let receitaOlhoIrritadoInjetada = false;
-let catarataDetectada = false;
-let catarataGrau = null; // "inicial" | "incipiente" | "moderada" | "avançada" | null
-let lioDetectada = false;
-let opacidadeCapsulaDetectada = false;
-let lenteLimpaDetectada = false;
-let dilatacaoDetectada = false;
-let fundoscopiaDetectada = false;
-let consultaEncerradaDetectada = false;
-// Sticky: uma despedida/encerramento já foi DETECTADA nesta sessão (mesmo que
-// bloqueada pelo gate ou cancelada). Diferente de consultaEncerradaDetectada,
-// NÃO é limpa no cancelamento — persiste até o resetSession. Usada para suprimir
-// a dilatação depois que o médico já sinalizou fim de consulta (evita hijack de
-// consulta encerrada quando o "vamos dilatar" se refere a outra pessoa).
-let despedidaNaSessao = false;
-// Fase 2 de dilatação: havia uma pausa de dilatação persistida
-// (_shospDilatacaoPhase1) quando esta gravação começou — ou seja, esta sessão
-// é o RETORNO do paciente. Suprime o hook de dilatação por voz: frases
-// retrospectivas inevitáveis no retorno ("já dilatou", "pinguei o colírio
-// para dilatar a pupila") re-disparavam a pausa e a consulta nunca fechava.
-// Setada em startRecording() a partir do storage (exceto motivo='exame');
-// os fallbacks pós-parada passam a varrer só a cauda do texto nesta fase.
-let fase2DilatacaoAtiva = false;
-
 // ============================================================================
-// REGISTRO CANÔNICO DAS FLAGS DE SESSÃO
+// REGISTRO CANÔNICO DAS FLAGS DE SESSÃO (resetadas a cada gravação)
 // ============================================================================
 // Fonte única da verdade sobre QUAIS flags de detecção existem e seus valores
-// iniciais. Toda camada de acesso (StateManager, HOOK_STATE, __shospState)
-// deve cobrir exatamente estas chaves — os testes [FLAGS-*] em
-// utils/hooks-test.js falham se uma flag nova for adicionada aqui sem ser
-// registrada nas demais camadas (ou vice-versa).
+// iniciais. As camadas de acesso (SessionFlags, StateManager, HOOK_STATE,
+// __shospState e o _BRIDGE dos testes) são GERADAS a partir destas chaves —
+// para adicionar uma flag nova, basta registrá-la aqui.
+//
+// Notas por flag:
+//   catarataGrau — "inicial" | "incipiente" | "moderada" | "avançada" | null
+//   despedidaNaSessao — sticky: uma despedida/encerramento já foi DETECTADA
+//     nesta sessão (mesmo que bloqueada pelo gate ou cancelada). Diferente de
+//     consultaEncerradaDetectada, NÃO é limpa no cancelamento — persiste até o
+//     resetSession. Usada para suprimir a dilatação depois que o médico já
+//     sinalizou fim de consulta (evita hijack de consulta encerrada quando o
+//     "vamos dilatar" se refere a outra pessoa).
+//   fase2DilatacaoAtiva — havia uma pausa de dilatação persistida
+//     (_shospDilatacaoPhase1) quando esta gravação começou — ou seja, esta
+//     sessão é o RETORNO do paciente. Suprime o hook de dilatação por voz:
+//     frases retrospectivas inevitáveis no retorno ("já dilatou", "pinguei o
+//     colírio para dilatar a pupila") re-disparavam a pausa e a consulta nunca
+//     fechava. Setada em startRecording() a partir do storage (exceto
+//     motivo='exame'); os fallbacks pós-parada varrem só a cauda nesta fase.
 const SESSION_FLAG_DEFAULTS = Object.freeze({
   examesNormaisInjetados: false,
   blefariteInjetada: false,
@@ -111,6 +99,23 @@ const SESSION_FLAG_DEFAULTS = Object.freeze({
   despedidaNaSessao: false,
   fase2DilatacaoAtiva: false,
 });
+
+// Armazenamento ÚNICO das flags de sessão. Sealed: escrever numa chave fora do
+// registro falha (em vez de criar propriedade nova silenciosamente).
+const SessionFlags = Object.seal({ ...SESSION_FLAG_DEFAULTS });
+
+// COMPATIBILIDADE (transitória — remover ao fim da migração da fase 1):
+// os módulos consumidores ainda referenciam as flags como identificadores
+// globais soltos (ex.: `dilatacaoDetectada = true`). Estes acessores no objeto
+// global delegam para SessionFlags até que todos os call sites usem
+// SessionFlags.<flag> explicitamente.
+for (const _flagName of Object.keys(SESSION_FLAG_DEFAULTS)) {
+  Object.defineProperty(globalThis, _flagName, {
+    get: () => SessionFlags[_flagName],
+    set: (v) => { SessionFlags[_flagName] = v; },
+    configurable: true,
+  });
+}
 
 // Cooldown unificado e debounce de parada
 let lastTriggerTime = 0;
@@ -154,7 +159,7 @@ let recentTextTimeout = null;
 //     interna por StateManager não quebra a API.
 // As variáveis continuam sendo a fonte da verdade — este bridge não as
 // substitui nem altera comportamento clínico.
-window.__shospState = Object.freeze({
+const _stateBridge = {
   get currentMode()                  { return currentMode; },
   get isRecording()                  { return isRecording; },
   get permissionChecked()            { return permissionChecked; },
@@ -168,27 +173,14 @@ window.__shospState = Object.freeze({
   get noSpeechCount()                { return noSpeechCount; },
   get isSpeechPausedByCamera()       { return isSpeechPausedByCamera; },
   get isSpeechActive()               { return isSpeechActive; },
-  get examesNormaisInjetados()       { return examesNormaisInjetados; },
-  get blefariteInjetada()            { return blefariteInjetada; },
-  get receitaOlhoIrritadoInjetada()  { return receitaOlhoIrritadoInjetada; },
-  get catarataDetectada()            { return catarataDetectada; },
-  get catarataGrau()                 { return catarataGrau; },
-  get lioDetectada()                 { return lioDetectada; },
-  get opacidadeCapsulaDetectada()    { return opacidadeCapsulaDetectada; },
-  get lenteLimpaDetectada()          { return lenteLimpaDetectada; },
-  get dilatacaoDetectada()           { return dilatacaoDetectada; },
-  get fundoscopiaDetectada()         { return fundoscopiaDetectada; },
-  get consultaEncerradaDetectada()   { return consultaEncerradaDetectada; },
-  get despedidaNaSessao()            { return despedidaNaSessao; },
-  get fase2DilatacaoAtiva()          { return fase2DilatacaoAtiva; },
   get lastTriggerTime()              { return lastTriggerTime; },
   get hasStopScheduled()             { return stopCommandTimeout !== null; },
   get stopGateOffset()               { return stopGateOffset; },
   get stopGateBlockCount()           { return stopGateBlockCount; },
   get recentTextBufferLength()       { return recentTextBuffer.length; },
   // Snapshot serializável para logs (sem referências a timers ou DOM).
-  // As flags são derivadas de SESSION_FLAG_DEFAULTS via os getters acima —
-  // uma flag nova sem getter apareceria como undefined (pego pelos testes).
+  // As flags são geradas de SESSION_FLAG_DEFAULTS (loop abaixo) — cobertura
+  // garantida por construção e verificada pelos testes [FLAGS-*].
   snapshot() {
     const flags = {};
     for (const name of Object.keys(SESSION_FLAG_DEFAULTS)) flags[name] = this[name];
@@ -203,7 +195,15 @@ window.__shospState = Object.freeze({
       recognizedTextLength: recognizedText.length,
     };
   },
-});
+};
+// Getters das flags de sessão — gerados do registro canônico.
+for (const _flagName of Object.keys(SESSION_FLAG_DEFAULTS)) {
+  Object.defineProperty(_stateBridge, _flagName, {
+    get: () => SessionFlags[_flagName],
+    enumerable: true,
+  });
+}
+window.__shospState = Object.freeze(_stateBridge);
 
 // Arrays de gatilhos clínicos definidos em config/clinical-triggers.js
 // normalizeText() também em config/clinical-triggers.js
@@ -262,14 +262,14 @@ const MAX_TIME = 15000;
  * Prioridade: opacidade cápsula > LIO > catarata > padrão (cristalino transparente)
  */
 function getBiomicroscopiaComLente(baseText) {
-  if (opacidadeCapsulaDetectada) return baseText.replaceAll('cristalino transparente', LENTE_OPACIDADE_CAPSULA);
+  if (SessionFlags.opacidadeCapsulaDetectada) return baseText.replaceAll('cristalino transparente', LENTE_OPACIDADE_CAPSULA);
   // LIO tem prioridade sobre catarata: pseudofacia confirmada significa que o cristalino
   // natural já foi removido — não pode haver catarata nesse olho. Se ambas as flags
   // dispararam, a menção de catarata é histórica ("antes da cirurgia tinha catarata") e a
   // LIO (LIO_COMMANDS já não cobre cirurgia futura) é o achado definitivo. Ver Caso 7.
-  if (lioDetectada) return baseText.replaceAll('cristalino transparente', LENTE_LIO);
-  if (catarataDetectada) {
-    const lente = catarataGrau ? `catarata ${catarataGrau}` : LENTE_CATARATA;
+  if (SessionFlags.lioDetectada) return baseText.replaceAll('cristalino transparente', LENTE_LIO);
+  if (SessionFlags.catarataDetectada) {
+    const lente = SessionFlags.catarataGrau ? `catarata ${SessionFlags.catarataGrau}` : LENTE_CATARATA;
     return baseText.replaceAll('cristalino transparente', lente);
   }
   return baseText;

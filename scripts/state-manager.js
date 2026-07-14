@@ -1,9 +1,9 @@
 /**
  * STATE MANAGER v6 — API limpa sobre as variáveis de sessão
  * ============================================================================
- * Carregado APÓS sidepanel-constants.js (que define as let vars).
- * As let vars continuam sendo a fonte da verdade; StateManager é a fachada
- * de escrita autorizada. HOOK_STATE continua funcionando para leitura.
+ * Carregado APÓS sidepanel-constants.js (que define SessionFlags e as demais
+ * variáveis de sessão). As flags vivem em SessionFlags; StateManager é a
+ * fachada de escrita autorizada. HOOK_STATE continua funcionando para leitura.
  *
  * API pública:
  *   resetSession()                  — zera flags + transcripts para nova consulta
@@ -18,41 +18,9 @@
 
 'use strict';
 
-// Mapa canônico: nome externo → variável de sessão (let) definida em constants.js
-// As chaves são os nomes usados em setHookFlag/getHookFlag.
-const _FLAG_MAP = {
-  examesNormaisInjetados:    () => examesNormaisInjetados,
-  blefariteInjetada:         () => blefariteInjetada,
-  receitaOlhoIrritadoInjetada: () => receitaOlhoIrritadoInjetada,
-  catarataDetectada:         () => catarataDetectada,
-  catarataGrau:              () => catarataGrau,
-  lioDetectada:              () => lioDetectada,
-  opacidadeCapsulaDetectada: () => opacidadeCapsulaDetectada,
-  lenteLimpaDetectada:       () => lenteLimpaDetectada,
-  dilatacaoDetectada:        () => dilatacaoDetectada,
-  fundoscopiaDetectada:      () => fundoscopiaDetectada,
-  consultaEncerradaDetectada: () => consultaEncerradaDetectada,
-  despedidaNaSessao:         () => despedidaNaSessao,
-  fase2DilatacaoAtiva:       () => fase2DilatacaoAtiva,
-};
-
-// Setters separados porque JS não permite `eval` em strict mode sem wrapper.
-// Cada setter recebe o novo valor e escreve na let var correta do escopo global.
-const _FLAG_SETTERS = {
-  examesNormaisInjetados:      v => { examesNormaisInjetados = v; },
-  blefariteInjetada:           v => { blefariteInjetada = v; },
-  receitaOlhoIrritadoInjetada: v => { receitaOlhoIrritadoInjetada = v; },
-  catarataDetectada:           v => { catarataDetectada = v; },
-  catarataGrau:                v => { catarataGrau = v; },
-  lioDetectada:                v => { lioDetectada = v; },
-  opacidadeCapsulaDetectada:   v => { opacidadeCapsulaDetectada = v; },
-  lenteLimpaDetectada:         v => { lenteLimpaDetectada = v; },
-  dilatacaoDetectada:          v => { dilatacaoDetectada = v; },
-  fundoscopiaDetectada:        v => { fundoscopiaDetectada = v; },
-  consultaEncerradaDetectada:  v => { consultaEncerradaDetectada = v; },
-  despedidaNaSessao:           v => { despedidaNaSessao = v; },
-  fase2DilatacaoAtiva:         v => { fase2DilatacaoAtiva = v; },
-};
+// As flags vivem em SessionFlags (sidepanel-constants.js), geradas do registro
+// canônico SESSION_FLAG_DEFAULTS. Este módulo valida o nome e delega — não há
+// mais mapas de getters/setters por flag.
 
 const StateManager = {
   /**
@@ -64,12 +32,7 @@ const StateManager = {
     // CRÍTICO: consultaEncerradaDetectada precisa voltar a false para permitir
     // STOP nas consultas seguintes; lenteLimpaDetectada precisa voltar a false
     // para não bloquear o hook de opacidade de cápsula no próximo paciente.
-    // Falha alto se uma flag nova no registro canônico não tiver setter aqui.
-    for (const [name, defaultValue] of Object.entries(SESSION_FLAG_DEFAULTS)) {
-      const setter = _FLAG_SETTERS[name];
-      if (!setter) throw new Error(`StateManager.resetSession: flag '${name}' sem setter em _FLAG_SETTERS`);
-      setter(defaultValue);
-    }
+    Object.assign(SessionFlags, SESSION_FLAG_DEFAULTS);
 
     // Transcript e buffer de voz
     recognizedText   = '';
@@ -112,13 +75,12 @@ const StateManager = {
 
   /**
    * Escreve uma flag de detecção por nome.
-   * @param {string} name  — chave canônica (ver _FLAG_MAP)
+   * @param {string} name  — chave canônica (ver SESSION_FLAG_DEFAULTS)
    * @param {*}      value — novo valor
    */
   setHookFlag(name, value) {
-    const setter = _FLAG_SETTERS[name];
-    if (!setter) throw new Error(`StateManager.setHookFlag: flag desconhecida '${name}'`);
-    setter(value);
+    if (!(name in SESSION_FLAG_DEFAULTS)) throw new Error(`StateManager.setHookFlag: flag desconhecida '${name}'`);
+    SessionFlags[name] = value;
   },
 
   /**
@@ -127,9 +89,8 @@ const StateManager = {
    * @returns {*}
    */
   getHookFlag(name) {
-    const getter = _FLAG_MAP[name];
-    if (!getter) throw new Error(`StateManager.getHookFlag: flag desconhecida '${name}'`);
-    return getter();
+    if (!(name in SESSION_FLAG_DEFAULTS)) throw new Error(`StateManager.getHookFlag: flag desconhecida '${name}'`);
+    return SessionFlags[name];
   },
 
   /**

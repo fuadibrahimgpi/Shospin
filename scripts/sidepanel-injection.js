@@ -480,20 +480,20 @@ async function injectAll(force = false) {
   // contradizendo o diagnóstico. Aqui derivamos a flag do próprio diagnóstico.
   // Respeita a prioridade da lente (opacidade cápsula > LIO > catarata): olho pseudofácico
   // (LIO/opacidade já detectadas) NÃO recebe catarata — a menção seria histórica.
-  if (!catarataDetectada && !lioDetectada && !opacidadeCapsulaDetectada) {
+  if (!SessionFlags.catarataDetectada && !SessionFlags.lioDetectada && !SessionFlags.opacidadeCapsulaDetectada) {
     const _cat = parseCatarataFromDiagnostico(audioData?.dados?.diagnostico);
     if (_cat.detected) {
-      catarataDetectada = true;
-      if (!catarataGrau && _cat.grau) catarataGrau = _cat.grau;
-      console.log('[Catarata] Flag derivada do diagnóstico (gatilho de voz não disparou):', catarataGrau || '(grau não especificado)');
+      SessionFlags.catarataDetectada = true;
+      if (!SessionFlags.catarataGrau && _cat.grau) SessionFlags.catarataGrau = _cat.grau;
+      console.log('[Catarata] Flag derivada do diagnóstico (gatilho de voz não disparou):', SessionFlags.catarataGrau || '(grau não especificado)');
     }
   }
 
-  if (!blefariteInjetada && !examesNormaisInjetados) {
+  if (!SessionFlags.blefariteInjetada && !SessionFlags.examesNormaisInjetados) {
     if (!audioData?.dilatacaoDetectada && audioData?.injectExamesNormais && !_temTratamentoAtivo) {
       combinedData.examesNormais = {
         biomicroscopia: getBiomicroscopiaComLente(BIOMICROSCOPIA_NORMAL),
-        fundoscopia: (fundoscopiaDetectada || mencionouFundoNaFala) ? FUNDOSCOPIA_NORMAL : null
+        fundoscopia: (SessionFlags.fundoscopiaDetectada || mencionouFundoNaFala) ? FUNDOSCOPIA_NORMAL : null
       };
     } else if (!audioData?.dilatacaoDetectada && audioData?.injectBlefarite) {
       // Blefarite: se Gemini gerou biomicroscopia personalizada (ex: pterígio + blefarite),
@@ -515,7 +515,7 @@ async function injectAll(force = false) {
         ),
         fundoscopia: audioData.dados.fundoscopia || null
       };
-    } else if (audioData && consultaEncerradaDetectada && !audioData.dilatacaoDetectada && !_temTratamentoAtivo) {
+    } else if (audioData && SessionFlags.consultaEncerradaDetectada && !audioData.dilatacaoDetectada && !_temTratamentoAtivo) {
       // Fallback de despedida: a consulta foi encerrada pelo STOP (despedida) e
       // nenhum gatilho de exame disparou (garantido pelo guard externo).
       // Guard: _temTratamentoAtivo impede injeção de exames "normais" em consultas
@@ -796,20 +796,22 @@ function clearAll(options = { clearAudio: true, clearCamera: true }) {
     }
 
     // ── 2. Resetar flags de gatilhos (SOMENTE se NÃO está gravando) ──
-    // Cada flag corresponde a um hook em sidepanel-hooks.js.
-    // Para adicionar uma nova flag: declarar em sidepanel-constants.js,
-    // registrar o hook em sidepanel-hooks.js e adicionar o reset aqui.
+    // Subconjunto INTENCIONAL: lenteLimpaDetectada, consultaEncerradaDetectada
+    // e despedidaNaSessao NÃO são zeradas aqui (só no resetSession da próxima
+    // gravação) — são sticky da sessão. Para adicionar flag nova: registrar em
+    // SESSION_FLAG_DEFAULTS (sidepanel-constants.js), criar o hook em
+    // sidepanel-hooks.js e decidir se ela entra neste reset parcial.
     if (clearAudio && !isRecording) {
-      examesNormaisInjetados = false;
-      blefariteInjetada = false;
-      fundoscopiaDetectada = false;
-      receitaOlhoIrritadoInjetada = false;
-      catarataDetectada = false;
-      catarataGrau = null;
-      lioDetectada = false;
-      opacidadeCapsulaDetectada = false;
-      dilatacaoDetectada = false;
-      fase2DilatacaoAtiva = false;
+      SessionFlags.examesNormaisInjetados = false;
+      SessionFlags.blefariteInjetada = false;
+      SessionFlags.fundoscopiaDetectada = false;
+      SessionFlags.receitaOlhoIrritadoInjetada = false;
+      SessionFlags.catarataDetectada = false;
+      SessionFlags.catarataGrau = null;
+      SessionFlags.lioDetectada = false;
+      SessionFlags.opacidadeCapsulaDetectada = false;
+      SessionFlags.dilatacaoDetectada = false;
+      SessionFlags.fase2DilatacaoAtiva = false;
       lastTriggerTime = 0;
       if (stopCommandTimeout) { clearTimeout(stopCommandTimeout); stopCommandTimeout = null; }
       stopPendingInfo = null;
@@ -821,7 +823,7 @@ function clearAll(options = { clearAudio: true, clearCamera: true }) {
     // dilatacaoDetectada também é resetada se limpar câmera sem áudio
     // (evita que flag de sessão anterior suprima conduta da próxima gravação)
     if (clearCamera && !clearAudio && !isRecording) {
-      dilatacaoDetectada = false;
+      SessionFlags.dilatacaoDetectada = false;
     }
 
     // ── 4. Limpar campos de áudio ──
@@ -952,7 +954,7 @@ async function injectExamesNormaisDirect() {
     action: 'injectExamesNormais',
     data: {
       biomicroscopia: getBiomicroscopiaComLente(BIOMICROSCOPIA_NORMAL),
-      fundoscopia: fundoscopiaDetectada ? FUNDOSCOPIA_NORMAL : null,
+      fundoscopia: SessionFlags.fundoscopiaDetectada ? FUNDOSCOPIA_NORMAL : null,
     },
   });
   if (response?.success) {

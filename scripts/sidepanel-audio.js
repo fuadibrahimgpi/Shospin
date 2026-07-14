@@ -198,7 +198,7 @@ async function startRecording() {
         // Na fase 2 (retorno da dilatação), narrações retrospectivas espalhadas
         // pela sessão não contam — só um comando na CAUDA (dito logo antes da
         // parada manual) indica uma NOVA pausa real de dilatação.
-        const _dilScan = fase2DilatacaoAtiva ? _textToScan.slice(-300) : _textToScan;
+        const _dilScan = SessionFlags.fase2DilatacaoAtiva ? _textToScan.slice(-300) : _textToScan;
         if (ClinicalTriggers.detectaDilatacaoNaFala(_dilScan)) {
           StateManager.setHookFlag('dilatacaoDetectada', true);
           console.log('[Audio] Dilatação detectada no fallback onstop');
@@ -408,7 +408,7 @@ async function processAudioInBackground(audioBlob, capturedText) {
     // Exceção: dilatacaoDetectada=true indica pausa clínica (exame concluído) — o guard
     // não se aplica porque o downstream já bloqueia auto-injeção e exibe dados para revisão.
     // Exceção 2: se a consulta foi explicitamente encerrada (STOP detectado ou manual), bypassar o guard.
-    if (!dilatacaoDetectada && !consultaEncerradaDetectada && ClinicalTriggers.detectaExameEmAndamento(textToProcess)) {
+    if (!SessionFlags.dilatacaoDetectada && !SessionFlags.consultaEncerradaDetectada && ClinicalTriggers.detectaExameEmAndamento(textToProcess)) {
       // Persistir a transcrição ANTES de adiar: a próxima gravação chama
       // resetSession() e apaga recognizedText — sem isso, a entrevista de uma
       // pausa manual (ex.: gatilho de dilatação não reconhecido) era destruída
@@ -457,15 +457,15 @@ async function processAudioInBackground(audioBlob, capturedText) {
 
       // Fallback: varrer o texto processado + buffer recente por comandos de dilatação
       // (o hook de dilatação pode não ter disparado se o Speech API reiniciou nesse momento)
-      if (!dilatacaoDetectada) {
+      if (!SessionFlags.dilatacaoDetectada) {
         if (data.dilatacaoDetectada) {
-          dilatacaoDetectada = true;
+          SessionFlags.dilatacaoDetectada = true;
         } else {
           const finalNorm = normalizeText(textToProcess) || normalizeText(recentTextBuffer);
           // Fase 2: só a cauda conta (narração retrospectiva não é nova pausa)
-          const scanDil = fase2DilatacaoAtiva ? finalNorm.slice(-300) : finalNorm;
+          const scanDil = SessionFlags.fase2DilatacaoAtiva ? finalNorm.slice(-300) : finalNorm;
           if (ClinicalTriggers.detectaDilatacaoNaFala(scanDil)) {
-            dilatacaoDetectada = true;
+            SessionFlags.dilatacaoDetectada = true;
           }
         }
       }
@@ -478,9 +478,9 @@ async function processAudioInBackground(audioBlob, capturedText) {
           const decision = DecisionEngine.buildDecision(data, {
             transcribedText: analysisText,
             hookFlags: {
-              blefariteInjetada,
-              examesNormaisInjetados,
-              dilatacaoDetectada,
+              blefariteInjetada:      SessionFlags.blefariteInjetada,
+              examesNormaisInjetados: SessionFlags.examesNormaisInjetados,
+              dilatacaoDetectada:     SessionFlags.dilatacaoDetectada,
             },
             tipoConsulta: data.tipo_consulta,
           });
@@ -495,7 +495,7 @@ async function processAudioInBackground(audioBlob, capturedText) {
           // Copiar flags reconciliadas de volta para o objeto de trabalho
           workingData.injectExamesNormais = decision.injectFlags.injectExamesNormais;
           workingData.injectBlefarite     = decision.injectFlags.injectBlefarite;
-          if (decision.injectFlags.dilatacao) dilatacaoDetectada = true;
+          if (decision.injectFlags.dilatacao) SessionFlags.dilatacaoDetectada = true;
         }
       } catch (e) {
         console.warn('[DecisionEngine] Falha ao calcular decisão (não-fatal):', e.message);
@@ -505,7 +505,7 @@ async function processAudioInBackground(audioBlob, capturedText) {
       // Dilatação detectada: finalizar e injetar os dados coletados.
       // O médico atenderá outro paciente enquanto o colírio faz efeito,
       // por isso a consulta deve ser encerrada normalmente com injeção.
-      if (dilatacaoDetectada) {
+      if (SessionFlags.dilatacaoDetectada) {
         workingData.dilatacaoDetectada = true;
 
         // Persistir a transcrição da fase 1 ANTES de qualquer injeção/supressão.
@@ -668,7 +668,11 @@ async function cancelarDilatacao() {
       if (typeof DecisionEngine !== 'undefined' && DecisionEngine.buildDecision) {
         const decision = DecisionEngine.buildDecision(data, {
           transcribedText: analysisText,
-          hookFlags: { blefariteInjetada, examesNormaisInjetados, dilatacaoDetectada: false },
+          hookFlags: {
+            blefariteInjetada:      SessionFlags.blefariteInjetada,
+            examesNormaisInjetados: SessionFlags.examesNormaisInjetados,
+            dilatacaoDetectada:     false,
+          },
           tipoConsulta: data.tipo_consulta,
         });
         if (decision.guardsApplied.length > 0) {
@@ -722,7 +726,7 @@ const SILENCE_THRESHOLD_MS   = 180_000; // 3 min sem fala dispara o aviso
 const SILENCE_WARN_MS        = 5_000;   // 5s de aviso antes de parar
 
 function _checkSilence() {
-  if (!isRecording || stopCommandTimeout || dilatacaoDetectada || silencePendingStop) return;
+  if (!isRecording || stopCommandTimeout || SessionFlags.dilatacaoDetectada || silencePendingStop) return;
   if (isSpeechPausedByCamera) return;
 
   if (Date.now() - sessionStartTime < SILENCE_MIN_SESSION_MS) return;
@@ -741,7 +745,7 @@ function _checkSilence() {
     silencePendingStop = null;
     if (isRecording && !stopCommandTimeout) {
       console.log('[Silence] Auto-stop por silêncio — encerrando consulta');
-      consultaEncerradaDetectada = true;
+      SessionFlags.consultaEncerradaDetectada = true;
       stopRecording();
     }
   }, SILENCE_WARN_MS);

@@ -49,20 +49,17 @@ function stopRecording() { _injectCounts.stop++; isRecording = false; }
 
 `;
 
-// Bridge: exposta ao escopo do vm via var, acessa os let do constants.js
-// Definida DEPOIS dos módulos para garantir que os lets já existem.
+// Bridge: exposta ao escopo do vm via var. As flags de sessão delegam a
+// SessionFlags (acessores GERADOS do registro canônico — flag nova entra
+// automaticamente); as demais variáveis (lets de constants.js e mocks)
+// continuam com acessores manuais.
+// Definida DEPOIS dos módulos para garantir que os bindings já existem.
 const BRIDGE_SRC = `
 var _BRIDGE = {
   get stopCommandTimeout()  { return stopCommandTimeout; },
   set stopCommandTimeout(v) { stopCommandTimeout = v; },
   get isRecording()         { return isRecording; },
   set isRecording(v)        { isRecording = v; },
-  get dilatacaoDetectada()  { return dilatacaoDetectada; },
-  set dilatacaoDetectada(v) { dilatacaoDetectada = v; },
-  get examesNormaisInjetados()  { return examesNormaisInjetados; },
-  set examesNormaisInjetados(v) { examesNormaisInjetados = v; },
-  get blefariteInjetada()  { return blefariteInjetada; },
-  set blefariteInjetada(v) { blefariteInjetada = v; },
   get lastTriggerTime()    { return lastTriggerTime; },
   set lastTriggerTime(v)   { lastTriggerTime = v; },
   get sessionStartTime()   { return sessionStartTime; },
@@ -75,35 +72,14 @@ var _BRIDGE = {
     stopPendingInfo        = null;
     stopGateOffset         = 0;
     stopGateBlockCount     = 0;
-    examesNormaisInjetados = false;
-    blefariteInjetada      = false;
-    receitaOlhoIrritadoInjetada = false;
-    catarataDetectada      = false;
-    catarataGrau           = null;
-    lioDetectada           = false;
-    opacidadeCapsulaDetectada = false;
-    lenteLimpaDetectada    = false;
-    dilatacaoDetectada     = false;
-    fundoscopiaDetectada   = false;
-    consultaEncerradaDetectada = false;
-    despedidaNaSessao      = false;
-    fase2DilatacaoAtiva    = false;
+    Object.assign(SessionFlags, SESSION_FLAG_DEFAULTS);
     lastTriggerTime        = 0;
     isRecording            = true;
     recentTextBuffer       = '';
     sessionStartTime       = Date.now() - 600000;
   },
-  get catarataDetectada()        { return catarataDetectada; },
-  set catarataDetectada(v)       { catarataDetectada = v; },
-  get catarataGrau()             { return catarataGrau; },
-  set catarataGrau(v)            { catarataGrau = v; },
-  get lioDetectada()             { return lioDetectada; },
-  set lioDetectada(v)            { lioDetectada = v; },
-  get opacidadeCapsulaDetectada()  { return opacidadeCapsulaDetectada; },
-  set opacidadeCapsulaDetectada(v) { opacidadeCapsulaDetectada = v; },
-  get lenteLimpaDetectada()        { return lenteLimpaDetectada; },
-  set lenteLimpaDetectada(v)       { lenteLimpaDetectada = v; },
   SESSION_FLAG_DEFAULTS: SESSION_FLAG_DEFAULTS,
+  SessionFlags: SessionFlags,
   StateManager: StateManager,
   HOOK_STATE: HOOK_STATE,
   shospState: window.__shospState,
@@ -114,6 +90,14 @@ var _BRIDGE = {
   normalizeText: normalizeText,
   runHooks: runHooks,
 };
+// Acessores das flags de sessão — gerados do registro canônico.
+for (const _flagName of Object.keys(SESSION_FLAG_DEFAULTS)) {
+  Object.defineProperty(_BRIDGE, _flagName, {
+    get: () => SessionFlags[_flagName],
+    set: (v) => { SessionFlags[_flagName] = v; },
+    enumerable: true,
+  });
+}
 `;
 
 // ──────────────────────────────────────────────────────────────────────────────

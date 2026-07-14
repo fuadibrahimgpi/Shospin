@@ -4,8 +4,9 @@
  * ============================================================================
  * Carregado após config/clinical-triggers.js (que define normalizeText e
  * todos os arrays de gatilhos de voz). Este arquivo define apenas:
- *   - Variáveis de estado da sessão (let)
- *   - STATE BRIDGE v5.1 (__shospState)
+ *   - Variáveis de estado da sessão (let) e o registro canônico
+ *     SESSION_FLAG_DEFAULTS + armazenamento único SessionFlags
+ *   - STATE BRIDGE (__shospState — getters de flags gerados do registro)
  *   - Textos-padrão clínicos (BIOMICROSCOPIA_NORMAL, etc.)
  *   - Função auxiliar getBiomicroscopiaComLente()
  *   - Referências DOM
@@ -102,20 +103,9 @@ const SESSION_FLAG_DEFAULTS = Object.freeze({
 
 // Armazenamento ÚNICO das flags de sessão. Sealed: escrever numa chave fora do
 // registro falha (em vez de criar propriedade nova silenciosamente).
+// Todo acesso é explícito: SessionFlags.<flag> nos módulos, ou via
+// StateManager.set/getHookFlag e HOOK_STATE (hooks).
 const SessionFlags = Object.seal({ ...SESSION_FLAG_DEFAULTS });
-
-// COMPATIBILIDADE (transitória — remover ao fim da migração da fase 1):
-// os módulos consumidores ainda referenciam as flags como identificadores
-// globais soltos (ex.: `dilatacaoDetectada = true`). Estes acessores no objeto
-// global delegam para SessionFlags até que todos os call sites usem
-// SessionFlags.<flag> explicitamente.
-for (const _flagName of Object.keys(SESSION_FLAG_DEFAULTS)) {
-  Object.defineProperty(globalThis, _flagName, {
-    get: () => SessionFlags[_flagName],
-    set: (v) => { SessionFlags[_flagName] = v; },
-    configurable: true,
-  });
-}
 
 // Cooldown unificado e debounce de parada
 let lastTriggerTime = 0;

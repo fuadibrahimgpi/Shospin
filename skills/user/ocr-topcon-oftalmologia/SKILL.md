@@ -158,6 +158,7 @@ O cabeçalho da coluna de cilindro no ticket TOPCON é sempre `CYL: (−)` (nota
 5. **Sanity-check obrigatório com S.E. (equivalente esférico) impresso pelo próprio TOPCON.** A relação é `S.E. = esfera + (cilindro / 2)`. Se o parser leu cilindro mas o S.E. impresso bate exatamente com a esfera pura (cilindro implícito = 0), **descartar o cilindro lido** — é alucinação. Exemplo: esfera `−0,50` e S.E. `−0,50` → cilindro tem que ser `0`; qualquer outro valor é erro de leitura.
 6. As 3 medidas consecutivas do mesmo olho devem ser coerentes entre si. Se 2 das 3 vêm sem cilindro e 1 vem com `−0,25`, tratar a divergente como provável alucinação e marcar `cyl_incerto: true`.
 7. Quando em dúvida, **prefira subdiagnosticar cilindro a superdiagnosticar** — astigmatismo fantasma gera prescrição errada; ausência de astigmatismo discreto não causa dano.
+8. **Sinais independentes.** O sinal da esfera e o do cilindro são independentes entre si. É normal e correto haver dois números negativos na mesma linha (ex.: `S −2,25  C −0,50`). Nunca propague o sinal da esfera para o cilindro; nunca some ou combine os dois valores.
 
 ## Refração (`REF. DATA`)
 

@@ -2,7 +2,7 @@
 /**
  * npm run check — syntax check de todos os JS da extensão.
  *
- * Roda `node --check` em cada arquivo .js relevante (dist/, scripts/, utils/,
+ * Roda `node --check` em cada arquivo .js relevante (src/, scripts/, utils/,
  * scripts-dev/), ignorando node_modules e _archive. Sai com código != 0 se
  * algum arquivo falhar.
  */
@@ -13,7 +13,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const ROOT = path.resolve(__dirname, '..');
-const TARGET_DIRS = ['dist', 'scripts', 'utils', 'scripts-dev'];
+const TARGET_DIRS = ['src', 'scripts', 'utils', 'scripts-dev'];
 const SKIP_DIRS = new Set(['_archive', 'node_modules', '.git']);
 
 function* walk(dir) {

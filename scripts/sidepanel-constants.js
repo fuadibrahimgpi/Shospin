@@ -1,4 +1,4 @@
-﻿/**
+/**
  * ============================================================================
  * SIDEPANEL — ESTADO GLOBAL, CONSTANTES E REFERÊNCIAS DOM
  * ============================================================================
@@ -47,6 +47,11 @@ let speechRecognition = null;
 let recognizedText = '';
 let isModeSwitching = false;
 let noSpeechCount = 0; // contador de erros no-speech consecutivos (backoff)
+let isSpeechPausedByCamera = false;
+let isSpeechActive = false;
+let isSpeechBackingOff = false;
+let speechRecoveryTimer = null;
+
 
 // Stream de áudio persistente
 let persistentStream = null;
@@ -64,13 +69,73 @@ let catarataDetectada = false;
 let catarataGrau = null; // "inicial" | "incipiente" | "moderada" | "avançada" | null
 let lioDetectada = false;
 let opacidadeCapsulaDetectada = false;
+let lenteLimpaDetectada = false;
 let dilatacaoDetectada = false;
 let fundoscopiaDetectada = false;
 let consultaEncerradaDetectada = false;
+// Sticky: uma despedida/encerramento já foi DETECTADA nesta sessão (mesmo que
+// bloqueada pelo gate ou cancelada). Diferente de consultaEncerradaDetectada,
+// NÃO é limpa no cancelamento — persiste até o resetSession. Usada para suprimir
+// a dilatação depois que o médico já sinalizou fim de consulta (evita hijack de
+// consulta encerrada quando o "vamos dilatar" se refere a outra pessoa).
+let despedidaNaSessao = false;
+// Fase 2 de dilatação: havia uma pausa de dilatação persistida
+// (_shospDilatacaoPhase1) quando esta gravação começou — ou seja, esta sessão
+// é o RETORNO do paciente. Suprime o hook de dilatação por voz: frases
+// retrospectivas inevitáveis no retorno ("já dilatou", "pinguei o colírio
+// para dilatar a pupila") re-disparavam a pausa e a consulta nunca fechava.
+// Setada em startRecording() a partir do storage (exceto motivo='exame');
+// os fallbacks pós-parada passam a varrer só a cauda do texto nesta fase.
+let fase2DilatacaoAtiva = false;
+
+// ============================================================================
+// REGISTRO CANÔNICO DAS FLAGS DE SESSÃO
+// ============================================================================
+// Fonte única da verdade sobre QUAIS flags de detecção existem e seus valores
+// iniciais. Toda camada de acesso (StateManager, HOOK_STATE, __shospState)
+// deve cobrir exatamente estas chaves — os testes [FLAGS-*] em
+// utils/hooks-test.js falham se uma flag nova for adicionada aqui sem ser
+// registrada nas demais camadas (ou vice-versa).
+const SESSION_FLAG_DEFAULTS = Object.freeze({
+  examesNormaisInjetados: false,
+  blefariteInjetada: false,
+  receitaOlhoIrritadoInjetada: false,
+  catarataDetectada: false,
+  catarataGrau: null,
+  lioDetectada: false,
+  opacidadeCapsulaDetectada: false,
+  lenteLimpaDetectada: false,
+  dilatacaoDetectada: false,
+  fundoscopiaDetectada: false,
+  consultaEncerradaDetectada: false,
+  despedidaNaSessao: false,
+  fase2DilatacaoAtiva: false,
+});
 
 // Cooldown unificado e debounce de parada
 let lastTriggerTime = 0;
 let stopCommandTimeout = null;
+// Metadados do stop agendado: { hookId, cmd, endAnchored, onCancel }.
+// Usado pelo runner para CANCELAR stops de frases curtas (endAnchored) caso
+// a fala continue depois da despedida ("tá bom então... vamos medir a pressão").
+let stopPendingInfo = null;
+// Âncora do gate de captura (condicionante de encerramento): posição no texto
+// normalizado até onde despedidas já foram BLOQUEADAS por falta de conduta/
+// tratamento ditados. Só uma despedida dita APÓS esta posição pode encerrar
+// a consulta — sem isso, a despedida antiga que ficou no transcript pararia
+// a gravação no meio do ditado da prescrição. Ver _stopGateBlocks no runner.
+let stopGateOffset = 0;
+// Válvula de escape do gate: nº de despedidas DISTINTAS já bloqueadas por
+// falta de conduta/tratamento nesta sessão. A partir da 2ª despedida distinta
+// sem captura o gate LIBERA o encerramento — casos reais (2026-07-03/06/07)
+// mostraram que despedida repetida sem captura indica marcador de conduta
+// faltando (falso bloqueio), não conduta faltando. Ver _stopGateBlocks.
+let stopGateBlockCount = 0;
+
+// Auto-stop por silêncio prolongado (consultas que terminam sem despedida detectável)
+let lastSpeechTime = 0;
+let silenceCheckInterval = null;
+let silencePendingStop = null;
 
 // Buffer de texto recente — persiste entre restarts do Speech API
 // (sem isso, o hook de stop perde o trigger se o Speech reiniciar no momento exato)
@@ -101,6 +166,8 @@ window.__shospState = Object.freeze({
   get pendingRefractionConfirmation(){ return pendingRefractionConfirmation; },
   get recognizedText()               { return recognizedText; },
   get noSpeechCount()                { return noSpeechCount; },
+  get isSpeechPausedByCamera()       { return isSpeechPausedByCamera; },
+  get isSpeechActive()               { return isSpeechActive; },
   get examesNormaisInjetados()       { return examesNormaisInjetados; },
   get blefariteInjetada()            { return blefariteInjetada; },
   get receitaOlhoIrritadoInjetada()  { return receitaOlhoIrritadoInjetada; },
@@ -108,23 +175,30 @@ window.__shospState = Object.freeze({
   get catarataGrau()                 { return catarataGrau; },
   get lioDetectada()                 { return lioDetectada; },
   get opacidadeCapsulaDetectada()    { return opacidadeCapsulaDetectada; },
+  get lenteLimpaDetectada()          { return lenteLimpaDetectada; },
   get dilatacaoDetectada()           { return dilatacaoDetectada; },
   get fundoscopiaDetectada()         { return fundoscopiaDetectada; },
+  get consultaEncerradaDetectada()   { return consultaEncerradaDetectada; },
+  get despedidaNaSessao()            { return despedidaNaSessao; },
+  get fase2DilatacaoAtiva()          { return fase2DilatacaoAtiva; },
   get lastTriggerTime()              { return lastTriggerTime; },
   get hasStopScheduled()             { return stopCommandTimeout !== null; },
+  get stopGateOffset()               { return stopGateOffset; },
+  get stopGateBlockCount()           { return stopGateBlockCount; },
   get recentTextBufferLength()       { return recentTextBuffer.length; },
-  // Snapshot serializável para logs (sem referências a timers ou DOM)
+  // Snapshot serializável para logs (sem referências a timers ou DOM).
+  // As flags são derivadas de SESSION_FLAG_DEFAULTS via os getters acima —
+  // uma flag nova sem getter apareceria como undefined (pego pelos testes).
   snapshot() {
+    const flags = {};
+    for (const name of Object.keys(SESSION_FLAG_DEFAULTS)) flags[name] = this[name];
     return {
       currentMode, isRecording,
       hasAudioData: audioData !== null,
       hasCameraData: cameraData !== null,
       audioDataInjected, cameraDataInjected,
-      flags: {
-        examesNormaisInjetados, blefariteInjetada, receitaOlhoIrritadoInjetada,
-        catarataDetectada, catarataGrau, lioDetectada,
-        opacidadeCapsulaDetectada, dilatacaoDetectada, fundoscopiaDetectada,
-      },
+      isSpeechPausedByCamera, isSpeechActive,
+      flags,
       hasStopScheduled: stopCommandTimeout !== null,
       recognizedTextLength: recognizedText.length,
     };
@@ -188,13 +262,62 @@ const MAX_TIME = 15000;
  * Prioridade: opacidade cápsula > LIO > catarata > padrão (cristalino transparente)
  */
 function getBiomicroscopiaComLente(baseText) {
-  if (opacidadeCapsulaDetectada) return baseText.replace('cristalino transparente', LENTE_OPACIDADE_CAPSULA);
-  if (lioDetectada) return baseText.replace('cristalino transparente', LENTE_LIO);
+  if (opacidadeCapsulaDetectada) return baseText.replaceAll('cristalino transparente', LENTE_OPACIDADE_CAPSULA);
+  // LIO tem prioridade sobre catarata: pseudofacia confirmada significa que o cristalino
+  // natural já foi removido — não pode haver catarata nesse olho. Se ambas as flags
+  // dispararam, a menção de catarata é histórica ("antes da cirurgia tinha catarata") e a
+  // LIO (LIO_COMMANDS já não cobre cirurgia futura) é o achado definitivo. Ver Caso 7.
+  if (lioDetectada) return baseText.replaceAll('cristalino transparente', LENTE_LIO);
   if (catarataDetectada) {
     const lente = catarataGrau ? `catarata ${catarataGrau}` : LENTE_CATARATA;
-    return baseText.replace('cristalino transparente', lente);
+    return baseText.replaceAll('cristalino transparente', lente);
   }
   return baseText;
+}
+
+/**
+ * Deriva presença e grau de catarata a partir do texto do diagnóstico do LLM.
+ *
+ * O cristalino dinâmico (getBiomicroscopiaComLente) depende da flag catarataDetectada,
+ * ligada APENAS pelos gatilhos de voz (CATARATA_COMMANDS). Quando o reconhecimento de
+ * voz embaralha a fala do médico ("catarata" não é transcrito de forma limpa), o gatilho
+ * não dispara, mas o Gemini ainda diagnostica catarata e injeta o CID H25.x — e a
+ * biomicroscopia sairia com "cristalino transparente", contradizendo o diagnóstico.
+ * sidepanel-injection.js usa esta função para reconciliar a flag pelo próprio diagnóstico.
+ *
+ * Função PURA (sem efeitos colaterais) para ser testável. Retorna { detected, grau }.
+ *
+ * NÃO considera catarata secundária / opacidade de cápsula posterior (H26.4): esse achado
+ * é de olho pseudofácico e tem lente própria (LENTE_OPACIDADE_CAPSULA), não "catarata".
+ */
+function parseCatarataFromDiagnostico(diagnostico) {
+  const vazio = { detected: false, grau: null };
+  if (!diagnostico) return vazio;
+
+  const norm = diagnostico.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+
+  // Exclui catarata secundária / opacidade de cápsula posterior (olho pseudofácico).
+  const secundaria =
+    /catarata\s+secundaria/.test(norm) ||
+    /\bh26\.?4\b/.test(norm) ||
+    /capsula\s+posterior/.test(norm);
+  if (secundaria) return vazio;
+
+  // Catarata "real" (olho fácico): CID H25.x (senil) ou H26.0–3 (outras cataratas),
+  // ou a palavra "catarata" em texto puro.
+  const detected =
+    /\bh25\.?\d/.test(norm) ||
+    /\bh26\.?[0-3]\b/.test(norm) ||
+    /\bcatarata\b/.test(norm);
+  if (!detected) return vazio;
+
+  let grau = null;
+  if (/incipiente/.test(norm)) grau = 'incipiente';
+  else if (/inicial/.test(norm)) grau = 'inicial';
+  else if (/moderada/.test(norm)) grau = 'moderada';
+  else if (/avancad[ao]|madura/.test(norm)) grau = 'avançada';
+
+  return { detected: true, grau };
 }
 
 // ============================================================================
@@ -239,6 +362,7 @@ const cameraBadge = document.getElementById('cameraBadge');
 const actionButtons = document.getElementById('actionButtons');
 const injectAllBtn = document.getElementById('injectAllBtn');
 const clearBtn = document.getElementById('clearBtn');
+const cancelDilatacaoBtn = document.getElementById('cancelDilatacaoBtn');
 const successMessage = document.getElementById('successMessage');
 const btnSearchCid = document.getElementById('btnSearchCid');
 const btnSearchCidRetorno = document.getElementById('btnSearchCidRetorno');

@@ -47,7 +47,18 @@ function openPermissionPage() {
 // GRAVAÇÃO
 // ============================================================================
 
+let _lastToggleTime = 0;
+const TOGGLE_DEBOUNCE_MS = 1000;
+let sessionStartTime = 0;
+
 async function toggleRecording() {
+  const now = Date.now();
+  if (now - _lastToggleTime < TOGGLE_DEBOUNCE_MS) {
+    console.log('[Audio] toggleRecording ignorado — debounce ativo');
+    return;
+  }
+  _lastToggleTime = now;
+
   if (isRecording) {
     stopRecording();
   } else {
@@ -65,25 +76,46 @@ async function startRecording() {
 
     mediaRecorder = new MediaRecorder(persistentStream);
     audioChunks = [];
-    recognizedText = '';
 
-    // Resetar flags de gatilhos para nova gravação
-    examesNormaisInjetados = false;
-    blefariteInjetada = false;
-    receitaOlhoIrritadoInjetada = false;
-    catarataDetectada = false;
-    lioDetectada = false;
-    opacidadeCapsulaDetectada = false;
-    dilatacaoDetectada = false;
-    consultaEncerradaDetectada = false;
-    lastTriggerTime = 0;
-    fundoscopiaDetectada = false;
-    if (stopCommandTimeout) { clearTimeout(stopCommandTimeout); stopCommandTimeout = null; }
-    // Resetar buffer de texto recente (agora global — persiste entre restarts do Speech)
-    recentTextBuffer = '';
-    if (recentTextTimeout) { clearTimeout(recentTextTimeout); recentTextTimeout = null; }
-    // Resetar contador de erros no-speech consecutivos
-    noSpeechCount = 0;
+    // Resetar todo o estado de sessão via StateManager (flags, transcript, buffers, timers)
+    StateManager.resetSession();
+
+    // Proteção: cancelar stopCommandTimeout residual de sessão anterior
+    // (pode sobreviver ao resetSession se foi agendado entre o reset e o start)
+    if (stopCommandTimeout) {
+      clearTimeout(stopCommandTimeout);
+      stopCommandTimeout = null;
+      console.log('[Audio] stopCommandTimeout residual cancelado ao iniciar nova sessão');
+    }
+    stopPendingInfo = null;
+    stopGateOffset = 0;
+    stopGateBlockCount = 0;
+
+    // Fase 2 de dilatação: se há pausa persistida, esta gravação é o RETORNO
+    // do paciente. Suprimir o hook de dilatação por voz nesta sessão — frases
+    // retrospectivas do retorno ("já dilatou", "pinguei o colírio para dilatar
+    // a pupila") re-disparavam a pausa e a consulta nunca fechava.
+    // motivo='exame' (pausa manual no meio do exame, sem dilatação) NÃO
+    // suprime: a dilatação ainda pode ser anunciada na sessão retomada.
+    try {
+      const _store = await new Promise(resolve =>
+        chrome.storage.local.get('_shospDilatacaoPhase1', d => resolve(d._shospDilatacaoPhase1 || null))
+      );
+      if (_store && Date.now() - (_store.ts || 0) <= 6 * 60 * 60 * 1000 && _store.motivo !== 'exame') {
+        StateManager.setHookFlag('fase2DilatacaoAtiva', true);
+        console.log('[Audio] Fase 2 de dilatação — gatilho de dilatação por voz suprimido nesta sessão.');
+      }
+    } catch (_e) { /* storage indisponível — segue sem supressão */ }
+
+    // Timestamp de início — usado para calcular duração mínima da sessão
+    sessionStartTime = Date.now();
+    lastSpeechTime = Date.now();
+    if (silenceCheckInterval) clearInterval(silenceCheckInterval);
+    silenceCheckInterval = setInterval(_checkSilence, 10_000);
+
+    // Limpar explicitamente os campos de diagnóstico no DOM que foram poupados na consulta anterior
+    if (diagnosticoField) diagnosticoField.value = '';
+    if (diagnosticoRetornoField) diagnosticoRetornoField.value = '';
 
     mediaRecorder.ondataavailable = (event) => {
       audioChunks.push(event.data);
@@ -96,21 +128,56 @@ async function startRecording() {
         return;
       }
 
-      // ── Espera inteligente por resultados finais do Speech API ──
-      const textBefore = recognizedText;
-      let waitedMs = 0;
-      const POLL_INTERVAL = 200;
-      const MAX_WAIT = 2000;
+      // ── Guard de sessão mínima (anti-sessão-vazia) ──
+      // Se a sessão durou menos de 3 segundos E não há texto reconhecido nem buffer,
+      // descartar silenciosamente — evita enviar sessões acidentais ao Gemini.
+      const MIN_SESSION_MS = 3000;
+      const sessionElapsed = Date.now() - sessionStartTime;
+      if (sessionElapsed < MIN_SESSION_MS && !recognizedText.trim() && !(recentTextBuffer && recentTextBuffer.trim())) {
+        console.warn(`[Audio] Sessão muito curta (${Math.round(sessionElapsed / 1000)}s) sem texto — descartando.`);
+        stopSpeechRecognition();
+        statusText.textContent = 'Sessão descartada (muito curta)';
+        statusText.style.color = '#eab308';
+        statusText.style.fontWeight = 'normal';
+        setTimeout(() => {
+          statusText.textContent = 'Clique para iniciar o ditado';
+          statusText.style.color = '';
+        }, 3000);
+        return;
+      }
 
-      while (waitedMs < MAX_WAIT) {
-        await new Promise(r => setTimeout(r, POLL_INTERVAL));
-        waitedMs += POLL_INTERVAL;
-        if (recognizedText !== textBefore && waitedMs < MAX_WAIT - POLL_INTERVAL) {
-          break;
+      // ── Solicitar parada imediata do Speech para forçar a finalização do buffer ──
+      if (speechRecognition) {
+        try {
+          console.log('[Audio] Parando Speech Recognition no onstop para forçar flush de interim results...');
+          speechRecognition.stop();
+        } catch (e) {
+          console.warn('[Audio] Erro ao parar Speech Recognition no onstop:', e);
         }
       }
 
-      // Parar speech DEPOIS de capturar os resultados
+      // ── Espera inteligente por resultados finais do Speech API ──
+      const textBefore = recognizedText;
+      const hasSpeech = (textBefore && textBefore.trim().length > 0) || (recentTextBuffer && recentTextBuffer.trim().length > 0);
+
+      if (hasSpeech) {
+        let waitedMs = 0;
+        const POLL_INTERVAL = 100;
+        const MAX_WAIT = 1500;
+
+        while (waitedMs < MAX_WAIT) {
+          await new Promise(r => setTimeout(r, POLL_INTERVAL));
+          waitedMs += POLL_INTERVAL;
+          if (recognizedText !== textBefore) {
+            console.log(`[Audio] Speech finalizado após ${waitedMs}ms.`);
+            break;
+          }
+        }
+      } else {
+        console.log('[Audio] Nenhum som/fala detectado na sessão, pulando espera.');
+      }
+
+      // Parar de vez e limpar
       stopSpeechRecognition();
 
       const capturedText = recognizedText;
@@ -121,26 +188,31 @@ async function startRecording() {
         console.warn('[Audio] ⚠️ recognizedText está VAZIO ao parar — Speech API não produziu resultados finais nesta sessão.');
       }
 
-      // Verificação final — garante que gatilho não foi perdido durante restart
-      const finalNorm = normalizeText(capturedText);
-      if (!stopCommandTimeout) {
-        for (const cmd of STOP_COMMANDS) {
-          if (finalNorm.includes(cmd)) {
-            console.log('[Audio] Gatilho encontrado no texto final:', cmd);
-            break; // apenas log, gravação já parou
-          }
+      // Fallbacks de segurança: se o médico parou manualmente ANTES do Speech API
+      // produzir resultado final, os hooks de dilatação/stop não terão disparado.
+      // Só executam se o hook runner ainda não detectou (evita dupla detecção).
+      const _finalNorm = normalizeText(capturedText);
+      const _textToScan = _finalNorm || normalizeText(recentTextBuffer);
+
+      if (!StateManager.getHookFlag('dilatacaoDetectada')) {
+        // Na fase 2 (retorno da dilatação), narrações retrospectivas espalhadas
+        // pela sessão não contam — só um comando na CAUDA (dito logo antes da
+        // parada manual) indica uma NOVA pausa real de dilatação.
+        const _dilScan = fase2DilatacaoAtiva ? _textToScan.slice(-300) : _textToScan;
+        if (ClinicalTriggers.detectaDilatacaoNaFala(_dilScan)) {
+          StateManager.setHookFlag('dilatacaoDetectada', true);
+          console.log('[Audio] Dilatação detectada no fallback onstop');
         }
       }
 
-      // Fallback de segurança: se o médico clicou para parar manualmente ANTES
-      // do Speech API finalizar o resultado, o hook de dilatação não terá disparado.
-      // Varredura no capturedText + recentTextBuffer (cobre caso de speech vazio por restart).
-      const textToScanDilat = finalNorm || normalizeText(recentTextBuffer);
-      for (const cmd of DILATACAO_COMMANDS) {
-        if (textToScanDilat.includes(cmd)) {
-          dilatacaoDetectada = true;
-          console.log('[Audio] Dilatação detectada no fallback onstop:', cmd);
-          break;
+      // Fallback de encerramento: despedida dita mas finalizada só após a parada
+      // manual. Seta a flag para que o guard de "exame em andamento" não bloqueie
+      // o processamento e o fallback de exames normais da injeção funcione.
+      if (!StateManager.getHookFlag('consultaEncerradaDetectada') &&
+          !StateManager.getHookFlag('dilatacaoDetectada')) {
+        if (ClinicalTriggers.detectaEncerramentoNaFala(_textToScan)) {
+          StateManager.setHookFlag('consultaEncerradaDetectada', true);
+          console.log('[Audio] Encerramento de consulta detectado no fallback onstop');
         }
       }
 
@@ -183,6 +255,8 @@ async function startRecording() {
  */
 function stopRecording(keepStreamOpen = true) {
   isRecording = false;
+  if (silenceCheckInterval) { clearInterval(silenceCheckInterval); silenceCheckInterval = null; }
+  if (silencePendingStop) { clearTimeout(silencePendingStop); silencePendingStop = null; }
 
   if (mediaRecorder && mediaRecorder.state !== 'inactive') {
     mediaRecorder.stop();
@@ -201,6 +275,8 @@ function stopRecording(keepStreamOpen = true) {
 
 function stopRecordingCompletely() {
   isRecording = false;
+  if (silenceCheckInterval) { clearInterval(silenceCheckInterval); silenceCheckInterval = null; }
+  if (silencePendingStop) { clearTimeout(silencePendingStop); silencePendingStop = null; }
   stopSpeechRecognition();
   if (mediaRecorder && mediaRecorder.state !== 'inactive') {
     mediaRecorder.stop();
@@ -279,11 +355,19 @@ async function processAudioInBackground(audioBlob, capturedText) {
       if (recentTextBuffer && recentTextBuffer.trim().length >= 20) {
         console.warn('[Audio] capturedText vazio — usando recentTextBuffer como fallback:', recentTextBuffer.substring(0, 80));
         textToProcess = recentTextBuffer;
+        processingStatus.textContent = 'Transcrição parcial — verifique o resultado';
+        statusText.textContent = 'Áudio incompleto — revise os dados';
+        statusText.style.color = '#eab308';
       } else {
-        statusText.textContent = 'Clique para iniciar o ditado';
-        statusText.style.color = '';
-        statusText.style.fontWeight = 'normal';
         console.log('[Audio] Nenhum texto capturado — sessão encerrada sem dados.');
+        processingStatus.textContent = '';
+        statusText.textContent = '⚠️ Nenhuma fala detectada — sessão descartada';
+        statusText.style.color = '#eab308';
+        statusText.style.fontWeight = 'normal';
+        setTimeout(() => {
+          statusText.textContent = 'Clique para iniciar o ditado';
+          statusText.style.color = '';
+        }, 4000);
         return;
       }
     }
@@ -292,11 +376,56 @@ async function processAudioInBackground(audioBlob, capturedText) {
     if (textToProcess.trim().split(/\s+/).length < 4) {
       statusText.textContent = 'Áudio muito curto, ignorado.';
       statusText.style.color = '#eab308';
+      processingStatus.textContent = '';
       return;
     }
 
-    // Guard pré-Gemini: exame/refração em andamento — não analisar como consulta final
-    if (ClinicalTriggers.detectaExameEmAndamento(textToProcess)) {
+    // ── Contexto de dilatação (fase 2) ──
+    // Se há uma pausa de dilatação recente persistida, anexar a transcrição da fase 1
+    // (entrevista) antes do texto desta sessão, separada pelo marcador. O Gemini analisa
+    // a consulta completa e libera conduta/tratamento/exames (regra do marcador no prompt).
+    // Os fallbacks de gatilho abaixo continuam varrendo APENAS textToProcess — o
+    // "vai dilatar" da fase 1 não pode redetectar dilatação na fase 2.
+    // Carregado ANTES do guard de exame em andamento: o guard também precisa
+    // do acumulado para persistir a transcrição ao adiar a análise.
+    let _phase1Store = null;
+    try {
+      _phase1Store = await new Promise(resolve =>
+        chrome.storage.local.get('_shospDilatacaoPhase1', d => resolve(d._shospDilatacaoPhase1 || null))
+      );
+      if (_phase1Store && Date.now() - (_phase1Store.ts || 0) > 6 * 60 * 60 * 1000) {
+        _phase1Store = null;
+      }
+    } catch (_e) { _phase1Store = null; }
+
+    let analysisText = textToProcess;
+    if (_phase1Store?.transcript) {
+      analysisText = _phase1Store.transcript + '\n\n[RETORNO DA DILATACAO]\n\n' + textToProcess;
+      console.log('[Audio] Transcrição da fase pré-dilatação anexada como contexto da análise.');
+    }
+
+    // Guard pré-Gemini: exame/refração em andamento — não analisar como consulta final.
+    // Exceção: dilatacaoDetectada=true indica pausa clínica (exame concluído) — o guard
+    // não se aplica porque o downstream já bloqueia auto-injeção e exibe dados para revisão.
+    // Exceção 2: se a consulta foi explicitamente encerrada (STOP detectado ou manual), bypassar o guard.
+    if (!dilatacaoDetectada && !consultaEncerradaDetectada && ClinicalTriggers.detectaExameEmAndamento(textToProcess)) {
+      // Persistir a transcrição ANTES de adiar: a próxima gravação chama
+      // resetSession() e apaga recognizedText — sem isso, a entrevista de uma
+      // pausa manual (ex.: gatilho de dilatação não reconhecido) era destruída
+      // em silêncio. A próxima sessão anexa este texto via marcador, como na
+      // fase 2 de dilatação. motivo='exame' NÃO suprime o hook de dilatação
+      // na próxima sessão (a dilatação ainda pode ser anunciada nela).
+      try {
+        chrome.storage.local.set({
+          _shospDilatacaoPhase1: {
+            audio: _phase1Store?.audio || null,
+            transcript: analysisText,
+            ts: Date.now(),
+            motivo: _phase1Store?.motivo || 'exame',
+          },
+        });
+        console.log('[Audio] Exame em andamento — transcrição persistida; será anexada à próxima gravação.');
+      } catch (_e) { /* storage indisponível — não-fatal */ }
       statusText.textContent = 'Exame em andamento, aguardando encerramento';
       statusText.style.color = '#eab308';
       statusText.style.fontWeight = 'normal';
@@ -305,7 +434,7 @@ async function processAudioInBackground(audioBlob, capturedText) {
       return;
     }
 
-    const data = await window.GeminiService.analyzeConsultation(textToProcess);
+    const data = await window.GeminiService.analyzeConsultation(analysisText);
     processingStatus.textContent = 'Análise concluída!';
 
     // Bloquear injeção automática quando a IA ou o DecisionEngine sinalizarem ruído.
@@ -333,11 +462,10 @@ async function processAudioInBackground(audioBlob, capturedText) {
           dilatacaoDetectada = true;
         } else {
           const finalNorm = normalizeText(textToProcess) || normalizeText(recentTextBuffer);
-          for (const cmd of DILATACAO_COMMANDS) {
-            if (finalNorm.includes(cmd)) {
-              dilatacaoDetectada = true;
-              break;
-            }
+          // Fase 2: só a cauda conta (narração retrospectiva não é nova pausa)
+          const scanDil = fase2DilatacaoAtiva ? finalNorm.slice(-300) : finalNorm;
+          if (ClinicalTriggers.detectaDilatacaoNaFala(scanDil)) {
+            dilatacaoDetectada = true;
           }
         }
       }
@@ -348,7 +476,7 @@ async function processAudioInBackground(audioBlob, capturedText) {
       try {
         if (typeof DecisionEngine !== 'undefined' && DecisionEngine.buildDecision) {
           const decision = DecisionEngine.buildDecision(data, {
-            transcribedText: textToProcess,
+            transcribedText: analysisText,
             hookFlags: {
               blefariteInjetada,
               examesNormaisInjetados,
@@ -374,21 +502,68 @@ async function processAudioInBackground(audioBlob, capturedText) {
         workingData = data;
       }
 
-      // Pausa para dilatação — exibir dados capturados mas NÃO injetar automaticamente.
-      // A dilatação é pausa, não fim de consulta: médico deve injetar manualmente
-      // quando o paciente retornar após o efeito do colírio.
+      // Dilatação detectada: finalizar e injetar os dados coletados.
+      // O médico atenderá outro paciente enquanto o colírio faz efeito,
+      // por isso a consulta deve ser encerrada normalmente com injeção.
       if (dilatacaoDetectada) {
-        if (_temDadosClinicos(workingData.dados)) {
-          displayAudioResults(workingData);
-          processingStatus.textContent = 'Pausa para dilatação — dados disponíveis, aguardando retorno';
-          console.log('[Audio] Dilatação com dados clínicos — exibindo para revisão, sem auto-injeção.');
-        } else {
-          processingStatus.textContent = 'Pausa para dilatação — retome quando o paciente voltar';
-          console.log('[Audio] Dilatação pura — sem dados para exibir.');
+        workingData.dilatacaoDetectada = true;
+
+        // Persistir a transcrição da fase 1 ANTES de qualquer injeção/supressão.
+        // A fase 2 (pós-dilatação) reanalisa a consulta completa a partir dela —
+        // nada da entrevista se perde, mesmo se a injeção abaixo for suprimida.
+        // analysisText já acumula fases anteriores em caso de múltiplas pausas.
+        try {
+          chrome.storage.local.set({
+            _shospDilatacaoPhase1: {
+              audio: _phase1Store?.audio || null,
+              transcript: analysisText,
+              ts: Date.now(),
+              motivo: 'dilatacao',
+            },
+          });
+          console.log('[Audio] Transcrição da fase 1 (pré-dilatação) persistida para a fase 2.');
+        } catch (_e) { /* storage indisponível — não-fatal */ }
+
+        // Comando puro de dilatação: nenhum dado clínico coletado — registrar pausa sem injetar.
+        if (!_temDadosClinicos(workingData.dados)) {
+          processingStatus.textContent = 'Paciente aguardando dilatação...';
+          statusText.textContent = 'Pausa para dilatação — sem dados novos de entrevista';
+          statusText.style.color = '#eab308';
+          statusText.style.fontWeight = 'normal';
+          console.log('[Audio] Dilatação sem dados clínicos novos — injeção adiada; transcrição preservada para a fase 2.');
+          return;
         }
-        statusText.textContent = 'Aguardando retorno do paciente...';
+
+        displayAudioResults(workingData);
+        processingStatus.textContent = 'Dilatação detectada — injetando dados coletados...';
+        statusText.textContent = 'Finalizando (paciente em dilatação)...';
         statusText.style.color = '#3b82f6';
         statusText.style.fontWeight = 'normal';
+
+        await new Promise(r => setTimeout(r, 800));
+
+        if (audioDataInjected) {
+          processingStatus.textContent = 'Dados injetados (junto com exames)!';
+        } else {
+          try {
+            await injectAll();
+            processingStatus.textContent = 'Dados injetados — paciente em dilatação.';
+          } catch (injectError) {
+            if (injectError.message === 'dilatacao_sem_camera') {
+              // Áudio preservado — sem câmera disponível para injetar junto.
+              // O médico injeta manualmente ao fim da consulta.
+              processingStatus.textContent = 'Áudio preservado — injete manualmente ao retorno.';
+              statusText.textContent = 'Aguardando retorno da dilatação...';
+              statusText.style.color = '#eab308';
+            } else if (injectError.message === 'Dados já injetados' ||
+                injectError.message === 'injectAll já em execução') {
+              processingStatus.textContent = 'Dados injetados (junto com exames)!';
+            } else {
+              console.error('[AutoInject] Erro:', injectError);
+              processingStatus.textContent = 'Erro na injeção automática';
+            }
+          }
+        }
         return;
       }
 
@@ -433,12 +608,157 @@ async function processAudioInBackground(audioBlob, capturedText) {
 }
 
 // ============================================================================
+// DESFAZER DILATAÇÃO — reprocessar a consulta como completa
+// ============================================================================
+// Aciona quando o gatilho de dilatação disparou por engano (ex.: "vamos esperar
+// o colírio fazer efeito para ELE dilatar" era sobre o acompanhante, não o
+// paciente). Reprocessa a transcrição da fase 1 forçando dilatação=false e
+// reinjeta conduta/tratamento/exames. NÃO reentra no fluxo top-level (cujos
+// guards — áudio curto, exame em andamento e o fallback de dilatação —
+// re-armariam a pausa); chama analyzeConsultation + DecisionEngine + injeção
+// diretamente, com forceComplete=true.
+
+/** Mostra/esconde o botão de desfazer conforme a pausa de dilatação persistida. */
+function refreshUndoVisibility() {
+  if (!cancelDilatacaoBtn) return;
+  try {
+    chrome.storage.local.get('_shospDilatacaoPhase1', d => {
+      const store = d._shospDilatacaoPhase1;
+      const ativo = !!(store && store.transcript &&
+        Date.now() - (store.ts || 0) <= 6 * 60 * 60 * 1000);
+      cancelDilatacaoBtn.classList.toggle('hidden', !ativo);
+    });
+  } catch (_e) { /* storage indisponível — mantém oculto */ }
+}
+
+async function cancelarDilatacao() {
+  let store = null;
+  try {
+    store = await new Promise(resolve =>
+      chrome.storage.local.get('_shospDilatacaoPhase1', d => resolve(d._shospDilatacaoPhase1 || null)));
+  } catch (_e) { store = null; }
+
+  if (!store?.transcript) {
+    chrome.storage.local.remove('_shospDilatacaoPhase1');
+    refreshUndoVisibility();
+    statusText.textContent = 'Nenhuma pausa de dilatação ativa para reprocessar.';
+    statusText.style.color = '#eab308';
+    return;
+  }
+
+  processingIndicator.classList.remove('hidden');
+  processingStatus.textContent = 'Reprocessando consulta (dilatação cancelada)...';
+  statusText.textContent = 'Reprocessando...';
+  statusText.style.color = '#3b82f6';
+  statusText.style.fontWeight = 'normal';
+
+  try {
+    // Zera o estado de dilatação e permite reinjeção (a fase 1 já injetou a entrevista).
+    StateManager.setHookFlag('dilatacaoDetectada', false);
+    audioDataInjected = false;
+    cameraDataInjected = false;
+
+    const analysisText = store.transcript;
+    const data = await window.GeminiService.analyzeConsultation(analysisText, { forceComplete: true });
+    if (!data || !data.dados) throw new Error('Reprocessamento retornou resposta inválida');
+
+    // DecisionEngine com dilatação forçada em false.
+    let workingData = data;
+    try {
+      if (typeof DecisionEngine !== 'undefined' && DecisionEngine.buildDecision) {
+        const decision = DecisionEngine.buildDecision(data, {
+          transcribedText: analysisText,
+          hookFlags: { blefariteInjetada, examesNormaisInjetados, dilatacaoDetectada: false },
+          tipoConsulta: data.tipo_consulta,
+        });
+        if (decision.guardsApplied.length > 0) {
+          console.log('[Dilatacao] Reprocessamento — guards:', decision.guardsApplied);
+        }
+        workingData = decision.clonedAIResponse;
+        workingData.injectExamesNormais = decision.injectFlags.injectExamesNormais;
+        workingData.injectBlefarite     = decision.injectFlags.injectBlefarite;
+      }
+    } catch (e) {
+      console.warn('[Dilatacao] DecisionEngine falhou no reprocessamento (não-fatal):', e.message);
+      workingData = data;
+    }
+    workingData.dilatacaoDetectada = false; // garante placeholder correto em displayAudioResults
+
+    displayAudioResults(workingData);
+    await new Promise(r => setTimeout(r, 800));
+    await injectAll(true); // force: sobrescreve a injeção da fase 1
+
+    chrome.storage.local.remove('_shospDilatacaoPhase1');
+
+    const semConduta = !workingData.dados?.conduta && !workingData.dados?.tratamento;
+    processingStatus.textContent = semConduta
+      ? 'Reprocessado — conduta/tratamento não estavam no áudio; complete manualmente.'
+      : 'Consulta reprocessada e injetada (dilatação cancelada).';
+    statusText.textContent = 'Clique para nova gravação';
+    statusText.style.color = '';
+  } catch (err) {
+    console.error('[Dilatacao] Falha ao cancelar/reprocessar:', err);
+    processingStatus.textContent = 'Erro ao reprocessar — verifique o SHOSP.';
+    statusText.textContent = 'Erro ao reprocessar.';
+    statusText.style.color = '#dc2626';
+  } finally {
+    processingIndicator.classList.add('hidden');
+    refreshUndoVisibility();
+  }
+}
+
+// ============================================================================
+// AUTO-STOP POR SILÊNCIO PROLONGADO
+// ============================================================================
+
+const SILENCE_MIN_SESSION_MS = 90_000;  // sessão deve ter pelo menos 90s
+const SILENCE_MIN_WORDS      = 40;      // mínimo de palavras capturadas
+// 3 min: o limite anterior (45s) encerrou consulta NO MEIO do exame — caso
+// real 2026-07-03: tonometria/refração geraram 51s de silêncio e o auto-stop
+// disparou antes de conduta/tratamento serem ditados. Fases silenciosas de
+// exame duram 1–2 min; 3 min mantém a rede de segurança contra gravação
+// esquecida sem cortar a consulta em andamento.
+const SILENCE_THRESHOLD_MS   = 180_000; // 3 min sem fala dispara o aviso
+const SILENCE_WARN_MS        = 5_000;   // 5s de aviso antes de parar
+
+function _checkSilence() {
+  if (!isRecording || stopCommandTimeout || dilatacaoDetectada || silencePendingStop) return;
+  if (isSpeechPausedByCamera) return;
+
+  if (Date.now() - sessionStartTime < SILENCE_MIN_SESSION_MS) return;
+
+  const wordCount = recognizedText.trim() ? recognizedText.trim().split(/\s+/).length : 0;
+  if (wordCount < SILENCE_MIN_WORDS) return;
+
+  const silenceMs = Date.now() - lastSpeechTime;
+  if (silenceMs < SILENCE_THRESHOLD_MS) return;
+
+  console.log(`[Silence] ${Math.round(silenceMs / 1000)}s sem fala (${wordCount} palavras) — agendando encerramento`);
+  statusText.textContent = 'Silêncio prolongado — encerrando em 5s (fale para cancelar)';
+  statusText.style.color = '#16a34a';
+
+  silencePendingStop = setTimeout(() => {
+    silencePendingStop = null;
+    if (isRecording && !stopCommandTimeout) {
+      console.log('[Silence] Auto-stop por silêncio — encerrando consulta');
+      consultaEncerradaDetectada = true;
+      stopRecording();
+    }
+  }, SILENCE_WARN_MS);
+}
+
+// ============================================================================
 // WEB SPEECH API — RECONHECIMENTO EM TEMPO REAL
 // ============================================================================
 
 function startSpeechRecognition() {
   const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-  if (!SpeechRecognition) return;
+  if (!SpeechRecognition) {
+    statusText.textContent = '⚠️ Navegador não suporta reconhecimento de voz';
+    statusText.style.color = '#dc2626';
+    console.error('[Speech] Web Speech API não disponível neste navegador.');
+    return;
+  }
 
   // recentTextBuffer e recentTextTimeout são globais (sidepanel-constants.js)
   // — declará-los localmente apagaria o buffer entre restarts do Speech API.
@@ -449,9 +769,23 @@ function startSpeechRecognition() {
     speechRecognition.interimResults = true;
     speechRecognition.lang = 'pt-BR';
 
+    speechRecognition.onstart = () => {
+      isSpeechActive = true;
+      console.log('[Speech] Reconhecimento de voz iniciado.');
+    };
+
     speechRecognition.onresult = (event) => {
-      // Fala detectada — resetar contador de no-speech
+      // Fala detectada — resetar contador de no-speech e timestamp de silêncio
       noSpeechCount = 0;
+      lastSpeechTime = Date.now();
+      if (silencePendingStop) {
+        clearTimeout(silencePendingStop);
+        silencePendingStop = null;
+        if (isRecording && !stopCommandTimeout) {
+          statusText.textContent = 'Gravando...';
+          statusText.style.color = '#ef4444';
+        }
+      }
 
       let interimTranscript = '';
       let finalTranscript = '';
@@ -493,6 +827,7 @@ function startSpeechRecognition() {
     }; // fim do speechRecognition.onresult
 
     speechRecognition.onerror = (event) => {
+      isSpeechActive = false;
       if (event.error === 'no-speech') {
         noSpeechCount++;
         // Suprimir log após o 1º erro para não poluir o console
@@ -504,12 +839,17 @@ function startSpeechRecognition() {
         // (sem o restart, o Speech fica parado até o próximo onend — que nunca chega).
         if (noSpeechCount >= 5) {
           console.log(`[Speech] ${noSpeechCount} erros no-speech consecutivos — pausando reconhecimento por 3s.`);
+          isSpeechBackingOff = true; // Ativar trava de backoff
           try { speechRecognition.stop(); } catch (e) { /* ignorar */ }
           setTimeout(() => {
+            isSpeechBackingOff = false; // Desativar trava de backoff
             noSpeechCount = 0; // reset para nova janela de tentativas
-            // Reiniciar só se ainda estiver gravando e sem stop agendado
-            if (isRecording && speechRecognition && !stopCommandTimeout) {
-              try { speechRecognition.start(); } catch (e) { /* já ativo */ }
+            // Reiniciar só se ainda estiver gravando, sem stop agendado e sem pausa por câmera
+            if (isRecording && speechRecognition && !stopCommandTimeout && !isSpeechPausedByCamera && !isSpeechActive) {
+              try {
+                speechRecognition.start();
+                isSpeechActive = true;
+              } catch (e) { /* já ativo */ }
             }
           }, 3000);
           return;
@@ -517,17 +857,55 @@ function startSpeechRecognition() {
         // Reinicia imediatamente sem esperar onend
         try { speechRecognition.stop(); } catch (e) { /* ignorar */ }
       } else {
-        console.log('[Speech] Erro:', event.error);
+        console.error('[Speech] Erro:', event.error);
+        const _errosMapeados = {
+          'audio-capture': 'Microfone desconectado durante gravação',
+          'network':       'Erro de rede no reconhecimento de voz',
+          'not-allowed':   'Permissão de microfone revogada',
+          'aborted':       'Reconhecimento de voz interrompido',
+        };
+        const _msg = _errosMapeados[event.error] || `Erro de voz: ${event.error}`;
+        statusText.textContent = _msg;
+        statusText.style.color = '#dc2626';
+
+        // Auto-recuperação para erros de hardware/transientes (ex: interrupção por getUserMedia)
+        // speechRecoveryTimer é cancellable — evita acúmulo de timers em erros repetidos.
+        if (isRecording && !stopCommandTimeout && !isSpeechPausedByCamera) {
+          clearTimeout(speechRecoveryTimer);
+          speechRecoveryTimer = setTimeout(() => {
+            speechRecoveryTimer = null;
+            if (isRecording && speechRecognition && !stopCommandTimeout && !isSpeechPausedByCamera && !isSpeechActive) {
+              try {
+                speechRecognition.start();
+                isSpeechActive = true;
+                statusText.textContent = 'Gravando...';
+                statusText.style.color = '#ef4444';
+                statusText.style.fontWeight = 'bold';
+              } catch (e) {
+                console.warn('[Speech] Falha ao auto-recuperar:', e.message);
+              }
+            }
+          }, 1500);
+        }
       }
     };
 
     speechRecognition.onend = () => {
-      // Não reiniciar o speech se um comando de parada já foi agendado.
-      // Sem essa guarda, o speech reinicia no frame entre o onend e o
-      // timeout do stopCommandTimeout disparar, deixando o botão preso em "Gravando..."
-      // enquanto o mediaRecorder já foi encerrado.
-      if (isRecording && speechRecognition && !stopCommandTimeout) {
-        try { speechRecognition.start(); } catch (e) { /* já ativo */ }
+      isSpeechActive = false;
+      console.log('[Speech] Reconhecimento de voz encerrado.');
+      
+      // Não reiniciar o speech se um comando de parada já foi agendado, se está pausado pela câmera ou em backoff.
+      if (isRecording && speechRecognition && !stopCommandTimeout && !isSpeechPausedByCamera && !isSpeechBackingOff) {
+        setTimeout(() => {
+          if (isRecording && speechRecognition && !stopCommandTimeout && !isSpeechPausedByCamera && !isSpeechActive) {
+            try {
+              speechRecognition.start();
+              isSpeechActive = true;
+            } catch (e) {
+              console.warn('[Speech] Erro ao tentar reiniciar no onend:', e.message);
+            }
+          }
+        }, 300);
       }
     };
 
@@ -539,8 +917,42 @@ function startSpeechRecognition() {
 
 function stopSpeechRecognition() {
   if (speechRecognition) {
-    try { speechRecognition.stop(); } catch (e) { /* já parado */ }
+    try {
+      speechRecognition.stop();
+    } catch (e) { /* já parado */ }
     speechRecognition = null;
+    isSpeechActive = false;
+  }
+}
+
+function pauseSpeechRecognition() {
+  if (!isRecording) return;
+  // Apenas sinaliza que a câmera está ativa — NÃO para o Speech API.
+  // A câmera usa apenas vídeo (sem audio:true no getUserMedia), portanto não
+  // há conflito de microfone. Parar o reconhecimento durante a câmera causava
+  // perda do texto da consulta e rejeição por "áudio muito curto" ao retomar.
+  isSpeechPausedByCamera = true;
+  console.log('[Speech] Câmera ativa — reconhecimento de voz continua (câmera é vídeo-only).');
+}
+
+function resumeSpeechRecognition() {
+  if (!isRecording) {
+    isSpeechPausedByCamera = false;
+    return;
+  }
+  isSpeechPausedByCamera = false;
+  console.log('[Speech] Reconhecimento retomado após fechar câmera.');
+
+  if (speechRecognition && !isSpeechActive && !stopCommandTimeout) {
+    try {
+      speechRecognition.start();
+      isSpeechActive = true;
+      statusText.textContent = 'Gravando...';
+      statusText.style.color = '#ef4444';
+      statusText.style.fontWeight = 'bold';
+    } catch (e) {
+      console.warn('[Speech] Erro ao retomar reconhecimento:', e.message);
+    }
   }
 }
 
@@ -594,7 +1006,7 @@ function displayAudioResults(data) {
     antecedentesFamField.value = data.dados?.antecedentes_familiares || '';
     diagnosticoField.value = data.dados?.diagnostico || '';
     condutaField.value = data.dados?.conduta || '';
-    medicamentosPrescritosField.value = data.dados?.tratamento || data.dados?.medicamentos_prescritos || 'Sem prescrição de medicação';
+    medicamentosPrescritosField.value = data.dados?.tratamento || data.dados?.medicamentos_prescritos || (data.dilatacaoDetectada ? '' : 'Sem prescrição de medicação');
   } else {
     badge.textContent = 'Retorno';
     badge.className = 'type-badge retorno';
@@ -605,7 +1017,7 @@ function displayAudioResults(data) {
     medicacoesRetornoField.value = data.dados?.uso || data.dados?.medicacoes_em_uso || '';
     diagnosticoRetornoField.value = data.dados?.diagnostico || '';
     condutaRetornoField.value = data.dados?.conduta || '';
-    medicamentosPrescritosRetornoField.value = data.dados?.tratamento || data.dados?.medicamentos_prescritos || 'Sem prescrição de medicação';
+    medicamentosPrescritosRetornoField.value = data.dados?.tratamento || data.dados?.medicamentos_prescritos || (data.dilatacaoDetectada ? '' : 'Sem prescrição de medicação');
   }
 
   audioFieldsContainer.classList.remove('hidden');

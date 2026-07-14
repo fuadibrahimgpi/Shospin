@@ -50,6 +50,15 @@
         <p id="processingStatus">Processando...</p>
       </div>
 
+      <!-- Desfazer dilatação: reprocessa a consulta como completa quando o
+           gatilho de dilatação disparou por engano (ex.: "vamos dilatar" era
+           sobre outra pessoa). Visível só enquanto há uma pausa persistida. -->
+      <button id="cancelDilatacaoBtn" class="btn btn-secondary hidden"
+              style="margin-top: 8px; width: 100%;"
+              title="A consulta foi marcada como dilatação por engano — reprocessar como consulta completa">
+        Não era dilatação — reprocessar consulta
+      </button>
+
       <!-- Tipo de Consulta -->
       <div id="consultationType" class="consultation-type hidden">
         <span class="type-badge primeira">Primeira Consulta</span>
@@ -288,11 +297,14 @@
   <!-- Gatilhos clínicos — carregado PRIMEIRO (normalizeText + arrays de comandos) -->
   <script src="config/clinical-triggers.js"></script>
 
-  <!-- AI Engine -->
-  <script src="dist/Logger.js"></script>
-  <script src="dist/ApiService.js"></script>
-  <script src="dist/DecisionEngine.js"></script>
-  <script src="dist/geminiService.js"></script>
+  <!-- AI Engine (ordem importa: utils → agentes → fachada) -->
+  <script src="src/Logger.js"></script>
+  <script src="src/ApiService.js"></script>
+  <script src="src/DecisionEngine.js"></script>
+  <script src="src/gemini-json-utils.js"></script>
+  <script src="src/gemini-exam-agent.js"></script>
+  <script src="src/gemini-interview-agent.js"></script>
+  <script src="src/geminiService.js"></script>
 
   <!-- Side Panel Modules (ordem importa!) -->
   <script src="scripts/sidepanel-constants.js"></script>

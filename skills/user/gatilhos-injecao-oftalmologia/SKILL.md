@@ -123,6 +123,19 @@ sem alteração do padrão vascular, escavação simétrica e fisiológica
 - Devem ser longas ou ter contexto claro (ex: "qualquer duvida me liga")
 - ❌ Evitar: `"ate logo"`, `"boa sorte"`, `"um abraco"` → acompanhante pode dizer
 
+**STOP_COMMANDS_CURTOS** (despedidas curtas — hook `stop_curto`):
+- Frases curtas/ambíguas ("tchau", "ta bom entao", "ate logo") que só valem
+  como despedida quando estão NO FIM da fala (`endAnchored`)
+- Stop agendado com 2s de espera — CANCELADO se a fala continuar
+- Cancelamento agora exibe aviso visível: "⚠️ Encerramento cancelado"
+
+**STOP_SAUDACAO_COMMANDS** (saudações-despedida — hook `stop_saudacao`):
+- `"bom dia"`, `"boa tarde"`, `"boa noite"` usadas como despedida ("tá ok, bom dia")
+- Dupla proteção: `endAnchored` (fim da fala + cancelamento) E `minSessionMs`
+  (ignoradas nos primeiros 2 min da gravação, quando são saudação de ABERTURA)
+- Origem: caso real 2026-06-12 — consulta encerrada com "tá ok, bom dia" não
+  disparou nenhum gatilho e precisou de parada manual
+
 **DILATACAO_COMMANDS:**
 - Devem combinar espera + localização física (ex: "esperar la fora")
 - ❌ Evitar: `"esperar um pouco"` isolado → muito genérico
@@ -153,14 +166,36 @@ Quando `injectBlefarite = true`:
 
 ---
 
-## LÓGICA DE INJEÇÃO — DILATAÇÃO
+## LÓGICA DE INJEÇÃO — DILATAÇÃO (fluxo em 2 fases)
 
-Quando `dilatacaoDetectada = true`:
+### Fase 1 — pausa (`dilatacaoDetectada = true`)
 
 1. Gravação para imediatamente
-2. `conduta` e `tratamento` são zerados (`null`)
-3. Se **não há nenhum dado clínico** → modo "pausa pura" (sem exibir nada)
-4. Se **há dados clínicos** → exibe o que foi capturado, mas sem conduta/tratamento
+2. `conduta`, `tratamento`, `biomicroscopia` e `fundoscopia` são zerados (`null`)
+   e `injectExamesNormais`/`injectBlefarite` são forçados a `false`
+   (DecisionEngine `_guardDilatacao` + `_reconcileInjectFlags`)
+3. A **ENTREVISTA é injetada imediatamente**: HDA/retorno, medicações em uso,
+   antecedentes, alterações sistêmicas, antecedentes familiares e diagnóstico
+   (se já mencionado)
+4. A transcrição da fase 1 é persistida em `_shospDilatacaoPhase1`
+   (`chrome.storage.local`, TTL 6h) — **mesmo quando não há dado clínico**
+   ("pausa pura"): nada da entrevista se perde
+5. Os dados de áudio injetados também são persistidos para re-injeção na fase 2
+   (caso o SHOSP descarte campos não salvos)
+
+### Fase 2 — retorno da dilatação (nova gravação)
+
+1. Ao processar a nova sessão, a transcrição da fase 1 é anexada ANTES do texto
+   atual, separada pelo marcador `[RETORNO DA DILATACAO]`
+2. O Gemini analisa a consulta COMPLETA e agora extrai conduta, tratamento,
+   biomicroscopia e fundoscopia normalmente (regra do marcador no prompt)
+3. O marcador impede que o *"vai dilatar"* da fase 1 redetecte dilatação;
+   os fallbacks de gatilho no código varrem apenas o texto da sessão atual
+4. A injeção da fase 2 mescla os dados persistidos da fase 1 nos campos vazios
+   e remove `_shospDilatacaoPhase1` ao concluir
+
+> ⚠️ O botão **Limpar** manual descarta a fase 1 persistida (novo paciente).
+> O clearAll automático pós-injeção preserva.
 
 ---
 
@@ -249,15 +284,22 @@ Posso ajudar:           'posso ajudar em alguma coisa mais',
 
 ### CATARATA_COMMANDS
 ```
-'tem catarata', 'com catarata', 'e catarata', 'uma catarata', 'a catarata',
+'tem catarata', 'com catarata', 'e catarata', 'uma catarata',
 'catarata incipiente', 'catarata inicial', 'catarata madura',
 'opacidade do cristalino', 'cristalino opaco'
 ```
+> ⚠️ `'a catarata'` foi REMOVIDO (2026-06-15): substring genérico demais — disparava em
+> qualquer menção histórica ("antes tinha a catarata"), causando falso positivo em pseudofácicos.
 
 ### LIO_COMMANDS
 ```
-'lente intraocular', 'lente esta bem', 'lente bem posicionada',
-'cirurgia de catarata', 'pseudofacico', 'lio bem posicionada'
+'lente intraocular', 'lente esta bem', 'lente ta bem',
+'lente esta otima', 'lente ta otima', 'lente esta boa', 'lente ta boa',
+'lente bem posicionada', 'lente no lugar',
+'operou o olho', 'operou os olhos', 'ja operou o olho', 'ja operou os olhos',
+'operou catarata', 'ja operou de catarata',
+'cirurgia de catarata', 'cirurgia foi bem', 'cirurgia ta otima', 'cirurgia deu certo',
+'pseudofacico', 'pseudofaquico', 'lio bem posicionada', 'lio transparente'
 ```
 
 ### OPACIDADE_CAPSULA_COMMANDS
@@ -315,6 +357,20 @@ Posso ajudar:           'posso ajudar em alguma coisa mais',
 **Causa:** `'pingar o colirio'`, `'vou pingar o colirio'`, `'pingar colirio'` e `'vou pingar os colirios'` eram genéricos demais — aparecem tanto em prescrição de blefarite quanto em dilataçcão
 **Arquivo corrigido:** `config/clinical-triggers.js` — removidas as 4 variantes genéricas. Mantidas apenas formas que combinam dilation explícita: `'vou pingar para dilatar'`, `'vou colocar o colirio para dilatar'`
 **Data:** 2026-05-11
+
+### Caso 7 — Biomicroscopia injeta "catarata" em paciente pseudofácico ⭐
+**Sintoma:** Campo de biomicroscopia mostra "catarata" para paciente que já fez facectomia (pseudofácico)
+**Causa:** Duas falhas combinadas:
+  1. `'a catarata'` em CATARATA_COMMANDS casava por substring em qualquer menção histórica da consulta ("antes tinha a catarata", "a cirurgia resolveu a catarata"), setando `catarataDetectada = true`
+  2. LIO_COMMANDS não continha variantes das frases reais do médico ("lente tá ótima", "cirurgia tá ótima"), então `lioDetectada` ficava `false`; como `getBiomicroscopiaComLente()` prioriza LIO > catarata, o resultado final foi "catarata" indevido
+**Arquivo corrigido:** `config/clinical-triggers.js` — removido `'a catarata'`; adicionadas variantes em LIO_COMMANDS: `'lente ta otima'`, `'lente esta otima'`, `'lente ta boa'`, `'cirurgia ta otima'`, `'cirurgia foi bem'`, `'cirurgia deu certo'`, `'operou o olho'`, `'operou os olhos'`
+**Data:** 2026-06-15
+
+### Caso 7b — Regressão do Caso 7: catarata vence LIO quando ambas as flags disparam ⭐
+**Sintoma:** Biomicroscopia injeta "catarata" em paciente pseudofácico (consulta 2026-06-30: log mostrou `[Hook] Flag: catarata detectada` + `[Hook] Flag: LIO detectada`; o CID veio correto — `Z961 - Presença de lente intra-ocular` — mas a lente da biomicroscopia veio "catarata")
+**Causa:** Uma mudança não commitada em `getBiomicroscopiaComLente()` inverteu a prioridade documentada do Caso 7. O código passou a usar `if (lioDetectada && !catarataDetectada) return LIO; if (catarataDetectada) return catarata`, fazendo **catarata vencer LIO** quando as duas flags disparam. A justificativa do comentário (cirurgia futura ativando LIO) já estava obsoleta — `'cirurgia de catarata'` foi removido de LIO_COMMANDS, então uma flag LIO ativa só significa pseudofacia confirmada (sem cristalino natural → impossível ter catarata).
+**Arquivo corrigido:** `scripts/sidepanel-constants.js` — restaurada a prioridade **LIO > catarata** (`if (lioDetectada) return LIO`). Adicionados testes de regressão `[LENTE-1..4]` em `utils/hooks-test.js` cobrindo a resolução de lente (incl. catarata+LIO → LIO vence).
+**Data:** 2026-06-30
 
 ### Caso 6 — injectAll injeta dados de áudio durante pausa de dilatação ⭐
 **Sintoma:** Quando a câmera captura OCR enquanto a dilatação está pendente, o `injectAll()` chamado pela câmera encontra `audioData` setado (por `displayAudioResults`) e injeta conduta/tratamento de uma consulta que ainda não terminou

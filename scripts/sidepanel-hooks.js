@@ -28,6 +28,8 @@ const HOOK_STATE = {
   set lioDetectada(v)            { lioDetectada = v; },
   get opacidadeCapsulaDetectada(){ return opacidadeCapsulaDetectada; },
   set opacidadeCapsulaDetectada(v){ opacidadeCapsulaDetectada = v; },
+  get lenteLimpaDetectada()      { return lenteLimpaDetectada; },
+  set lenteLimpaDetectada(v)     { lenteLimpaDetectada = v; },
   get examesNormaisInjetados()   { return examesNormaisInjetados; },
   set examesNormaisInjetados(v)  { examesNormaisInjetados = v; },
   get blefariteInjetada()        { return blefariteInjetada; },
@@ -40,6 +42,10 @@ const HOOK_STATE = {
   set dilatacaoDetectada(v)      { dilatacaoDetectada = v; },
   get consultaEncerradaDetectada(){ return consultaEncerradaDetectada; },
   set consultaEncerradaDetectada(v){ consultaEncerradaDetectada = v; },
+  get despedidaNaSessao()        { return despedidaNaSessao; },
+  set despedidaNaSessao(v)       { despedidaNaSessao = v; },
+  get fase2DilatacaoAtiva()      { return fase2DilatacaoAtiva; },
+  set fase2DilatacaoAtiva(v)     { fase2DilatacaoAtiva = v; },
   get lastTriggerTime()          { return lastTriggerTime; },
   set lastTriggerTime(v)         { lastTriggerTime = v; },
 };
@@ -54,8 +60,17 @@ const HOOK_STATE = {
 //   1–9   → flags passivas de cristalino (verificadas antes de qualquer injeção)
 //   10–19 → inject exclusivos com bloqueio mútuo (blefarite > exames normais)
 //   20–29 → inject sem bloqueio mútuo (olho irritado)
-//   50    → stop com cooldown (dilatação)
-//   99    → stop global (STOP_COMMANDS — verificado sempre, sem cooldown)
+//   50    → stop de dilatação (pausa, não fim de consulta)
+//   98    → stop forçado (STOP_FORCAR_COMMANDS — ordem explícita, ignora o gate)
+//   99    → stop global (STOP_COMMANDS fortes + STOP_COMMANDS_CURTOS e
+//           STOP_SAUDACAO_COMMANDS ancorados no fim da fala)
+//
+// GATE DE CAPTURA (requireCaptura): os stops de FIM DE CONSULTA só encerram
+// a gravação se conduta E tratamento já tiverem sido ditados na fala
+// (ClinicalTriggers.STOP_GATE + checkCondutaTratamentoCaptados). Sem a
+// captura, o runner bloqueia o stop e a gravação continua — é preciso ditar
+// o que falta e repetir a despedida. O stop de dilatação NÃO tem o gate
+// (é pausa; conduta/tratamento vêm na fase 2).
 
 const VOICE_HOOKS = [
 
@@ -71,15 +86,16 @@ const VOICE_HOOKS = [
     guard: (s) => s.catarataDetectada,
     onMatch: (text, s) => {
       s.catarataDetectada = true;
-      // Extrair grau da fala para refletir na biomicroscopia
       const t = text.toLowerCase();
       if (/incipiente/.test(t)) s.catarataGrau = 'incipiente';
       else if (/inicial/.test(t)) s.catarataGrau = 'inicial';
       else if (/moderada/.test(t)) s.catarataGrau = 'moderada';
-      else if (/avan[çc]ada|madura/.test(t)) s.catarataGrau = 'avançada';
-      statusText.textContent = `Catarata detectada!${s.catarataGrau ? ' (' + s.catarataGrau + ')' : ''}`;
-      statusText.style.color = '#eab308';
+      else if (/avan[çc]ad[ao]|madura/.test(t)) s.catarataGrau = 'avançada';
       console.log('[Hook] Flag: catarata detectada', s.catarataGrau || '(grau não especificado)');
+      return {
+        statusMessage: `Catarata detectada!${s.catarataGrau ? ' (' + s.catarataGrau + ')' : ''}`,
+        statusColor: '#eab308',
+      };
     },
   },
 
@@ -91,11 +107,8 @@ const VOICE_HOOKS = [
     guard: (s) => s.lioDetectada,
     onMatch: (text, s) => {
       s.lioDetectada = true;
-      // NÃO seta examesNormaisInjetados — getBiomicroscopiaComLente() lê lioDetectada
-      // e substitui "cristalino transparente" por "pseudofacia, LIO transparente..."
-      statusText.textContent = 'LIO detectada!';
-      statusText.style.color = '#eab308';
       console.log('[Hook] Flag: LIO detectada');
+      return { statusMessage: 'LIO detectada!', statusColor: '#eab308' };
     },
   },
 
@@ -104,40 +117,46 @@ const VOICE_HOOKS = [
     type: 'flag',
     priority: 3,
     commands: OPACIDADE_CAPSULA_COMMANDS,
-    guard: (s) => s.opacidadeCapsulaDetectada,
+    // Bloqueia se já detectado OU se médico confirmou lente limpa (lenteLimpa é override definitivo)
+    guard: (s) => s.opacidadeCapsulaDetectada || s.lenteLimpaDetectada,
     onMatch: (text, s) => {
       s.opacidadeCapsulaDetectada = true;
-      // NÃO seta examesNormaisInjetados — getBiomicroscopiaComLente() lê esta flag
-      statusText.textContent = 'Opacidade de cápsula detectada!';
-      statusText.style.color = '#eab308';
       console.log('[Hook] Flag: opacidade de cápsula detectada');
+      return { statusMessage: 'Opacidade de cápsula detectada!', statusColor: '#eab308' };
+    },
+  },
+
+  {
+    id: 'lente_limpa',
+    type: 'flag',
+    priority: 4,
+    commands: LENTE_LIMPA_COMMANDS,
+    guard: (s) => s.lenteLimpaDetectada,
+    onMatch: (text, s) => {
+      s.lenteLimpaDetectada = true;
+      s.lioDetectada = true;
+      s.opacidadeCapsulaDetectada = false;
+      console.log('[Hook] Flag: lente limpa — opacidade de cápsula descartada');
+      return { statusMessage: 'Lente limpa! Sem opacidade de cápsula.', statusColor: '#16a34a' };
     },
   },
 
   // ── INJEÇÕES COM BLOQUEIO MÚTUO ──────────────────────────────────────────
-  // Blefarite (priority 10) é verificada ANTES de exames normais (priority 11).
-  // Guard de blefarite bloqueia também se examesNormaisInjetados=true (exclusão mútua).
-  // Guard de exames normais bloqueia se examesNormaisInjetados=true.
 
   {
     id: 'blefarite',
     type: 'inject',
     priority: 10,
     commands: EXAME_BLEFARITE_COMMANDS,
-    // Bloqueia se já injetou blefarite, se exames normais já foram injetados,
-    // ou se dilatação foi detectada (não injeta durante pausa para dilatar).
     guard: (s) => s.blefariteInjetada || s.examesNormaisInjetados || s.dilatacaoDetectada,
+    // Thunk: injectBlefariteDirect só existe após sidepanel-injection.js carregar
+    inject: () => injectBlefariteDirect(),
     onMatch: (text, s) => {
       s.blefariteInjetada = true;
       s.examesNormaisInjetados = true;
-      // Flag de estado — injectAll() usa FUNDOSCOPIA_NORMAL diretamente para blefarite
-      // (não lê fundoscopiaDetectada), mas a flag é mantida para consistência
-      // de estado global (outros módulos podem consultá-la).
       s.fundoscopiaDetectada = true;
       s.lastTriggerTime = Date.now();
-      statusText.textContent = 'Blefarite detectada! Injetando...';
-      statusText.style.color = '#eab308';
-      injectBlefariteDirect();
+      return { statusMessage: 'Blefarite detectada! Injetando...', statusColor: '#eab308' };
     },
   },
 
@@ -146,19 +165,18 @@ const VOICE_HOOKS = [
     type: 'inject',
     priority: 11,
     commands: EXAMES_NORMAIS_COMMANDS,
-    // Bloqueia se exames já foram injetados OU se dilatação foi detectada
-    // (não injeta exames durante pausa para dilatar).
     guard: (s) => s.examesNormaisInjetados || s.dilatacaoDetectada,
+    inject: () => injectExamesNormaisDirect(),
     onMatch: (text, s) => {
       s.examesNormaisInjetados = true;
-      // Injeta fundoscopia somente se o médico mencionou "fundo" ou "fundoscopia"
       s.fundoscopiaDetectada = text.includes('fundo') || text.includes('fundoscop');
       s.lastTriggerTime = Date.now();
-      statusText.textContent = s.fundoscopiaDetectada
-        ? 'Exames normais! Injetando bio + fundo...'
-        : 'Biomicroscopia normal! Injetando...';
-      statusText.style.color = '#16a34a';
-      injectExamesNormaisDirect();
+      return {
+        statusMessage: s.fundoscopiaDetectada
+          ? 'Exames normais! Injetando bio + fundo...'
+          : 'Biomicroscopia normal! Injetando...',
+        statusColor: '#16a34a',
+      };
     },
   },
 
@@ -170,41 +188,64 @@ const VOICE_HOOKS = [
     priority: 20,
     commands: OLHO_IRRITADO_COMMANDS,
     guard: (s) => s.receitaOlhoIrritadoInjetada,
+    inject: () => injectReceitaOlhoIrritadoDirect(),
     onMatch: (text, s) => {
       s.receitaOlhoIrritadoInjetada = true;
       s.lastTriggerTime = Date.now();
-      statusText.textContent = 'Olho irritado! Injetando receita...';
-      statusText.style.color = '#dc2626';
-      injectReceitaOlhoIrritadoDirect();
+      return { statusMessage: 'Olho irritado! Injetando receita...', statusColor: '#dc2626' };
     },
   },
 
   // ── STOP COM COOLDOWN ────────────────────────────────────────────────────
-  // cooldown: 3000ms desde o último trigger (evita disparo acidental
-  // logo após outro gatilho, ex: blefarite seguida de "esperar fora").
 
   {
     id: 'dilatacao',
     type: 'stop',
     priority: 50,
     commands: DILATACAO_COMMANDS,
-    combos: DILATACAO_COMBOS,  // co-ocorrência: "pingar"+"colirio", "esperar"+"efeito", etc.
-    cooldown: 0,       // sem cooldown — stopCommandTimeout do runner já impede duplo disparo
-    stopDelay: 800,    // margem maior para o Speech capturar a frase completa
-    guard: (s) => s.dilatacaoDetectada,
-    multiSource: true, // verifica final + interim + recentBuffer (disparo mais rápido)
+    combos: DILATACAO_COMBOS,
+    cooldown: 0,
+    stopDelay: 800,
+    // Guard de encerramento: se uma despedida já foi detectada na sessão, a
+    // consulta está em fim/encerrada — um "vamos dilatar" agora provavelmente
+    // se refere a outra pessoa (acompanhante/próximo paciente), não ao paciente
+    // atual. Não sequestrar a consulta encerrada com uma pausa de dilatação.
+    // fase2DilatacaoAtiva: esta sessão é o RETORNO de uma dilatação — frases
+    // retrospectivas ("já dilatou", "pinguei o colírio para dilatar") não são
+    // anúncio de nova pausa. Uma nova dilatação real nesta fase é coberta pelo
+    // fallback onstop (parada manual), que varre a cauda do texto.
+    guard: (s) => s.dilatacaoDetectada || s.despedidaNaSessao || s.fase2DilatacaoAtiva,
+    multiSource: true,
     onMatch: (text, s) => {
       s.dilatacaoDetectada = true;
-      statusText.textContent = 'Dilatação! Pausando — aguardando retorno do paciente...';
-      statusText.style.color = '#3b82f6';
       console.log('[Hook] DILATAÇÃO detectada — stop agendado (pausa, não fim de consulta)');
+      return {
+        statusMessage: 'Dilatação! Pausando — aguardando retorno do paciente...',
+        statusColor: '#3b82f6',
+      };
     },
   },
 
   // ── STOP GLOBAL ──────────────────────────────────────────────────────────
-  // Priority 99: verificado por último, apenas no texto final acumulado.
-  // multiSource desligado — frases de encerramento são ditas por completo;
-  // verificar interim causa falsos positivos por reconhecimento parcial.
+
+  {
+    id: 'stop_forcado',
+    type: 'stop',
+    priority: 98,
+    commands: STOP_FORCAR_COMMANDS,
+    cooldown: 0,
+    stopDelay: 500,
+    multiSource: true,
+    // SEM requireCaptura: ordem explícita do médico à extensão ("encerrar
+    // consulta") ignora o gate de captura — válvula de escape por voz quando
+    // o gate bloqueia indevidamente (fraseado de conduta fora dos marcadores).
+    guard: (s) => s.consultaEncerradaDetectada,
+    onMatch: (text, s) => {
+      s.consultaEncerradaDetectada = true;
+      console.log('[Hook] STOP forçado por comando explícito — gate de captura ignorado');
+      return { statusMessage: 'Encerramento por comando! Parando...', statusColor: '#16a34a' };
+    },
+  },
 
   {
     id: 'stop',
@@ -213,12 +254,76 @@ const VOICE_HOOKS = [
     commands: STOP_COMMANDS,
     cooldown: 0,
     stopDelay: 500,
+    // Fix A4: multiSource=true para verificar normalizedFinal (consultas longas) E
+    // normalizedCurrent (detecção em interim). A checagem de negação em _hookMatches
+    // previne falsos positivos; o guard bloqueia re-disparo após primeira detecção.
+    multiSource: true,
+    requireCaptura: true,
     guard: (s) => s.consultaEncerradaDetectada,
     onMatch: (text, s) => {
       s.consultaEncerradaDetectada = true;
-      statusText.textContent = 'Comando detectado! Parando...';
-      statusText.style.color = '#16a34a';
       console.log('[Hook] STOP detectado');
+      return { statusMessage: 'Comando detectado! Parando...', statusColor: '#16a34a' };
+    },
+  },
+
+  {
+    id: 'stop_curto',
+    type: 'stop',
+    priority: 99,
+    commands: STOP_COMMANDS_CURTOS,
+    cooldown: 0,
+    // endAnchored: frases curtas/ambíguas ("tá bom então", "tchau") só casam
+    // quando estão no FIM da fala atual. stopDelay maior dá tempo de o runner
+    // CANCELAR o stop (via onCancel) se a fala continuar — ex: "tá bom então
+    // vamos medir a pressão" não encerra a consulta.
+    endAnchored: true,
+    stopDelay: 2000,
+    requireCaptura: true,
+    guard: (s) => s.consultaEncerradaDetectada,
+    onMatch: (text, s) => {
+      s.consultaEncerradaDetectada = true;
+      console.log('[Hook] STOP curto detectado (aguardando confirmação por silêncio)');
+      return { statusMessage: 'Despedida detectada! Parando em 2s — fale para cancelar', statusColor: '#16a34a' };
+    },
+    onCancel: (s) => {
+      s.consultaEncerradaDetectada = false;
+    },
+  },
+
+  {
+    id: 'stop_saudacao',
+    type: 'stop',
+    priority: 99,
+    commands: STOP_SAUDACAO_COMMANDS,
+    cooldown: 0,
+    // "bom dia"/"boa tarde"/"boa noite" também são saudação de ABERTURA.
+    // Dupla proteção: endAnchored (só casa no fim da fala, com cancelamento
+    // se a fala continuar) + minSessionMs (ignorado nos primeiros 30s da
+    // gravação, janela em que a saudação é abertura, não despedida).
+    // O lastIndexOf já garante que só a ÚLTIMA ocorrência de "bom dia"
+    // no transcript é testada — a de abertura fica no início e não é o fim.
+    // minSessionMs=30s é suficiente: saudação de abertura ocorre em t<5s;
+    // qualquer despedida real ocorre depois de 30s de consulta.
+    // Caso real 2026-06-12: "tá ok, bom dia" encerrou a consulta e nenhum
+    // gatilho disparou — médico precisou parar manualmente.
+    // endAnchorSlack=5 (padrão=10): fillers legítimos após despedida têm ≤5
+    // chars ("né", "viu", "hein"). Janela menor evita falso positivo com
+    // palavras clínicas curtas como "perto" (6 chars) em contexto de refração
+    // ("boa noite perto" = teste de visão noturna para perto).
+    endAnchored: true,
+    endAnchorSlack: 5,
+    minSessionMs: 30000,
+    stopDelay: 2000,
+    requireCaptura: true,
+    guard: (s) => s.consultaEncerradaDetectada,
+    onMatch: (text, s) => {
+      s.consultaEncerradaDetectada = true;
+      console.log('[Hook] STOP saudação-despedida detectado (aguardando confirmação por silêncio)');
+      return { statusMessage: 'Despedida detectada! Parando em 2s — fale para cancelar', statusColor: '#16a34a' };
+    },
+    onCancel: (s) => {
+      s.consultaEncerradaDetectada = false;
     },
   },
 

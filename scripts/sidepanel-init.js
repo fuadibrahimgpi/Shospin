@@ -31,7 +31,19 @@ injectAllBtn.addEventListener('click', async () => {
   try { await injectAll(); } catch (e) { console.log('[UI] Erro na injeção manual:', e.message); }
 });
 
-clearBtn.addEventListener('click', clearAll);
+// Limpeza manual descarta também a fase 1 de dilatação persistida (novo paciente)
+clearBtn.addEventListener('click', () => clearAll({ clearAudio: true, clearCamera: true, discardDilatacao: true }));
+
+// Desfazer dilatação: reprocessa a consulta como completa (gatilho por engano).
+if (cancelDilatacaoBtn) cancelDilatacaoBtn.addEventListener('click', cancelarDilatacao);
+
+// Visibilidade do botão dirigida por UMA fonte: a chave persistida _shospDilatacaoPhase1.
+// storage.onChanged cobre todos os pontos de mutação (injeção de dilatação, undo,
+// clearAll, conclusão da fase 2) sem toggles espalhados. Checa também no load.
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === 'local' && changes._shospDilatacaoPhase1) refreshUndoVisibility();
+});
+refreshUndoVisibility();
 
 // ============================================================================
 // SELETOR DE MODO
@@ -92,4 +104,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         .catch(e => { console.log('[Keyboard] Erro na injeção:', e.message); sendResponse({ ok: false }); });
       return true; // canal assíncrono — não fechar antes da Promise resolver
   }
+});
+
+// ============================================================================
+// HANDSHAKE COM O BACKGROUND
+// ============================================================================
+// Avisa o background que os listeners acima já estão registrados. Se o painel
+// foi aberto por um atalho de teclado, o background reenvia a ação pendente
+// ao receber este sinal (em vez de esperar um timeout fixo).
+chrome.runtime.sendMessage({ action: 'panelReady' }).catch(() => {
+  /* background inativo — sem ação pendente para receber */
 });

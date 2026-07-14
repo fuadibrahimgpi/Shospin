@@ -23,7 +23,7 @@ window.GeminiService = {
   validateExamData:    (data)       => geminiExamAgent.validateExamData(data),
 
   // ── Agente de Entrevista ──
-  analyzeConsultation: (text) => geminiInterviewAgent.analyzeConsultation(text),
+  analyzeConsultation: (text, options) => geminiInterviewAgent.analyzeConsultation(text, options),
   detectExamTriggers:  (text) => geminiInterviewAgent.detectExamTriggers(text),
 
   // ── API / Config ──

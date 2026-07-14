@@ -275,6 +275,7 @@ test('[C6] manualCaptureBtn é reabilitado no bloco finally', () => {
 // ──────────────────────────────────────────────────────────────────────────────
 
 const audioJsSource = readSrcNormalized('scripts', 'sidepanel-audio.js');
+const initJsSource = readSrcNormalized('scripts', 'sidepanel-init.js');
 
 test('[C7] onend verifica !stopCommandTimeout antes de reiniciar speech', () => {
   expect(audioJsSource).toContain('isRecording && speechRecognition && !stopCommandTimeout');
@@ -475,7 +476,7 @@ test('[DE-2] Guard preserva injectBlefarite quando palavra ESTÁ na transcriçã
   expect(decision.injectFlags.injectBlefarite).toBe(true);
 });
 
-test('[DE-3] Guard remove linha "Associação ATB+corticoide" se não mencionada', () => {
+test('[DE-3] Guard rebaixa linha "Associação ATB+corticoide" para genérico se não mencionada', () => {
   const raw = {
     tipo_consulta: 'primeira_consulta',
     dados: {
@@ -489,10 +490,33 @@ test('[DE-3] Guard remove linha "Associação ATB+corticoide" se não mencionada
     transcribedText: 'compressa morna e lubrificante',
     hookFlags: {},
   });
-  expect(decision.clonedAIResponse.dados.tratamento.includes('Associação')).toBe(false);
-  expect(decision.clonedAIResponse.dados.tratamento.includes('Lubrificante')).toBe(true);
+  const trat = decision.clonedAIResponse.dados.tratamento;
+  // Classe ATB+corticoide não afirmada, mas a prescrição NÃO é apagada — é rebaixada (nível 3)
+  expect(trat.includes('Associação')).toBe(false);
+  expect(trat.includes('Medicação ocular prescrita')).toBe(true);
+  expect(trat.includes('1 gota 3x/dia')).toBe(true); // posologia preservada
+  expect(trat.includes('Lubrificante')).toBe(true);
   // Crítico: a resposta crua NÃO foi mutada
   expect(raw.dados.tratamento.includes('Associação')).toBe(true);
+});
+
+test('[DE-3b] Guard preserva "Associação ATB+corticoide" quando a classe É mencionada', () => {
+  const raw = {
+    tipo_consulta: 'primeira_consulta',
+    dados: {
+      hda: 'queixa',
+      conduta: 'Retorno 2 semanas',
+      tratamento: 'Compressa morna 2x/dia\nAssociação (ATB + corticoide ocular) 1 gota 3x/dia\nLubrificante 6x/dia',
+    },
+    injectBlefarite: true,
+  };
+  const decision = DecisionEngine.buildDecision(raw, {
+    transcribedText: 'blefarite, vou passar um colírio com antibiótico e corticoide',
+    hookFlags: {},
+  });
+  const trat = decision.clonedAIResponse.dados.tratamento;
+  expect(trat.includes('Associação (ATB + corticoide ocular)')).toBe(true);
+  expect(trat.includes('Medicação ocular prescrita')).toBe(false);
 });
 
 test('[DE-4] Guard adiciona "Não houve prescrição de óculos" se ausente', () => {
@@ -1366,6 +1390,86 @@ test('[CID-EXACT-2] isExact rejeita falsos positivos onde o código é parte de 
   expect(isExact("H1040")).toBe(false); // sufixo alfanumérico
   expect(isExact("CH104")).toBe(false); // prefixo alfanumérico
   expect(isExact("SELECIONACID('H1040', 'CONJUNTIVITE')")).toBe(false);
+});
+
+// ──────────────────────────────────────────────────────────────────────────────
+// 2026-07-08 — Retificação de refração: H52.9 (NE) removido quando há CID específico
+// Extrai a função REAL de sidepanel-injection.js e a exercita (a função é
+// autocontida, dependendo apenas de CID_CODE_PATTERN, injetada como argumento).
+// ──────────────────────────────────────────────────────────────────────────────
+
+function _extractFn(source, name) {
+  const start = source.indexOf('function ' + name);
+  if (start === -1) throw new Error('função não encontrada: ' + name);
+  let i = source.indexOf('{', start), depth = 0;
+  for (; i < source.length; i++) {
+    if (source[i] === '{') depth++;
+    else if (source[i] === '}' && --depth === 0) { i++; break; }
+  }
+  return source.slice(start, i);
+}
+
+const _dropUnspecifiedRefraction = new Function(
+  'CID_CODE_PATTERN',
+  _extractFn(injectionJsSource, '_dropUnspecifiedRefraction') + '\nreturn _dropUnspecifiedRefraction;'
+)(/^([A-Z]\d+(?:\.\d+)?)\s*[-–]/);
+
+test('[CID-REFRAC-1] remove H52.9 quando há miopia+astigmatismo (caso Vitor: entrevista + OCR)', () => {
+  const out = _dropUnspecifiedRefraction(
+    'H529 - Transtorno de refração não especificado\nH52.1 - Miopia\nH52.2 - Astigmatismo'
+  );
+  expect(out.includes('H529')).toBe(false);
+  expect(out.includes('H52.1 - Miopia')).toBe(true);
+  expect(out.includes('H52.2 - Astigmatismo')).toBe(true);
+});
+
+test('[CID-REFRAC-2] remove H52.9 com anisometropia/presbiopia (H52.3/H52.4 também são específicos)', () => {
+  expect(_dropUnspecifiedRefraction('H529 - Refração NE\nH523 - Anisometropia').includes('H529')).toBe(false);
+  expect(_dropUnspecifiedRefraction('H529 - Refração NE\nH524 - Presbiopia').includes('H529')).toBe(false);
+});
+
+test('[CID-REFRAC-3] mantém H52.9 quando é o único CID refrativo (nada mais específico)', () => {
+  const soNE = 'H529 - Transtorno de refração não especificado';
+  expect(_dropUnspecifiedRefraction(soNE)).toBe(soNE);
+  // blefarite não é refrativo → não habilita a remoção de H52.9
+  const comBlef = 'H010 - Blefarite\nH529 - Refração NE';
+  expect(_dropUnspecifiedRefraction(comBlef)).toBe(comBlef);
+});
+
+test('[CID-REFRAC-4] a retificação é chamada após a fusão dos CIDs do OCR', () => {
+  expect(injectionJsSource.includes('_dropUnspecifiedRefraction(cidTarget.value)')).toBe(true);
+});
+
+// ──────────────────────────────────────────────────────────────────────────────
+// 2026-07-08 — Desfazer dilatação: reprocessar consulta como completa
+// ──────────────────────────────────────────────────────────────────────────────
+
+test('[REPROC-1] prompt aceita forceComplete e injeta a diretiva de reprocessamento', () => {
+  expect(geminiSrcFull.includes('forceComplete = false')).toBe(true);
+  expect(geminiSrcFull.includes('MODO REPROCESSAMENTO')).toBe(true);
+  expect(geminiSrcFull.includes('dilatacaoDetectada=false')).toBe(true);
+});
+
+test('[REPROC-2] analyzeConsultation encaminha options.forceComplete ao builder do prompt', () => {
+  expect(geminiSrcFull.includes('options && options.forceComplete')).toBe(true);
+  expect(geminiSrcFull.includes('hasBlefarite, forceComplete)')).toBe(true);
+});
+
+test('[REPROC-3] handler de undo reprocessa com forceComplete e reinjeta com force', () => {
+  expect(audioJsSource.includes('function cancelarDilatacao')).toBe(true);
+  // reprocessa forçando dilatação off
+  expect(/analyzeConsultation\([^)]*forceComplete:\s*true/.test(audioJsSource)).toBe(true);
+  // reinjeta com force=true (sobrescreve a injeção da fase 1)
+  expect(audioJsSource.includes('injectAll(true)')).toBe(true);
+  // NÃO reentra no fluxo top-level (evita re-armar a dilatação): não chama detectaDilatacaoNaFala
+  expect(audioJsSource.includes('function cancelarDilatacao') &&
+    audioJsSource.split('function cancelarDilatacao')[1].split('async function')[0]
+      .includes('detectaDilatacaoNaFala')).toBe(false);
+});
+
+test('[REPROC-4] visibilidade do botão dirigida por storage.onChanged (uma fonte)', () => {
+  expect(audioJsSource.includes('function refreshUndoVisibility')).toBe(true);
+  expect(initJsSource.includes('storage.onChanged') && initJsSource.includes('refreshUndoVisibility')).toBe(true);
 });
 
 // ──────────────────────────────────────────────────────────────────────────────

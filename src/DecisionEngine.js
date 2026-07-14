@@ -141,8 +141,11 @@
   }
 
   /**
-   * Guard 2: linha "Associação ATB+corticoide" só permanece se há menção
-   * explícita de antibiótico/corticoide na transcrição.
+   * Guard 2: a linha "Associação ATB+corticoide" (expressão de GRUPO/nível 2) só
+   * permanece se há menção explícita de antibiótico/corticoide na transcrição.
+   * Sem esse apoio, a classe não pode ser afirmada — mas a prescrição NÃO é apagada:
+   * é REBAIXADA ao nível genérico ("Medicação ocular prescrita"), preservando a
+   * posologia. Backstop determinístico da HIERARQUIA DE NOMEAÇÃO do prompt (nível 3).
    */
   function _guardAssociacaoATB(cloned, ctx, log) {
     const tratamento = cloned.dados && cloned.dados.tratamento;
@@ -151,13 +154,18 @@
     if (!hasAssocLine) return;
     const hasMention = /antibi[oó]tico|corticoide|tobramicin|dexametason/i.test(ctx.transcribedText || '');
     if (hasMention) return;
-    const filtered = tratamento
+    // Rebaixa "Associação (ATB + corticoide ocular) <posologia>" → "Medicação ocular
+    // prescrita <posologia>". Remove o descritor de classe (tudo de "Associação" até o
+    // início da posologia, isto é, o primeiro dígito), preservando gota/frequência/olho.
+    const downgraded = tratamento
       .split('\n')
-      .filter(line => !/associa[çc][ãa]o/i.test(line))
+      .map(line => /associa[çc][ãa]o/i.test(line)
+        ? line.replace(/associa[çc][ãa]o[^0-9]*/i, 'Medicação ocular prescrita ').trim()
+        : line)
       .join('\n')
       .trim();
-    cloned.dados.tratamento = filtered || null;
-    log.push('Linha "Associação" removida do tratamento — não mencionada na transcrição');
+    cloned.dados.tratamento = downgraded || null;
+    log.push('Linha "Associação" rebaixada para "Medicação ocular prescrita" — classe ATB+corticoide não mencionada na transcrição');
   }
 
   /**

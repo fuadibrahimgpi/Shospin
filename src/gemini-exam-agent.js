@@ -630,6 +630,13 @@ Responda APENAS JSON puro (sem markdown). Exemplo de formato:
         return { eye: lado, severity: 'hard', message: `${lado.toUpperCase()}: esfera da 2ª leitura não pôde ser interpretada ("${vEsfStr}"). Refaça a captura.` };
       }
 
+      // ── Cilindro descartado por eixo ausente na 1ª leitura ──
+      // O olho já foi reduzido a esférico puro de propósito. Divergência de
+      // cilindro/eixo com a verificação é esperada (a 2ª leitura pode até achar
+      // o cilindro), mas não deve bloquear: ambas concordam na esfera e só o
+      // astigmatismo — sem eixo — é não-injetável. A esfera já foi conferida.
+      if (p._cilDescartadoPorEixo) continue;
+
       // ── Cilindro ──
       const pCil = p?.cil != null ? parseFloat(p.cil) : null;
       const vCil = v?.c != null ? parseFloat(v.c) : null;
@@ -1061,7 +1068,8 @@ Responda APENAS com o JSON. Sem texto antes, sem texto depois, sem markdown.
   _processEye(eye, label, avisos) {
     const medicoes = Array.isArray(eye.medicoes) ? eye.medicoes : [];
     const media = eye.media || null;
-    const se = eye.se || null;
+    let se = eye.se || null;
+    let cilDescartadoPorEixo = false;
 
     // ESF: média prioritária; se ausente, modal das medições
     let esf = media?.s ?? null;
@@ -1161,8 +1169,13 @@ Responda APENAS com o JSON. Sem texto antes, sem texto depois, sem markdown.
       // Cilindro sem eixo não define direção do astigmatismo — clinicamente
       // não-injetável e tipicamente sinal de leitura parcial/alucinada.
       if (cil !== null && eixo === null) {
-        avisos.push(`${label}: cilindro C=${cil} presente mas eixo ausente — ambos descartados (cilindro sem eixo é inválido)`);
+        avisos.push(`${label}: cilindro C=${cil} presente mas eixo ausente — cilindro descartado; olho injetado como esférico puro (S.E. impresso ignorado por refletir o cilindro removido)`);
         cil = null;
+        cilDescartadoPorEixo = true;
+        // O S.E. impresso embutia o cilindro que acabamos de descartar, então
+        // deixa de ser comparável a S+C/2. Anulá-lo evita que o cross-check
+        // determinístico de S.E. bloqueie a captura inteira (tono/paqui inclusos).
+        se = null;
       }
     }
 
@@ -1180,7 +1193,7 @@ Responda APENAS com o JSON. Sem texto antes, sem texto depois, sem markdown.
     }
 
     if (esf != null) esf = String(esf).toLowerCase();
-    return { esf, cil, eixo, se };
+    return { esf, cil, eixo, se, _cilDescartadoPorEixo: cilDescartadoPorEixo };
   }
 
   /**

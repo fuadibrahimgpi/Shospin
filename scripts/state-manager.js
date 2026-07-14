@@ -32,6 +32,8 @@ const _FLAG_MAP = {
   dilatacaoDetectada:        () => dilatacaoDetectada,
   fundoscopiaDetectada:      () => fundoscopiaDetectada,
   consultaEncerradaDetectada: () => consultaEncerradaDetectada,
+  despedidaNaSessao:         () => despedidaNaSessao,
+  fase2DilatacaoAtiva:       () => fase2DilatacaoAtiva,
 };
 
 // Setters separados porque JS não permite `eval` em strict mode sem wrapper.
@@ -48,6 +50,8 @@ const _FLAG_SETTERS = {
   dilatacaoDetectada:          v => { dilatacaoDetectada = v; },
   fundoscopiaDetectada:        v => { fundoscopiaDetectada = v; },
   consultaEncerradaDetectada:  v => { consultaEncerradaDetectada = v; },
+  despedidaNaSessao:           v => { despedidaNaSessao = v; },
+  fase2DilatacaoAtiva:         v => { fase2DilatacaoAtiva = v; },
 };
 
 const StateManager = {
@@ -86,6 +90,7 @@ const StateManager = {
     if (stopCommandTimeout) { clearTimeout(stopCommandTimeout); stopCommandTimeout = null; }
     stopPendingInfo = null;
     stopGateOffset = 0;
+    stopGateBlockCount = 0;
 
     // Contador de erros no-speech
     noSpeechCount = 0;

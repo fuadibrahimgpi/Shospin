@@ -73,6 +73,20 @@ let lenteLimpaDetectada = false;
 let dilatacaoDetectada = false;
 let fundoscopiaDetectada = false;
 let consultaEncerradaDetectada = false;
+// Sticky: uma despedida/encerramento já foi DETECTADA nesta sessão (mesmo que
+// bloqueada pelo gate ou cancelada). Diferente de consultaEncerradaDetectada,
+// NÃO é limpa no cancelamento — persiste até o resetSession. Usada para suprimir
+// a dilatação depois que o médico já sinalizou fim de consulta (evita hijack de
+// consulta encerrada quando o "vamos dilatar" se refere a outra pessoa).
+let despedidaNaSessao = false;
+// Fase 2 de dilatação: havia uma pausa de dilatação persistida
+// (_shospDilatacaoPhase1) quando esta gravação começou — ou seja, esta sessão
+// é o RETORNO do paciente. Suprime o hook de dilatação por voz: frases
+// retrospectivas inevitáveis no retorno ("já dilatou", "pinguei o colírio
+// para dilatar a pupila") re-disparavam a pausa e a consulta nunca fechava.
+// Setada em startRecording() a partir do storage (exceto motivo='exame');
+// os fallbacks pós-parada passam a varrer só a cauda do texto nesta fase.
+let fase2DilatacaoAtiva = false;
 
 // ============================================================================
 // REGISTRO CANÔNICO DAS FLAGS DE SESSÃO
@@ -94,6 +108,8 @@ const SESSION_FLAG_DEFAULTS = Object.freeze({
   dilatacaoDetectada: false,
   fundoscopiaDetectada: false,
   consultaEncerradaDetectada: false,
+  despedidaNaSessao: false,
+  fase2DilatacaoAtiva: false,
 });
 
 // Cooldown unificado e debounce de parada
@@ -109,6 +125,12 @@ let stopPendingInfo = null;
 // a consulta — sem isso, a despedida antiga que ficou no transcript pararia
 // a gravação no meio do ditado da prescrição. Ver _stopGateBlocks no runner.
 let stopGateOffset = 0;
+// Válvula de escape do gate: nº de despedidas DISTINTAS já bloqueadas por
+// falta de conduta/tratamento nesta sessão. A partir da 2ª despedida distinta
+// sem captura o gate LIBERA o encerramento — casos reais (2026-07-03/06/07)
+// mostraram que despedida repetida sem captura indica marcador de conduta
+// faltando (falso bloqueio), não conduta faltando. Ver _stopGateBlocks.
+let stopGateBlockCount = 0;
 
 // Auto-stop por silêncio prolongado (consultas que terminam sem despedida detectável)
 let lastSpeechTime = 0;
@@ -157,9 +179,12 @@ window.__shospState = Object.freeze({
   get dilatacaoDetectada()           { return dilatacaoDetectada; },
   get fundoscopiaDetectada()         { return fundoscopiaDetectada; },
   get consultaEncerradaDetectada()   { return consultaEncerradaDetectada; },
+  get despedidaNaSessao()            { return despedidaNaSessao; },
+  get fase2DilatacaoAtiva()          { return fase2DilatacaoAtiva; },
   get lastTriggerTime()              { return lastTriggerTime; },
   get hasStopScheduled()             { return stopCommandTimeout !== null; },
   get stopGateOffset()               { return stopGateOffset; },
+  get stopGateBlockCount()           { return stopGateBlockCount; },
   get recentTextBufferLength()       { return recentTextBuffer.length; },
   // Snapshot serializável para logs (sem referências a timers ou DOM).
   // As flags são derivadas de SESSION_FLAG_DEFAULTS via os getters acima —
@@ -337,6 +362,7 @@ const cameraBadge = document.getElementById('cameraBadge');
 const actionButtons = document.getElementById('actionButtons');
 const injectAllBtn = document.getElementById('injectAllBtn');
 const clearBtn = document.getElementById('clearBtn');
+const cancelDilatacaoBtn = document.getElementById('cancelDilatacaoBtn');
 const successMessage = document.getElementById('successMessage');
 const btnSearchCid = document.getElementById('btnSearchCid');
 const btnSearchCidRetorno = document.getElementById('btnSearchCidRetorno');

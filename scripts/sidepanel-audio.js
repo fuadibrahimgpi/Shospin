@@ -89,6 +89,23 @@ async function startRecording() {
     }
     stopPendingInfo = null;
     stopGateOffset = 0;
+    stopGateBlockCount = 0;
+
+    // Fase 2 de dilatação: se há pausa persistida, esta gravação é o RETORNO
+    // do paciente. Suprimir o hook de dilatação por voz nesta sessão — frases
+    // retrospectivas do retorno ("já dilatou", "pinguei o colírio para dilatar
+    // a pupila") re-disparavam a pausa e a consulta nunca fechava.
+    // motivo='exame' (pausa manual no meio do exame, sem dilatação) NÃO
+    // suprime: a dilatação ainda pode ser anunciada na sessão retomada.
+    try {
+      const _store = await new Promise(resolve =>
+        chrome.storage.local.get('_shospDilatacaoPhase1', d => resolve(d._shospDilatacaoPhase1 || null))
+      );
+      if (_store && Date.now() - (_store.ts || 0) <= 6 * 60 * 60 * 1000 && _store.motivo !== 'exame') {
+        StateManager.setHookFlag('fase2DilatacaoAtiva', true);
+        console.log('[Audio] Fase 2 de dilatação — gatilho de dilatação por voz suprimido nesta sessão.');
+      }
+    } catch (_e) { /* storage indisponível — segue sem supressão */ }
 
     // Timestamp de início — usado para calcular duração mínima da sessão
     sessionStartTime = Date.now();
@@ -178,7 +195,11 @@ async function startRecording() {
       const _textToScan = _finalNorm || normalizeText(recentTextBuffer);
 
       if (!StateManager.getHookFlag('dilatacaoDetectada')) {
-        if (ClinicalTriggers.detectaDilatacaoNaFala(_textToScan)) {
+        // Na fase 2 (retorno da dilatação), narrações retrospectivas espalhadas
+        // pela sessão não contam — só um comando na CAUDA (dito logo antes da
+        // parada manual) indica uma NOVA pausa real de dilatação.
+        const _dilScan = fase2DilatacaoAtiva ? _textToScan.slice(-300) : _textToScan;
+        if (ClinicalTriggers.detectaDilatacaoNaFala(_dilScan)) {
           StateManager.setHookFlag('dilatacaoDetectada', true);
           console.log('[Audio] Dilatação detectada no fallback onstop');
         }
@@ -359,25 +380,14 @@ async function processAudioInBackground(audioBlob, capturedText) {
       return;
     }
 
-    // Guard pré-Gemini: exame/refração em andamento — não analisar como consulta final.
-    // Exceção: dilatacaoDetectada=true indica pausa clínica (exame concluído) — o guard
-    // não se aplica porque o downstream já bloqueia auto-injeção e exibe dados para revisão.
-    // Exceção 2: se a consulta foi explicitamente encerrada (STOP detectado ou manual), bypassar o guard.
-    if (!dilatacaoDetectada && !consultaEncerradaDetectada && ClinicalTriggers.detectaExameEmAndamento(textToProcess)) {
-      statusText.textContent = 'Exame em andamento, aguardando encerramento';
-      statusText.style.color = '#eab308';
-      statusText.style.fontWeight = 'normal';
-      processingStatus.textContent = 'Exame em andamento — aguardando gatilho de fim ou pausa';
-      console.log('[Audio] Exame em andamento detectado — análise com Gemini adiada.');
-      return;
-    }
-
     // ── Contexto de dilatação (fase 2) ──
     // Se há uma pausa de dilatação recente persistida, anexar a transcrição da fase 1
     // (entrevista) antes do texto desta sessão, separada pelo marcador. O Gemini analisa
     // a consulta completa e libera conduta/tratamento/exames (regra do marcador no prompt).
     // Os fallbacks de gatilho abaixo continuam varrendo APENAS textToProcess — o
     // "vai dilatar" da fase 1 não pode redetectar dilatação na fase 2.
+    // Carregado ANTES do guard de exame em andamento: o guard também precisa
+    // do acumulado para persistir a transcrição ao adiar a análise.
     let _phase1Store = null;
     try {
       _phase1Store = await new Promise(resolve =>
@@ -392,6 +402,36 @@ async function processAudioInBackground(audioBlob, capturedText) {
     if (_phase1Store?.transcript) {
       analysisText = _phase1Store.transcript + '\n\n[RETORNO DA DILATACAO]\n\n' + textToProcess;
       console.log('[Audio] Transcrição da fase pré-dilatação anexada como contexto da análise.');
+    }
+
+    // Guard pré-Gemini: exame/refração em andamento — não analisar como consulta final.
+    // Exceção: dilatacaoDetectada=true indica pausa clínica (exame concluído) — o guard
+    // não se aplica porque o downstream já bloqueia auto-injeção e exibe dados para revisão.
+    // Exceção 2: se a consulta foi explicitamente encerrada (STOP detectado ou manual), bypassar o guard.
+    if (!dilatacaoDetectada && !consultaEncerradaDetectada && ClinicalTriggers.detectaExameEmAndamento(textToProcess)) {
+      // Persistir a transcrição ANTES de adiar: a próxima gravação chama
+      // resetSession() e apaga recognizedText — sem isso, a entrevista de uma
+      // pausa manual (ex.: gatilho de dilatação não reconhecido) era destruída
+      // em silêncio. A próxima sessão anexa este texto via marcador, como na
+      // fase 2 de dilatação. motivo='exame' NÃO suprime o hook de dilatação
+      // na próxima sessão (a dilatação ainda pode ser anunciada nela).
+      try {
+        chrome.storage.local.set({
+          _shospDilatacaoPhase1: {
+            audio: _phase1Store?.audio || null,
+            transcript: analysisText,
+            ts: Date.now(),
+            motivo: _phase1Store?.motivo || 'exame',
+          },
+        });
+        console.log('[Audio] Exame em andamento — transcrição persistida; será anexada à próxima gravação.');
+      } catch (_e) { /* storage indisponível — não-fatal */ }
+      statusText.textContent = 'Exame em andamento, aguardando encerramento';
+      statusText.style.color = '#eab308';
+      statusText.style.fontWeight = 'normal';
+      processingStatus.textContent = 'Exame em andamento — aguardando gatilho de fim ou pausa';
+      console.log('[Audio] Exame em andamento detectado — análise com Gemini adiada.');
+      return;
     }
 
     const data = await window.GeminiService.analyzeConsultation(analysisText);
@@ -422,7 +462,9 @@ async function processAudioInBackground(audioBlob, capturedText) {
           dilatacaoDetectada = true;
         } else {
           const finalNorm = normalizeText(textToProcess) || normalizeText(recentTextBuffer);
-          if (ClinicalTriggers.detectaDilatacaoNaFala(finalNorm)) {
+          // Fase 2: só a cauda conta (narração retrospectiva não é nova pausa)
+          const scanDil = fase2DilatacaoAtiva ? finalNorm.slice(-300) : finalNorm;
+          if (ClinicalTriggers.detectaDilatacaoNaFala(scanDil)) {
             dilatacaoDetectada = true;
           }
         }
@@ -476,6 +518,7 @@ async function processAudioInBackground(audioBlob, capturedText) {
               audio: _phase1Store?.audio || null,
               transcript: analysisText,
               ts: Date.now(),
+              motivo: 'dilatacao',
             },
           });
           console.log('[Audio] Transcrição da fase 1 (pré-dilatação) persistida para a fase 2.');
@@ -561,6 +604,106 @@ async function processAudioInBackground(audioBlob, capturedText) {
     processingIndicator.classList.add('hidden');
     seconds = 0;
     updateTimerDisplay();
+  }
+}
+
+// ============================================================================
+// DESFAZER DILATAÇÃO — reprocessar a consulta como completa
+// ============================================================================
+// Aciona quando o gatilho de dilatação disparou por engano (ex.: "vamos esperar
+// o colírio fazer efeito para ELE dilatar" era sobre o acompanhante, não o
+// paciente). Reprocessa a transcrição da fase 1 forçando dilatação=false e
+// reinjeta conduta/tratamento/exames. NÃO reentra no fluxo top-level (cujos
+// guards — áudio curto, exame em andamento e o fallback de dilatação —
+// re-armariam a pausa); chama analyzeConsultation + DecisionEngine + injeção
+// diretamente, com forceComplete=true.
+
+/** Mostra/esconde o botão de desfazer conforme a pausa de dilatação persistida. */
+function refreshUndoVisibility() {
+  if (!cancelDilatacaoBtn) return;
+  try {
+    chrome.storage.local.get('_shospDilatacaoPhase1', d => {
+      const store = d._shospDilatacaoPhase1;
+      const ativo = !!(store && store.transcript &&
+        Date.now() - (store.ts || 0) <= 6 * 60 * 60 * 1000);
+      cancelDilatacaoBtn.classList.toggle('hidden', !ativo);
+    });
+  } catch (_e) { /* storage indisponível — mantém oculto */ }
+}
+
+async function cancelarDilatacao() {
+  let store = null;
+  try {
+    store = await new Promise(resolve =>
+      chrome.storage.local.get('_shospDilatacaoPhase1', d => resolve(d._shospDilatacaoPhase1 || null)));
+  } catch (_e) { store = null; }
+
+  if (!store?.transcript) {
+    chrome.storage.local.remove('_shospDilatacaoPhase1');
+    refreshUndoVisibility();
+    statusText.textContent = 'Nenhuma pausa de dilatação ativa para reprocessar.';
+    statusText.style.color = '#eab308';
+    return;
+  }
+
+  processingIndicator.classList.remove('hidden');
+  processingStatus.textContent = 'Reprocessando consulta (dilatação cancelada)...';
+  statusText.textContent = 'Reprocessando...';
+  statusText.style.color = '#3b82f6';
+  statusText.style.fontWeight = 'normal';
+
+  try {
+    // Zera o estado de dilatação e permite reinjeção (a fase 1 já injetou a entrevista).
+    StateManager.setHookFlag('dilatacaoDetectada', false);
+    audioDataInjected = false;
+    cameraDataInjected = false;
+
+    const analysisText = store.transcript;
+    const data = await window.GeminiService.analyzeConsultation(analysisText, { forceComplete: true });
+    if (!data || !data.dados) throw new Error('Reprocessamento retornou resposta inválida');
+
+    // DecisionEngine com dilatação forçada em false.
+    let workingData = data;
+    try {
+      if (typeof DecisionEngine !== 'undefined' && DecisionEngine.buildDecision) {
+        const decision = DecisionEngine.buildDecision(data, {
+          transcribedText: analysisText,
+          hookFlags: { blefariteInjetada, examesNormaisInjetados, dilatacaoDetectada: false },
+          tipoConsulta: data.tipo_consulta,
+        });
+        if (decision.guardsApplied.length > 0) {
+          console.log('[Dilatacao] Reprocessamento — guards:', decision.guardsApplied);
+        }
+        workingData = decision.clonedAIResponse;
+        workingData.injectExamesNormais = decision.injectFlags.injectExamesNormais;
+        workingData.injectBlefarite     = decision.injectFlags.injectBlefarite;
+      }
+    } catch (e) {
+      console.warn('[Dilatacao] DecisionEngine falhou no reprocessamento (não-fatal):', e.message);
+      workingData = data;
+    }
+    workingData.dilatacaoDetectada = false; // garante placeholder correto em displayAudioResults
+
+    displayAudioResults(workingData);
+    await new Promise(r => setTimeout(r, 800));
+    await injectAll(true); // force: sobrescreve a injeção da fase 1
+
+    chrome.storage.local.remove('_shospDilatacaoPhase1');
+
+    const semConduta = !workingData.dados?.conduta && !workingData.dados?.tratamento;
+    processingStatus.textContent = semConduta
+      ? 'Reprocessado — conduta/tratamento não estavam no áudio; complete manualmente.'
+      : 'Consulta reprocessada e injetada (dilatação cancelada).';
+    statusText.textContent = 'Clique para nova gravação';
+    statusText.style.color = '';
+  } catch (err) {
+    console.error('[Dilatacao] Falha ao cancelar/reprocessar:', err);
+    processingStatus.textContent = 'Erro ao reprocessar — verifique o SHOSP.';
+    statusText.textContent = 'Erro ao reprocessar.';
+    statusText.style.color = '#dc2626';
+  } finally {
+    processingIndicator.classList.add('hidden');
+    refreshUndoVisibility();
   }
 }
 

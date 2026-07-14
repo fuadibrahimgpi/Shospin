@@ -62,6 +62,7 @@ Não inclua em `conduta`:
 - Nomes e posologias de colírios ou medicamentos prescritos. Isso vai em `tratamento`.
 - Logística operacional da clínica: `retirar exames`, `pagar na recepção`, `agendar na recepção`, `entregar receita`.
 - Logística pós-consulta de óculos: `conferir óculos após prontos`, `retirar na ótica`.
+- Orientação comercial/orçamento de óculos: `orientado a fazer orçamento em mais de uma ótica`, `pesquisar preço em várias óticas`, `cotar valor das lentes`, `comparar preços`. Isso é orientação de compra ao paciente, não decisão médica, e nunca entra em `conduta`.
 - Retornos condicionais vagos quando já existe retorno com prazo.
 - Frases genéricas sem decisão clínica: `acompanhar`, `observar`, `orientado`, sem objeto ou prazo.
 - Valores isolados de exame sem decisão médica explícita.
@@ -89,6 +90,19 @@ Não registre em conduta. Envie para `tratamento`:
 - Medicamentos orais.
 - Lubrificantes oculares.
 - Ômega 3 e suplementos.
+
+### Hierarquia de nomeação da medicação prescrita
+
+Ao registrar um medicamento que o médico **prescreve**, use o nível mais específico possível — nesta ordem, descendo apenas quando o nível acima não for possível:
+
+1. **Princípio ativo** — quando o médico **nomeou** o remédio: princípio ativo dito, ou marca mapeável pela base de conhecimento. Ex.: "Vigadexa" → `Moxifloxacino + dexametasona`; "dorzolamida" → `Dorzolamida`.
+   - ⚠️ Nunca infira o princípio ativo a partir do diagnóstico ou do contexto — só quando o nome (marca ou princípio) foi efetivamente pronunciado. Princípio ativo errado num prontuário é pior que um genérico.
+2. **Grupo / classe** — quando o remédio não foi nomeado, mas a classe é identificável pela fala (finalidade dita ou tratamento inequívoco). Ex.: "colírio para pressão" → `Colírio hipotensor ocular`; antibiótico + corticoide indicados na blefarite → `Associação (ATB + corticoide ocular)`; "colírio de alergia" → `Colírio antialérgico`.
+3. **Genérico** — quando nem o nome nem a classe podem ser identificados, mas houve prescrição. Ex.: "usa o colírio, uma gota 3x/dia" → `Medicação ocular prescrita`.
+
+⚠️ **Nunca omita uma prescrição** porque o nome não foi dito — desça para o nível 2 ou 3, mas registre. A posologia (gota, frequência, olho, duração) é preservada em qualquer nível quando mencionada.
+
+Registrar a classe (`colírio hipotensor`) ou o genérico (`Medicação ocular prescrita`) **não** viola a regra anti-invenção de nomes: essas formas descrevem sem afirmar um princípio ativo que não foi dito.
 
 ### Regra anti-associação medicamentosa
 
@@ -354,6 +368,7 @@ Descarte frases que são apenas fluxo administrativo, mesmo que tenham sido dita
 - `Entregar receita`.
 - `Passar na ótica`.
 - `Conferir óculos quando ficarem prontos`.
+- `Fazer orçamento em mais de uma ótica` / `pesquisar preço em várias óticas` / `comparar preços das lentes`.
 
 Essas frases não são conduta médica para o prontuário.
 
@@ -540,3 +555,16 @@ Antes de finalizar a conduta, confirme:
 - **Pedido do usuário**: para prescrição de óculos, a única informação clínica necessária é se é multifocal ou não. Orientações sobre adaptação/uso podem ser mencionadas de forma genérica, sem detalhar o conteúdo — nunca omitidas por completo quando existirem.
 - **Comportamento anterior**: quando o médico dava qualquer orientação sobre uso, adaptação ou escolha de óculos, a regra mandava descartar completamente essa informação, registrando apenas `Prescrição de óculos [tipo]` — sem nenhum sinal de que orientação foi dada.
 - **Correção aplicada**: a regra "Exceção: orientações sobre uso dos óculos" foi reformulada — quando houver qualquer orientação de uso/adaptação/escolha, acrescentar o sufixo genérico `" com orientações sobre o uso"` à própria linha de prescrição (ex.: `Prescrição de óculos multifocais com orientações sobre o uso`), sem detalhar o conteúdo. Sem orientação → prescrição pura, sem sufixo. Detalhes técnicos de lente (antirreflexo, filtro azul, tamanho, qualidade, marca) continuam sendo descartados por completo, sem sufixo — essa categoria não mudou. Mesma regra atualizada em `src/geminiService.js`.
+
+### 2026-07-07 — Orientação de orçamento em mais de uma ótica injetada na conduta
+
+- **Pedido do usuário**: quando o médico orienta o paciente a fazer orçamento/pesquisa de preço em mais de uma ótica, essa informação não deve ir para a conduta.
+- **Causa raiz**: a lista de descarte cobria logística de retirada de óculos (`retirar na ótica`, `conferir óculos após prontos`), mas não cobria explicitamente a orientação comercial de cotação/comparação de preços. Sem exemplo, o modelo podia registrar `Orientado a fazer orçamento em mais de uma ótica` como linha de conduta.
+- **Correção aplicada**: adicionada categoria "Orientação comercial/orçamento de óculos" na lista de descarte e na seção "Descarte de logística operacional" — orientar o paciente a orçar/cotar/comparar preços em óticas é orientação de compra, não decisão médica, e nunca entra em `conduta`. Mesma regra adicionada como filtro de descarte em `src/gemini-interview-agent.js`.
+
+### 2026-07-08 — Hierarquia de nomeação da medicação prescrita (princípio ativo → grupo → genérico)
+
+- **Pedido do usuário**: sempre que possível identificar o princípio ativo, registrá-lo; não sendo possível, registrar ao menos o grupo/classe da medicação; não sendo possível o grupo, registrar que foi prescrita alguma medicação. Nunca omitir a prescrição.
+- **Comportamento anterior**: a "Associação (ATB + corticoide ocular)" era forçada de forma incondicional na blefarite pelo prompt, e o guard `_guardAssociacaoATB` no DecisionEngine **apagava** a linha por completo quando a transcrição não mencionava antibiótico/corticoide — perdendo o registro de que houve prescrição. Um colírio prescrito sem nome ("uma gota 3x/dia") não tinha nível de fallback definido.
+- **Correção aplicada**: adicionada a seção "Hierarquia de nomeação da medicação prescrita" (3 níveis) na skill e no prompt (`_buildConsultationPrompt`). O nível 1 (princípio ativo) é estritamente condicionado ao nome ter sido pronunciado — nunca inferido do diagnóstico. A regra da blefarite passou a nomear o colírio pelos 3 níveis em vez de forçar sempre a classe ATB+corticoide. O guard `_guardAssociacaoATB` foi alterado de **apagar** para **rebaixar** a linha ao genérico (`Medicação ocular prescrita`), preservando a posologia. Testes `[DE-3]` (rebaixamento) e `[DE-3b]` (preservação quando a classe é mencionada) em `utils/integration-test.js`.
+- **Limitação conhecida (não corrigida)**: o `hasMention` do guard é um OR sobre `antibiótico|corticoide`, então a linha da classe sobrevive mesmo se o médico citou só um dos dois — a expressão "ATB + corticoide" pode sobre-afirmar o corticoide. Fora do escopo deste pedido.

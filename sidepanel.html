@@ -50,6 +50,15 @@
         <p id="processingStatus">Processando...</p>
       </div>
 
+      <!-- Desfazer dilatação: reprocessa a consulta como completa quando o
+           gatilho de dilatação disparou por engano (ex.: "vamos dilatar" era
+           sobre outra pessoa). Visível só enquanto há uma pausa persistida. -->
+      <button id="cancelDilatacaoBtn" class="btn btn-secondary hidden"
+              style="margin-top: 8px; width: 100%;"
+              title="A consulta foi marcada como dilatação por engano — reprocessar como consulta completa">
+        Não era dilatação — reprocessar consulta
+      </button>
+
       <!-- Tipo de Consulta -->
       <div id="consultationType" class="consultation-type hidden">
         <span class="type-badge primeira">Primeira Consulta</span>

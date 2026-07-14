@@ -62,6 +62,24 @@ if (btnSearchCidRetorno) {
 // Extrai o código CID do formato "H01.0 - Descrição" (grupo 1 = código)
 const CID_CODE_PATTERN = /^([A-Z]\d+(?:\.\d+)?)\s*[-–]/;
 
+// Retificação de refração: H52.9 (transtorno de refração NÃO especificado) é
+// redundante quando já existe um CID refrativo específico no mesmo diagnóstico —
+// H52.0 (hipermetropia), H52.1 (miopia), H52.2 (astigmatismo), H52.3 (anisometropia)
+// ou H52.4 (presbiopia). Ocorre quando a entrevista devolve H52.9 e o OCR do ticket
+// (ou a própria IA) adiciona os específicos: mantém só os específicos, remove o vago.
+function _dropUnspecifiedRefraction(fieldValue) {
+  if (!fieldValue) return fieldValue;
+  const normCid = s => s.replace(/\./g, '').toUpperCase();
+  const lines = fieldValue.split('\n');
+  const codes = lines.map(l => {
+    const m = l.match(CID_CODE_PATTERN);
+    return m ? normCid(m[1]) : null;
+  });
+  const hasSpecific = codes.some(c => c && /^H52[0-4]$/.test(c));
+  if (!hasSpecific) return fieldValue;
+  return lines.filter((_, i) => codes[i] !== 'H529').join('\n');
+}
+
 const _CLINICAL_TERM_TO_CID = [
   [/presbiop/i,      'H524'],
   [/blefarite/i,     'H010'],
@@ -643,6 +661,7 @@ async function injectAll(force = false) {
         audio: combinedData.audio,
         transcript: _phase1Data?.transcript || recognizedText || '',
         ts: Date.now(),
+        motivo: 'dilatacao',
       } });
       console.log('[InjectAll] Dados da fase 1 (dilatação) salvos para re-injeção pós-dilatação.');
     } else {
@@ -688,6 +707,16 @@ async function injectAll(force = false) {
         if (novosCids.length) {
           cidTarget.value = [cidTarget.value, ...novosCids].filter(Boolean).join('\n');
           console.log('[AutoCID-OCR] CIDs de refração adicionados:', novosCids);
+        }
+      }
+
+      // Retificação: remove H52.9 (refração NE) quando já há CID refrativo específico
+      // no diagnóstico (vindo do OCR ou da própria entrevista).
+      if (cidTarget && cidTarget.value) {
+        const reconciled = _dropUnspecifiedRefraction(cidTarget.value);
+        if (reconciled !== cidTarget.value) {
+          cidTarget.value = reconciled;
+          console.log('[AutoCID] H52.9 removido — CID refrativo específico presente no diagnóstico');
         }
       }
 
@@ -780,10 +809,12 @@ function clearAll(options = { clearAudio: true, clearCamera: true }) {
       lioDetectada = false;
       opacidadeCapsulaDetectada = false;
       dilatacaoDetectada = false;
+      fase2DilatacaoAtiva = false;
       lastTriggerTime = 0;
       if (stopCommandTimeout) { clearTimeout(stopCommandTimeout); stopCommandTimeout = null; }
       stopPendingInfo = null;
       stopGateOffset = 0;
+      stopGateBlockCount = 0;
       recognizedText = '';
     }
 

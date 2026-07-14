@@ -166,6 +166,15 @@ const STOP_FORCAR_COMMANDS = [
   'encerrar consulta',
   'finalizar a consulta',
   'finalizar consulta',
+  // declarações de fim ditas à extensão — caso real 2026-07-07: médico disse
+  // "consulta encerrado ... fim da consulta" e nada casou (só "encerrar
+  // consulta" parou); cobrir variantes de gênero (STT erra concordância)
+  'consulta finalizada',
+  'consulta finalizado',
+  'consulta encerrada',
+  'consulta encerrado',
+  'fim da consulta',
+  'fim de consulta',
   'pode encerrar a gravacao',
   'encerrar a gravacao',
   'encerrar gravacao',
@@ -254,10 +263,14 @@ const DILATACAO_COMMANDS = [
   // prescreve colírio de blefarite ou lubrificante:
   //   'vou pingar o colirio', 'vou pingar os colirios', 'pingar o colirio', 'pingar colirio'
   // Manter apenas as formas que combinam explicitamente com dilatação:
-  'pingou o colirio',
-  'coloquei o colirio',
+  // REMOVIDOS 'pingou o colirio', 'coloquei o colirio', 'ja pinguei':
+  // são frases que o PACIENTE diz ao relatar adesão ao colírio prescrito
+  // ("coloquei o colírio direitinho todo dia") e que o médico diz ao RETOMAR
+  // pós-dilatação — nos dois casos disparavam pausa indevida. A aplicação do
+  // dilatador na fase 1 continua coberta por 'ja dilatei', 'vou pingar para
+  // dilatar' e pelos combos (tropicamida, pinga+dilata) — e o envio para fora
+  // ("espera la fora") quase sempre acompanha a aplicação.
   'ja dilatei',
-  'ja pinguei',
   'esperando o colirio fazer efeito',
   'esperar o colirio fazer efeito',
   'esperar um pouco para fazer efeito',
@@ -286,14 +299,32 @@ const DILATACAO_COMMANDS = [
   'fica fora aguardando',
   'espera aqui fora',
   'aguarda aqui fora',
+  // Imperativo PLURAL — médico falando com acompanhante + paciente (criança):
+  // "esperem lá fora", "aguardem aqui fora". As formas no singular não casam
+  // o plural por substring ('espera la' exige espaço após "espera").
+  'esperem la fora',
+  'aguardem la fora',
+  'esperem ali fora',
+  'aguardem ali fora',
+  'esperem aqui fora',
+  'aguardem aqui fora',
+  'vao la fora esperar',
+  'vao la fora aguardar',
+  // Médico instruindo o ACOMPANHANTE a levar a criança para aguardar
+  'leva ele la fora',
+  'leva ela la fora',
+  'levar ele la fora',
+  'levar ela la fora',
   // "fazer a dilatação" — frase natural em PT-BR, muito comum
   'fazer a dilatacao',
   'fazer dilatacao',
   // "vai precisar dilatar"
   'vai precisar dilatar',
   'vou precisar dilatar',
-  // pós-aplicação do colírio — paciente já recebeu o colírio e vai aguardar
-  'ja dilatou',
+  // REMOVIDO 'ja dilatou': é a frase típica do RETORNO da dilatação ("já
+  // dilatou? deixa eu ver o fundo") — re-disparava a pausa na fase 2 e a
+  // consulta nunca fechava. A pós-aplicação na fase 1 segue coberta por
+  // 'ja dilatei' e pelas frases de envio para fora.
   // "dilatação" como substantivo direto
   'dilatacao do olho',
   'dilatacao dos olhos',
@@ -327,8 +358,10 @@ const DILATACAO_COMBOS = [
   ['lata', 'aparelho'],
   // "fazer a dilatação" em variação livre (verbo + substantivo sem artigo/preposição)
   ['fazer', 'dilatacao'],
-  // pupila + dilata (variante de "dilatar a pupila" sem o "r" final — comum em fala coloquial)
-  ['pupila', 'dilata'],
+  // REMOVIDO ['pupila','dilata']: por prefixo, "dilata" casa "dilatadA" — e
+  // "pupila dilatada" é ACHADO DE EXAME (midríase, retorno da dilatação),
+  // não anúncio de pausa. Disparava pausa indevida na fase 2 e em descrição
+  // de midríase. A intenção de dilatar segue coberta por ['pupila','dilatar'].
   // tropicamida sendo aplicada — nome do colírio dilatador mais usado em oftalmologia
   ['tropicamida', 'pingar'],
   ['tropicamida', 'colocar'],
@@ -638,6 +671,10 @@ const CONDUTA_FALA_MARKERS = [
   'voltar em', 'voltar daqui', 'volta se', 'volta aqui se', 'pode voltar se',
   // retorno condicional com "se" ANTES do verbo ("se não tiver bom pode voltar aqui")
   'pode voltar aqui', 'pode voltar la',
+  // retorno condicional ditado como "vem/passa aqui falar comigo" — caso real
+  // 2026-07-07: "se daqui uns 15 dias ve que nao ta legal passa aqui para
+  // falar comigo" não casou nenhum marcador e o gate bloqueou "boa viagem"
+  'falar comigo', 'fala comigo', 'me procura', 'me procure',
   'reavaliacao', 'reavaliar',
   'ano que vem', 'daqui a um ano', 'daqui a seis meses', 'daqui a tres meses',
   // encaminhamento (prefixo cobre encaminhar/encaminhamento/encaminho)
@@ -653,13 +690,28 @@ const CONDUTA_FALA_MARKERS = [
   'manter o oculos', 'manter os oculos', 'mesmo oculos', 'continuar com o oculos',
   'continuar com os oculos', 'nao precisa de oculos', 'nao vai precisar de oculos',
   'oculos novo',
+  // troca de óculos com o substantivo implícito — caso real 2026-07-06: a
+  // conduta foi ditada como "so se voce quiser trocar" / "so se precisar vai
+  // trocar" e o gate bloqueou o encerramento com a conduta já completa
+  'quiser trocar', 'precisar trocar', 'vai trocar', 'se precisar mesmo',
+  'so se precisar',
+  // manutenção ditada como "não mexer" no óculos/grau — caso real 2026-07-07:
+  // "o oculos nao precisamos mexer" / "para que que vai mexer" / "demora uns
+  // bons anos ate precisar mexer" não casaram e o gate bloqueou o stop
+  'precisa mexer', 'precisamos mexer', 'precisar mexer', 'vamos mexer',
+  'vai mexer', 'mexer no oculos', 'mexer no grau', 'mexer no seu grau',
+  'oculos ta tranquilo', 'oculos esta tranquilo',
   // ajuste de grau/óculos — caso real 2026-07-03: médico ditou a conduta como
   // "ajustar o oculos"/"vou aumentar o grau" e o gate não reconheceu conduta
   'ajustar o oculos', 'ajustar os oculos', 'ajuste do oculos', 'ajuste no oculos',
   'ajustar o grau', 'ajuste do grau', 'ajuste de grau',
   'aumentar o grau', 'diminuir o grau', 'aumentar so um pouquinho',
   'grau de perto', 'grau para perto', 'grau de longe', 'grau para longe',
-  'multifocal', 'lente progressiva', 'lentes progressivas',
+  'multifocal', 'bifocal', 'lente progressiva', 'lentes progressivas',
+  // corrupção STT real 2026-07-06: "bifocal/multifocal" transcrito como
+  // "vai ter que ir para um tipo de fogao" — em consulta oftalmológica,
+  // "fogao" só aparece como essa corrupção da prescrição de lente
+  'tipo de fogao',
   // cirurgia (indicação/programação)
   'indicar cirurgia', 'indicacao de cirurgia', 'indicacao cirurgica',
   'precisa operar', 'vai precisar operar', 'vamos operar',
@@ -765,7 +817,14 @@ function matchComboPair(normText, [a, b]) {
 function detectaDilatacaoNaFala(text) {
   const norm = normalizeText(text);
   if (DILATACAO_COMMANDS.some(cmd => norm.includes(cmd))) return true;
-  return DILATACAO_COMBOS.some(pair => matchComboPair(norm, pair));
+  // Combos por co-ocorrência: só na CAUDA do texto (últimas 500 chars),
+  // espelhando o hook runner (_hookMatches). No texto acumulado inteiro as
+  // duas palavras podem co-ocorrer em trechos distantes e sem relação
+  // ("colirio" da prescrição + "dilatar" de outro contexto, páginas atrás),
+  // marcando como pausa de dilatação uma consulta COMPLETA no fallback de
+  // parada — conduta/tratamento eram zerados indevidamente.
+  const tail = norm.slice(-500);
+  return DILATACAO_COMBOS.some(pair => matchComboPair(tail, pair));
 }
 
 /**

@@ -42,6 +42,10 @@ const HOOK_STATE = {
   set dilatacaoDetectada(v)      { dilatacaoDetectada = v; },
   get consultaEncerradaDetectada(){ return consultaEncerradaDetectada; },
   set consultaEncerradaDetectada(v){ consultaEncerradaDetectada = v; },
+  get despedidaNaSessao()        { return despedidaNaSessao; },
+  set despedidaNaSessao(v)       { despedidaNaSessao = v; },
+  get fase2DilatacaoAtiva()      { return fase2DilatacaoAtiva; },
+  set fase2DilatacaoAtiva(v)     { fase2DilatacaoAtiva = v; },
   get lastTriggerTime()          { return lastTriggerTime; },
   set lastTriggerTime(v)         { lastTriggerTime = v; },
 };
@@ -202,7 +206,15 @@ const VOICE_HOOKS = [
     combos: DILATACAO_COMBOS,
     cooldown: 0,
     stopDelay: 800,
-    guard: (s) => s.dilatacaoDetectada,
+    // Guard de encerramento: se uma despedida já foi detectada na sessão, a
+    // consulta está em fim/encerrada — um "vamos dilatar" agora provavelmente
+    // se refere a outra pessoa (acompanhante/próximo paciente), não ao paciente
+    // atual. Não sequestrar a consulta encerrada com uma pausa de dilatação.
+    // fase2DilatacaoAtiva: esta sessão é o RETORNO de uma dilatação — frases
+    // retrospectivas ("já dilatou", "pinguei o colírio para dilatar") não são
+    // anúncio de nova pausa. Uma nova dilatação real nesta fase é coberta pelo
+    // fallback onstop (parada manual), que varre a cauda do texto.
+    guard: (s) => s.dilatacaoDetectada || s.despedidaNaSessao || s.fase2DilatacaoAtiva,
     multiSource: true,
     onMatch: (text, s) => {
       s.dilatacaoDetectada = true;

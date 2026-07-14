@@ -69,9 +69,12 @@ var _BRIDGE = {
   set sessionStartTime(v)  { sessionStartTime = v; },
   get stopGateOffset()     { return stopGateOffset; },
   set stopGateOffset(v)    { stopGateOffset = v; },
+  get stopGateBlockCount()  { return stopGateBlockCount; },
+  set stopGateBlockCount(v) { stopGateBlockCount = v; },
   resetFlags() {
     stopPendingInfo        = null;
     stopGateOffset         = 0;
+    stopGateBlockCount     = 0;
     examesNormaisInjetados = false;
     blefariteInjetada      = false;
     receitaOlhoIrritadoInjetada = false;
@@ -83,6 +86,8 @@ var _BRIDGE = {
     dilatacaoDetectada     = false;
     fundoscopiaDetectada   = false;
     consultaEncerradaDetectada = false;
+    despedidaNaSessao      = false;
+    fase2DilatacaoAtiva    = false;
     lastTriggerTime        = 0;
     isRecording            = true;
     recentTextBuffer       = '';
@@ -396,6 +401,23 @@ test('[DIL-1] "precisa dilatar" → dilatacaoDetectada=true e stop agendado', ()
   expect(ctx._BRIDGE.stopCommandTimeout).not.toBe(null);
 });
 
+test('[DIL-ENCERR-1] despedida detectada SUPRIME dilatação subsequente (guard de encerramento)', () => {
+  // Log 2026-07-08: consulta já encerrada + "esperar o colírio fazer efeito para
+  // ELE (filho) dilatar" sequestrava a consulta completa como pausa de dilatação.
+  // 1) despedida sem captura → gate bloqueia (não agenda stop), mas marca despedidaNaSessao
+  speakSemCaptura('pode ir na recepção');
+  expect(ctx._BRIDGE.HOOK_STATE.despedidaNaSessao).toBe(true);
+  expect(ctx._BRIDGE.stopCommandTimeout).toBe(null);
+  // 2) gatilho de dilatação depois do encerramento NÃO deve marcar dilatação
+  speakSemCaptura('vamos esperar o colirio fazer efeito para ele dilatar');
+  expect(ctx._BRIDGE.dilatacaoDetectada).toBe(false);
+});
+
+test('[DIL-ENCERR-2] sem despedida, a MESMA frase de dilatação dispara normalmente (sem regressão)', () => {
+  speakSemCaptura('vamos esperar o colirio fazer efeito para ele dilatar');
+  expect(ctx._BRIDGE.dilatacaoDetectada).toBe(true);
+});
+
 test('[DIL-2] "pode esperar lá fora" → dilatacaoDetectada=true', () => {
   speak('pode esperar lá fora');
   expect(ctx._BRIDGE.dilatacaoDetectada).toBe(true);
@@ -505,9 +527,12 @@ test('[DIL-NEW-5] "você vai precisar dilatar" → dilatacaoDetectada=true', () 
   expect(ctx._BRIDGE.dilatacaoDetectada).toBe(true);
 });
 
-test('[DIL-NEW-6] "já dilatou" → dilatacaoDetectada=true', () => {
+test('[DIL-NEW-6] REGRESSÃO: "já dilatou" (fala do RETORNO) NÃO dispara pausa', () => {
+  // 'ja dilatou' foi removido de DILATACAO_COMMANDS: é a frase típica do
+  // retorno da dilatação e re-disparava a pausa na fase 2.
   speak('já dilatou pode examinar o fundo');
-  expect(ctx._BRIDGE.dilatacaoDetectada).toBe(true);
+  expect(ctx._BRIDGE.dilatacaoDetectada).toBe(false);
+  expect(ctx._BRIDGE.stopCommandTimeout).toBe(null);
 });
 
 test('[DIL-NEW-7] "precisa de dilatação" → dilatacaoDetectada=true', () => {
@@ -560,6 +585,91 @@ test('[DIL-STT-2] "lata" + "aparelho" sem contexto cirúrgico NÃO dispara se em
   const result = ctx._BRIDGE.runHooks('', norm, buf);
   // "aparelho" não está no texto → não deve disparar
   expect(ctx._BRIDGE.dilatacaoDetectada).toBe(false);
+});
+
+// ──────────────────────────────────────────────────────────────────────────────
+// TESTES FASE 2 DE DILATAÇÃO + FALSOS POSITIVOS RETROSPECTIVOS (2026-07-09)
+// ──────────────────────────────────────────────────────────────────────────────
+
+test('[DIL-FASE2-1] fase2DilatacaoAtiva suprime o hook de dilatação ("vou dilatar" não pausa)', () => {
+  ctx._BRIDGE.StateManager.setHookFlag('fase2DilatacaoAtiva', true);
+  speak('vou dilatar agora');
+  expect(ctx._BRIDGE.dilatacaoDetectada).toBe(false);
+  expect(ctx._BRIDGE.stopCommandTimeout).toBe(null);
+});
+
+test('[DIL-FASE2-2] sem fase2, "vou dilatar" continua pausando normalmente', () => {
+  speak('vou dilatar agora');
+  expect(ctx._BRIDGE.dilatacaoDetectada).toBe(true);
+});
+
+test('[DIL-FASE2-3] REGRESSÃO: "pupila dilatada" (achado de exame) NÃO dispara pausa', () => {
+  // Combo ['pupila','dilata'] removido: "dilata" casava "dilatadA" por prefixo,
+  // e "pupila dilatada" é achado do retorno/midríase, não anúncio de pausa.
+  speak('pupila dilatada e reagente vamos olhar o fundo');
+  expect(ctx._BRIDGE.dilatacaoDetectada).toBe(false);
+});
+
+test('[DIL-FASE2-4] "vou dilatar a pupila" continua disparando (combo pupila+dilatar)', () => {
+  speak('vou dilatar a pupila agora');
+  expect(ctx._BRIDGE.dilatacaoDetectada).toBe(true);
+});
+
+test('[DIL-RETRO-1] REGRESSÃO: "coloquei o colírio direitinho" (adesão do paciente) NÃO pausa', () => {
+  speak('coloquei o colírio direitinho todo dia igual o senhor falou');
+  expect(ctx._BRIDGE.dilatacaoDetectada).toBe(false);
+});
+
+test('[DIL-RETRO-2] REGRESSÃO: "pingou o colírio hoje de manhã" (relato do paciente) NÃO pausa', () => {
+  speak('minha esposa pingou o colírio em mim hoje de manhã');
+  expect(ctx._BRIDGE.dilatacaoDetectada).toBe(false);
+});
+
+test('[DIL-RETRO-3] "já dilatei" (médico pós-aplicação, fase 1) continua disparando', () => {
+  speak('pronto já dilatei pode aguardar');
+  expect(ctx._BRIDGE.dilatacaoDetectada).toBe(true);
+});
+
+// ──────────────────────────────────────────────────────────────────────────────
+// TESTES DE VARIANTES PLURAIS / ACOMPANHANTE (criança em consulta)
+// ──────────────────────────────────────────────────────────────────────────────
+
+test('[DIL-PLURAL-1] "esperem lá fora" (imperativo plural) dispara dilatação', () => {
+  speak('vou pingar o colírio nele esperem lá fora uns vinte minutos');
+  expect(ctx._BRIDGE.dilatacaoDetectada).toBe(true);
+});
+
+test('[DIL-PLURAL-2] "aguardem aqui fora" dispara dilatação', () => {
+  speak('aguardem aqui fora que eu já chamo vocês');
+  expect(ctx._BRIDGE.dilatacaoDetectada).toBe(true);
+});
+
+test('[DIL-PLURAL-3] "leva ele lá fora" (instrução ao acompanhante) dispara dilatação', () => {
+  speak('a senhora leva ele lá fora enquanto o colírio age');
+  expect(ctx._BRIDGE.dilatacaoDetectada).toBe(true);
+});
+
+// ──────────────────────────────────────────────────────────────────────────────
+// TESTE DO FALLBACK detectaDilatacaoNaFala — combos restritos à cauda
+// ──────────────────────────────────────────────────────────────────────────────
+
+test('[DIL-TAIL-1] combos distantes no transcript inteiro NÃO disparam o fallback', () => {
+  // "colirio" no início (prescrição) e "dilatar" longe, com >500 chars entre
+  // eles e do fim — antes o fallback varria o texto inteiro e marcava consulta
+  // COMPLETA como pausa de dilatação, zerando conduta/tratamento.
+  const texto = 'vou passar um colirio lubrificante para o senhor usar '
+    + 'x'.repeat(600)
+    + ' o musculo dilatar e uma coisa natural do olho '
+    + 'y'.repeat(600)
+    + ' retorno em um ano tratamento lubrificante';
+  const detected = ctx.ClinicalTriggers.detectaDilatacaoNaFala(texto);
+  expect(detected).toBe(false);
+});
+
+test('[DIL-TAIL-2] combo na CAUDA continua disparando o fallback', () => {
+  const texto = 'x'.repeat(600) + ' vou pingar o colirio para dilatar a pupila';
+  const detected = ctx.ClinicalTriggers.detectaDilatacaoNaFala(texto);
+  expect(detected).toBe(true);
 });
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -1140,6 +1250,35 @@ test('[GATE-12] REGRESSÃO log 2026-07-03: conduta natural + tratamento + "tchau
   expect(ctx._BRIDGE.stopCommandTimeout).not.toBe(null);
 });
 
+// Caso real 2026-07-06: conduta ditada como "vai ter que ir para um tipo de
+// fogao" (STT corrompeu bifocal/multifocal) e "so se voce quiser trocar"
+// (troca de óculos com substantivo implícito). O gate bloqueou "alguma
+// pergunta alguma duvida" e "boa tarde" com "falta ditar CONDUTA", exigindo
+// "encerrar consulta" forçado — mesmo com a conduta completa na fala.
+
+test('[GATE-17] frases reais do log 2026-07-06 são reconhecidas como CONDUTA', () => {
+  const casos = [
+    'nao vai ser o suficiente ele vai ter que ir para um tipo de fogao',
+    'nao da para ficar de boa so se voce quiser trocar ne',
+    'ele vai tocar novos ou so se precisar vai trocar',
+  ];
+  for (const frase of casos) {
+    if (!ctx.ClinicalTriggers.detectaCondutaNaFala(frase)) {
+      throw new Error(`Conduta NÃO detectada em: "${frase}"`);
+    }
+  }
+});
+
+test('[GATE-18] REGRESSÃO log 2026-07-06: multifocal corrompido + lubrificante + despedida → stop agenda', () => {
+  // Resumo fiel da consulta real que ficou bloqueada
+  speakSemCaptura(
+    'vai chegar uma hora que nao vai dar o de perto so ele vai ter que ir para um tipo de fogao ' +
+    'nao da para ficar de boa so se voce quiser trocar ne ' +
+    'e o lubrificante usa sem do o resto ta tudo em paz alguma pergunta alguma duvida'
+  );
+  expect(ctx._BRIDGE.stopCommandTimeout).not.toBe(null);
+});
+
 test('[GATE-13] "encerrar consulta" IGNORA o gate — para mesmo sem conduta/tratamento', () => {
   speakSemCaptura('pode encerrar a consulta');
   expect(ctx._BRIDGE.stopCommandTimeout).not.toBe(null);
@@ -1160,6 +1299,75 @@ test('[GATE-15] "shampoo de nenem" conta como tratamento captado (log 2026-07-03
 
 test('[GATE-16] "parar a gravação" também está no fallback pós-stop manual', () => {
   expect(ctx.ClinicalTriggers.detectaEncerramentoNaFala('pode parar a gravação por favor')).toBe(true);
+});
+
+// Caso real 2026-07-07: conduta ditada como "vem aqui falar comigo" (retorno
+// condicional) e "o oculos nao precisamos mexer" (manutenção) — o gate
+// bloqueou "boa viagem" e "boa tarde" com "falta ditar CONDUTA"; o médico
+// ainda disse "consulta encerrado" e "fim da consulta" (não mapeados) antes
+// de conseguir parar com "encerrar consulta".
+
+test('[GATE-19] frases reais do log 2026-07-07 são reconhecidas como CONDUTA', () => {
+  const casos = [
+    'se daqui uns 15 dias voce ve que nao ta legal passa aqui para falar comigo',
+    'em duas semanas ver que nao ta bom vem aqui falar comigo',
+    'o oculos nao precisamos mexer',
+    'enquanto a visao tiver boa para que que vai mexer',
+    'provavelmente demora uns bons anos ate precisar mexer',
+  ];
+  for (const frase of casos) {
+    if (!ctx.ClinicalTriggers.detectaCondutaNaFala(frase)) {
+      throw new Error(`Conduta NÃO detectada em: "${frase}"`);
+    }
+  }
+});
+
+test('[GATE-20] REGRESSÃO log 2026-07-07: "vem aqui falar comigo" + tratamento + "boa viagem" → stop agenda', () => {
+  speakSemCaptura(
+    'vou passar com o tratamento para fazer um pouco mais forte para melhorar essa irritacao ' +
+    'em duas semanas ver que nao ta bom vem aqui falar comigo conversa tranquilo boa viagem'
+  );
+  expect(ctx._BRIDGE.stopCommandTimeout).not.toBe(null);
+});
+
+test('[GATE-21] declarações de fim ("consulta encerrada", "fim da consulta") ignoram o gate', () => {
+  const frases = ['consulta encerrado', 'consulta finalizada', 'fim da consulta'];
+  for (const frase of frases) {
+    if (!ctx.ClinicalTriggers.detectaEncerramentoNaFala(`deixa eu sair daqui ja ${frase}`)) {
+      throw new Error(`Encerramento NÃO detectado em: "${frase}"`);
+    }
+  }
+  speakSemCaptura('deixa eu sair daqui ja fim da consulta');
+  expect(ctx._BRIDGE.stopCommandTimeout).not.toBe(null); // stop_forcado, sem gate
+});
+
+test('[GATE-22] válvula de escape: 2ª despedida DISTINTA sem captura LIBERA o encerramento', () => {
+  // 1ª despedida sem conduta/tratamento → bloqueada (aviso + contador)
+  speakSemCaptura('pode ir na recepção');
+  expect(ctx._BRIDGE.stopCommandTimeout).toBe(null);
+  expect(ctx._BRIDGE.stopGateBlockCount).toBe(1);
+  // 2ª despedida distinta, ainda sem captura → válvula libera o stop
+  speakSemCaptura('pode ir na recepção tudo de bom até a próxima consulta');
+  expect(ctx._BRIDGE.stopCommandTimeout).not.toBe(null);
+  flushTimeouts();
+  expect(ctx._BRIDGE.isRecording).toBe(false);
+});
+
+test('[GATE-23] válvula NÃO dispara com a MESMA despedida antiga no transcript (âncora preservada)', () => {
+  // 1ª despedida bloqueada
+  speakSemCaptura('a conduta é retorno daqui a seis meses pode ir na recepção');
+  expect(ctx._BRIDGE.stopCommandTimeout).toBe(null);
+  // transcript cresce SEM nova despedida — a antiga não reativa nem conta de novo
+  speakSemCaptura('a conduta é retorno daqui a seis meses pode ir na recepção o tratamento é lubrificante uma gota três vezes ao dia');
+  expect(ctx._BRIDGE.stopCommandTimeout).toBe(null);
+  expect(ctx._BRIDGE.stopGateBlockCount).toBe(1);
+});
+
+test('[GATE-24] resetSession zera o contador da válvula (stopGateBlockCount)', () => {
+  speakSemCaptura('pode ir na recepção');
+  expect(ctx._BRIDGE.stopGateBlockCount).toBe(1);
+  ctx._BRIDGE.StateManager.resetSession();
+  expect(ctx._BRIDGE.stopGateBlockCount).toBe(0);
 });
 
 // ──────────────────────────────────────────────────────────────────────────────

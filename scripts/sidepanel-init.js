@@ -34,6 +34,17 @@ injectAllBtn.addEventListener('click', async () => {
 // Limpeza manual descarta também a fase 1 de dilatação persistida (novo paciente)
 clearBtn.addEventListener('click', () => clearAll({ clearAudio: true, clearCamera: true, discardDilatacao: true }));
 
+// Desfazer dilatação: reprocessa a consulta como completa (gatilho por engano).
+if (cancelDilatacaoBtn) cancelDilatacaoBtn.addEventListener('click', cancelarDilatacao);
+
+// Visibilidade do botão dirigida por UMA fonte: a chave persistida _shospDilatacaoPhase1.
+// storage.onChanged cobre todos os pontos de mutação (injeção de dilatação, undo,
+// clearAll, conclusão da fase 2) sem toggles espalhados. Checa também no load.
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === 'local' && changes._shospDilatacaoPhase1) refreshUndoVisibility();
+});
+refreshUndoVisibility();
+
 // ============================================================================
 // SELETOR DE MODO
 // ============================================================================

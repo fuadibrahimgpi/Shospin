@@ -180,6 +180,12 @@ function _findStopCmdEndAfter(hook, text, offset) {
  * Hooks endAnchored dispensam a âncora: a frase precisa estar no FIM da fala
  * atual, o que por construção já a torna "nova".
  *
+ * VÁLVULA DE ESCAPE: a partir da 2ª despedida DISTINTA bloqueada na mesma
+ * sessão o gate libera o encerramento. Três casos reais (2026-07-03, 06 e 07)
+ * bloquearam consultas com a conduta JÁ ditada — o fraseado só não casava os
+ * marcadores. Médico que se despede duas vezes sem captura é sinal de
+ * marcador faltando, não de conduta faltando.
+ *
  * @param {object} hook
  * @param {string} normalizedCurrent - texto final + interim (normalizado)
  * @param {string} matchedCmd - comando retornado por _hookMatches
@@ -206,6 +212,14 @@ function _stopGateBlocks(hook, normalizedCurrent, matchedCmd) {
   const jaAvisado = matchEnd <= stopGateOffset;
   stopGateOffset = Math.max(stopGateOffset, matchEnd);
   if (jaAvisado) return true; // mesma despedida já bloqueada — sem repetir aviso
+
+  // Válvula de escape: já houve despedida distinta bloqueada nesta sessão →
+  // esta 2ª despedida libera o encerramento (provável falso bloqueio do gate)
+  if (stopGateBlockCount >= 1) {
+    console.log(`[HookRunner] STOP "${matchedCmd}" liberado pela válvula de escape — 2ª despedida distinta sem captura completa (provável marcador de conduta/tratamento faltando)`);
+    return false;
+  }
+  stopGateBlockCount++;
 
   const faltando = [!captura.conduta && 'CONDUTA', !captura.tratamento && 'TRATAMENTO']
     .filter(Boolean).join(' e ');
@@ -305,6 +319,10 @@ function _runStopCheck(normalizedFinal, normalizedCurrent, recentTextBuffer) {
     const matchedCmd = _hookMatches(hook, normalizedFinal, normalizedCurrent, recentTextBuffer);
     if (!matchedCmd) continue;
 
+    // Encerramento (sticky): uma despedida foi DETECTADA — registra mesmo que o
+    // gate bloqueie ou o stop seja cancelado. Suprime dilatação subsequente.
+    if (hook.id !== 'dilatacao') HOOK_STATE.despedidaNaSessao = true;
+
     // Gate de captura: sem conduta+tratamento ditados, não encerra a consulta
     if (_stopGateBlocks(hook, normalizedCurrent, matchedCmd)) continue;
 
@@ -360,6 +378,9 @@ function runHooks(normalizedFinal, normalizedCurrent, recentTextBuffer) {
     // ── Match ──
     const matchedCmd = _hookMatches(hook, normalizedFinal, normalizedCurrent, recentTextBuffer);
     if (!matchedCmd) continue;
+
+    // ── Encerramento (sticky): despedida detectada → suprime dilatação depois ──
+    if (hook.type === 'stop' && hook.id !== 'dilatacao') HOOK_STATE.despedidaNaSessao = true;
 
     // ── Gate de captura (stop de fim de consulta): sem conduta+tratamento
     //    ditados na fala, o encerramento é bloqueado e a gravação continua ──

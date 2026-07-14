@@ -87,11 +87,14 @@ class GeminiInterviewAgent {
   // Análise principal da consulta
   // --------------------------------------------------------------------------
 
-  async analyzeConsultation(transcribedText) {
-    this.logger.info('Iniciando análise de consulta');
+  async analyzeConsultation(transcribedText, options = {}) {
+    const forceComplete = !!(options && options.forceComplete);
+    this.logger.info(forceComplete
+      ? 'Iniciando análise de consulta (reprocessamento — dilatação cancelada)'
+      : 'Iniciando análise de consulta');
 
     const { hasNormalExams, hasBlefarite } = this.detectExamTriggers(transcribedText);
-    const prompt = this._buildConsultationPrompt(transcribedText, hasNormalExams, hasBlefarite);
+    const prompt = this._buildConsultationPrompt(transcribedText, hasNormalExams, hasBlefarite, forceComplete);
 
     const maxRetries = 2;
 
@@ -284,11 +287,22 @@ class GeminiInterviewAgent {
   // Prompt do Agente de Entrevista
   // --------------------------------------------------------------------------
 
-  _buildConsultationPrompt(transcribedText, hasNormalExams, hasBlefarite) {
+  _buildConsultationPrompt(transcribedText, hasNormalExams, hasBlefarite, forceComplete = false) {
     return `
 Você é um assistente especialista em oftalmologia.
 Tarefa: extrair dados ESTRUTURADOS de uma transcrição de consulta médica.
-
+${forceComplete ? `
+═══════════════════════════════════════════════════════════════
+★★★ MODO REPROCESSAMENTO — DILATAÇÃO CANCELADA (PRIORIDADE MÁXIMA)
+═══════════════════════════════════════════════════════════════
+O médico CANCELOU uma marcação de dilatação feita por engano. Trate esta
+transcrição como uma consulta COMPLETA e NORMAL:
+- Defina SEMPRE dilatacaoDetectada=false, mesmo que o texto contenha "dilatar",
+  "colírio para dilatar", "esperar o colírio fazer efeito" ou similar. Essas
+  menções NÃO indicam dilatação nesta análise — ignore-as como gatilho.
+- Extraia conduta, tratamento, biomicroscopia e fundoscopia NORMALMENTE do texto,
+  como em qualquer consulta encerrada. NÃO zere esses campos por causa da dilatação.
+` : ''}
 ═══════════════════════════════════════════════════════════════
 REGRAS ANTI-DELÍRIO (CRÍTICAS)
 ═══════════════════════════════════════════════════════════════
@@ -322,6 +336,9 @@ REGRAS ANTI-DELÍRIO (CRÍTICAS)
    ✅ Registre exatamente o que foi dito: "lubrificante ocular", "colírio para pressão", "colírio amarelo"
    A base de conhecimento serve APENAS para reconhecer nomes efetivamente pronunciados,
    nunca para completar ou inferir nomes não ditos.
+   ⚠️ Isto NÃO impede registrar a CLASSE ou um genérico quando o médico PRESCREVE um remédio sem
+   nomeá-lo: ver "HIERARQUIA DE NOMEAÇÃO DA MEDICAÇÃO PRESCRITA" no campo tratamento. Registrar
+   "colírio hipotensor" (classe) ou "Medicação ocular prescrita" (genérico) NÃO é inventar um nome.
 
 ═══════════════════════════════════════════════════════════════
 REGRA DE FONTES
@@ -420,7 +437,7 @@ CAMPOS:
     d) Paciente confirma uso ao ser perguntado: "sim, uso o colírio amarelo"
     e) Médico menciona medicação ocular como referência: "o seu Xalatan está controlando bem"
   * Sempre inclua nome + dosagem/posologia quando mencionados
-    Ex: "Xalatan 1 gota OE à noite", "Combigan 2x/dia", "Carmelose 3x/dia"
+    Ex: "Xalatan OE à noite", "Combigan 2x/dia", "Carmelose 3x/dia"
   * Se dosagem não mencionada, registre só o nome: "Xalatan, Timoptol"
   * ❌ NÃO inclui medicamentos sistêmicos (insulina, metformina, losartan, etc.) → vão em alteracoes_sistemicas
   * ⚠️ NÃO CONFUNDA com tratamento:
@@ -650,6 +667,9 @@ CAMPOS:
   * ❌ Logística pós-consulta de óculos: "Conferir óculos após prontos", "Retirar óculos na ótica",
     "Buscar óculos quando ficar pronto" → logística do paciente, não decisão médica
     ✅ ÚNICA entrada de óculos: "Prescrição de óculos [tipo]"
+  * ❌ Orçamento/cotação de óculos: "orientado a fazer orçamento em mais de uma ótica",
+    "pesquisar preço em várias óticas", "cotar o valor das lentes", "comparar preços"
+    → orientação comercial ao paciente, não decisão médica → NUNCA entra em conduta
   * ❌ Retornos condicionais vagos: "retorno se dificuldade", "retorno se não adaptar",
     "retorno se piorar", "retorno se necessário"
     → Se já há retorno com prazo definido → descartar todos os condicionais
@@ -680,9 +700,28 @@ CAMPOS:
     (a conferência de óculos é descartada mesmo estando no mesmo enunciado).
 
 - tratamento: medicamentos, substâncias farmacológicas E orientações físicas ao paciente
-  ✅ Colírios nomeados ou por classe: "Vigadexa 1 gota 4x/dia por 7 dias",
-     "Associação (ATB + corticoide ocular) 1 gota 3x/dia após higiene palpebral"
-  ✅ Lubrificantes oculares: "Lubrificante ocular 1 gota AO ao longo do dia"
+
+  ★★ HIERARQUIA DE NOMEAÇÃO DA MEDICAÇÃO PRESCRITA (aplicar a CADA colírio/remédio que o médico PRESCREVE):
+     Registre sempre no nível MAIS específico possível — nesta ordem:
+     1) PRINCÍPIO ATIVO — só quando o médico NOMEOU o remédio: princípio ativo dito, OU marca
+        mapeável pela base de conhecimento acima. Ex.: "Vigadexa" → "Moxifloxacino + dexametasona";
+        "dorzolamida" → "Dorzolamida".
+        ⚠️ NUNCA infira o princípio ativo a partir do diagnóstico ou do contexto — apenas quando o
+        nome (marca ou princípio) foi efetivamente PRONUNCIADO. Princípio ativo errado num prontuário
+        é pior que um genérico.
+     2) GRUPO / CLASSE — quando o médico NÃO nomeou o remédio, mas a classe é identificável pela fala
+        (finalidade dita ou tratamento inequívoco). Ex.: "colírio para pressão" → "Colírio hipotensor ocular";
+        antibiótico + corticoide indicados na blefarite → "Associação (ATB + corticoide ocular)";
+        "colírio de alergia" → "Colírio antialérgico".
+     3) GENÉRICO — quando NEM o nome NEM a classe podem ser identificados, mas houve prescrição.
+        Ex.: médico diz só "usa o colírio 3x/dia" → "Medicação ocular prescrita".
+     ⚠️ NUNCA omita uma prescrição porque o nome não foi dito — desça para o nível 2 ou 3, mas REGISTRE.
+     ⚠️ IMPORTANTE: Nunca inclua "1 gota" ou "uma gota" nas prescrições de colírio, pois já é subentendido.
+     A posologia (frequência, olho, duração) é preservada em qualquer nível quando mencionada.
+
+  ✅ Colírios nomeados ou por classe: "Vigadexa 4x/dia por 7 dias",
+     "Associação (ATB + corticoide ocular) 3x/dia após higiene palpebral"
+  ✅ Lubrificantes oculares: "Lubrificante ocular AO ao longo do dia"
   ✅ Medicamentos orais: "Ômega 3 1000mg — 1cp almoço e 1cp jantar por 30 dias"
   ✅ Pomadas oculares com posologia
   ✅ Compressa morna: "Compressa morna 2 min — 2x/dia"
@@ -695,17 +734,22 @@ CAMPOS:
     conduta:    "Retorno 2 semanas"
     tratamento: "Compressa morna 2 min — 2x/dia"
                 "Higiene palpebral com shampoo infantil — 3x/dia"
-                "Associação (ATB + corticoide ocular) 1 gota 3x/dia após higiene palpebral"
-                "Lubrificante ocular 1 gota AO ao longo do dia"
+                "Associação (ATB + corticoide ocular) 3x/dia após higiene palpebral"
+                "Lubrificante ocular AO ao longo do dia"
                 "Ômega 3 1000mg — 1cp almoço e 1cp jantar por 30 dias"
 
-  ★ Regra da Associação ATB + corticoide (CRÍTICA — quando injectBlefarite=true):
-    O TRATAMENTO DEVE incluir a linha:
-      "Associação (ATB + corticoide ocular) 1 gota 3x/dia após higiene palpebral"
-    Use exatamente esta forma genérica quando o médico não citar nomes em voz —
-    NÃO invente nomes de medicamentos.
+  ★ Regra da medicação de blefarite (CRÍTICA — quando injectBlefarite=true):
+    Além da compressa e da higiene, a blefarite é tratada com um colírio. Nomeie esse colírio
+    seguindo a HIERARQUIA DE NOMEAÇÃO acima:
+      • Se a prescrição combinar: 1) compressas mornas, 2) higiene palpebral e 3) pingar um colírio 3x/dia → OBRIGATORIAMENTE considere este colírio como "Tobramicina/Dexametasona 3x/dia" (nível 2 específico).
+      • médico nomeou o remédio → princípio ativo (nível 1)
+      • médico indicou antibiótico + corticoide, ou é o tratamento inequívoco →
+        "Associação (ATB + corticoide ocular) 3x/dia após higiene palpebral" (nível 2)
+      • médico só mencionou "o colírio" sem nome nem classe (e sem a combinação acima) →
+        "Medicação ocular prescrita 3x/dia após higiene palpebral" (nível 3)
+    NÃO invente nomes e NÃO force a classe ATB+corticoide se ela não estiver apoiada na fala.
     A ordem clínica no tratamento:
-      tratamento: 1) Compressa morna  2) Higiene palpebral  3) Associação ATB+corticoide  4) Lubrificante  5) Ômega 3
+      tratamento: 1) Compressa morna  2) Higiene palpebral  3) Colírio da blefarite (nível 1/2/3)  4) Lubrificante  5) Ômega 3
 
 - biomicroscopia: texto de biomicroscopia — preencher quando o médico descreve ao paciente um achado ocular de segmento anterior.
   ❌ NÃO preencher quando:

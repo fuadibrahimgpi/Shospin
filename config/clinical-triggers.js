@@ -55,19 +55,15 @@ const STOP_COMMANDS = [
   'ate a proxima consulta',
   'ate o proximo retorno',
   'nos vemos em breve',
+  // Preferências do médico (2026-07-15): variantes com "me liga"/"pode ligar"
+  // removidas (não fazem parte do fraseado dele) e perguntas abertas tipo
+  // "alguma pergunta alguma duvida"/"ficou alguma duvida" removidas — caso
+  // real 2026-07-15: médico disse "alguma pergunta alguma duvida" e continuou
+  // a consulta por ~2 minutos (teria cortado o final da gravação).
   'qualquer duvida me procura',
-  'qualquer duvida me liga',
-  'qualquer duvida pode ligar',
-  'qualquer duvida pode me ligar',
-  'se tiver duvida me liga',
   'alguma duvida me procura',
-  'alguma duvida me liga',
-  'alguma duvida pode ligar',
-  'alguma duvida pode me ligar',
   'alguma duvida pode me chamar',
   'alguma duvida me chama',
-  'alguma pergunta alguma duvida',
-  'alguma duvida alguma pergunta',
   'pode se retirar',
   'pode ir embora',
   'obrigado pela consulta',
@@ -82,6 +78,25 @@ const STOP_COMMANDS = [
   'pode ir la ate a recepcao',
   'passa na recepcao',
   'pode passar na recepcao',
+  // BALCÃO — fraseado recorrente do médico para encerrar mandando o paciente
+  // ao balcão (2026-07-15). Espelha as variantes de "recepcao".
+  'passar no balcao',
+  'passa no balcao',
+  'passar la no balcao',
+  'passa la no balcao',
+  'pode ir no balcao',
+  'pode ir la no balcao',
+  'pode ir ate o balcao',
+  'pode ir para o balcao',
+  'vai la no balcao',
+  'vai ate o balcao',
+  'vai para o balcao',
+  'entregar no balcao',
+  'entrega no balcao',
+  'entregar isso no balcao',
+  'entrega isso no balcao',
+  'buscar no balcao',
+  'pegar no balcao',
   'pode ir pegar a receita',
   'pode pegar a receita',
   'pegar a receita na recepcao',
@@ -112,7 +127,6 @@ const STOP_COMMANDS = [
   'qualquer coisa estamos ai',
   'qualquer coisa estamos aqui',
   'qualquer coisa pode chamar',
-  'qualquer coisa pode ligar',
   'pode fazer os oculos',
   'pode comprar os oculos',
   'pode trocar os oculos',
@@ -131,7 +145,6 @@ const STOP_COMMANDS = [
   'volta se necessario',
   'bom viagem',
   'boa viagem',
-  'ficou alguma duvida',
 ];
 
 // ============================================================================
@@ -646,6 +659,9 @@ const OLHO_IRRITADO_COMMANDS = [
 // o encerramento é BLOQUEADO e a gravação continua — o médico dita o que
 // falta e repete a despedida.
 // Para desligar a exigência de um dos campos, mudar a flag para false.
+// EXCEÇÃO: conduta REFRATIVA (óculos/grau/lente — CONDUTA_REFRATIVA_MARKERS)
+// satisfaz também o requisito de TRATAMENTO, porque consulta de refração pura
+// legitimamente não tem tratamento a ditar (caso real 2026-07-15).
 // NÃO passam pelo gate: botão manual de parar, auto-stop por silêncio e o
 // stop de dilatação (pausa, não fim de consulta — conduta/tratamento vêm na
 // fase 2).
@@ -682,6 +698,26 @@ const CONDUTA_FALA_MARKERS = [
   // solicitação de exames complementares
   'vou solicitar', 'solicitar exame', 'solicitar o exame', 'solicitar um', 'solicitar uma',
   'vou pedir um exame', 'vou pedir o exame', 'campo visual', 'topografia',
+  // cirurgia (indicação/programação)
+  'indicar cirurgia', 'indicacao de cirurgia', 'indicacao cirurgica',
+  'precisa operar', 'vai precisar operar', 'vamos operar',
+  'programar a cirurgia', 'agendar a cirurgia', 'marcar a cirurgia',
+  // suspensão / manutenção / alta
+  'suspender o colirio', 'suspender colirio', 'suspender o uso',
+  'suspende o colirio', 'parar o colirio', 'parar de usar o colirio',
+  'manter o colirio', 'manter a medicacao', 'manter o tratamento', 'manter o uso',
+  'dar alta',
+];
+
+// Marcadores de CONDUTA REFRATIVA — prescrição/ajuste/manutenção de óculos e
+// lentes. Ficam em lista própria porque, além de contarem como conduta, também
+// SATISFAZEM o requisito de tratamento no gate de captura: consulta refrativa
+// pura legitimamente não tem tratamento a ditar (a receita de óculos RESOLVE a
+// consulta). Caso real 2026-07-15: consulta de refração (multifocal + lente de
+// prova) foi bloqueada com "falta ditar TRATAMENTO" e exigiu "encerrar
+// consulta" forçado.
+
+const CONDUTA_REFRATIVA_MARKERS = [
   // óculos (prescrição, troca, ajuste ou manutenção é conduta)
   'prescrever oculos', 'prescrever os oculos', 'prescrever o oculos',
   'prescricao de oculos', 'receita de oculos', 'receita do oculos', 'receita dos oculos',
@@ -708,19 +744,15 @@ const CONDUTA_FALA_MARKERS = [
   'aumentar o grau', 'diminuir o grau', 'aumentar so um pouquinho',
   'grau de perto', 'grau para perto', 'grau de longe', 'grau para longe',
   'multifocal', 'bifocal', 'lente progressiva', 'lentes progressivas',
+  // correção de grau — caso real 2026-07-15: "vou corrigir aqui o grau do
+  // oculos" não tinha marcador direto (só "multifocal" salvou a conduta)
+  'corrigir o grau', 'corrigir aqui o grau', 'grau do oculos', 'corrigir o oculos',
+  // teste de lente de contato solicitado pelo médico (conduta refrativa)
+  'lente de prova',
   // corrupção STT real 2026-07-06: "bifocal/multifocal" transcrito como
   // "vai ter que ir para um tipo de fogao" — em consulta oftalmológica,
   // "fogao" só aparece como essa corrupção da prescrição de lente
   'tipo de fogao',
-  // cirurgia (indicação/programação)
-  'indicar cirurgia', 'indicacao de cirurgia', 'indicacao cirurgica',
-  'precisa operar', 'vai precisar operar', 'vamos operar',
-  'programar a cirurgia', 'agendar a cirurgia', 'marcar a cirurgia',
-  // suspensão / manutenção / alta
-  'suspender o colirio', 'suspender colirio', 'suspender o uso',
-  'suspende o colirio', 'parar o colirio', 'parar de usar o colirio',
-  'manter o colirio', 'manter a medicacao', 'manter o tratamento', 'manter o uso',
-  'dar alta',
 ];
 
 // Marcadores de TRATAMENTO falado — prescrição de medicamentos/posologia.
@@ -759,10 +791,14 @@ const TRATAMENTO_FALA_MARKERS = [
 // "fazer uma CONSULTA COM DERMATOLOGISTA" — nenhum marcador simples casou e o
 // gate bloqueou o encerramento com a conduta já completa.
 const CONDUTA_FALA_REGEXES = [
-  // menção a ótica = prescrição de óculos em andamento (\b evita "antibiotica")
-  /\boticas?\b/,
   // "consulta com [qualquer especialista -ologista]" = encaminhamento
   /consulta com (?:o |a |um |uma )?[a-z]+ologista/,
+];
+
+// Conduta refrativa em padrões com fronteira de palavra.
+const CONDUTA_REFRATIVA_REGEXES = [
+  // menção a ótica = prescrição de óculos em andamento (\b evita "antibiotica")
+  /\boticas?\b/,
 ];
 
 // Posologia falada — padrões que só aparecem quando o médico dita prescrição.
@@ -857,7 +893,22 @@ function detectaEncerramentoNaFala(text) {
 function detectaCondutaNaFala(text) {
   const norm = normalizeText(text);
   if (CONDUTA_FALA_MARKERS.some(m => norm.includes(m))) return true;
-  return CONDUTA_FALA_REGEXES.some(re => re.test(norm));
+  if (CONDUTA_FALA_REGEXES.some(re => re.test(norm))) return true;
+  return detectaCondutaRefrativaNaFala(norm);
+}
+
+/**
+ * Detecta se uma CONDUTA REFRATIVA foi ditada na fala (prescrição, ajuste,
+ * troca ou manutenção de óculos/grau/lentes). Subconjunto da conduta geral
+ * que também satisfaz o requisito de tratamento no gate de captura.
+ *
+ * @param {string} text - transcrição (com ou sem acentos)
+ * @returns {boolean}
+ */
+function detectaCondutaRefrativaNaFala(text) {
+  const norm = normalizeText(text);
+  if (CONDUTA_REFRATIVA_MARKERS.some(m => norm.includes(m))) return true;
+  return CONDUTA_REFRATIVA_REGEXES.some(re => re.test(norm));
 }
 
 /**
@@ -884,7 +935,14 @@ function detectaTratamentoNaFala(text) {
 function checkCondutaTratamentoCaptados(text) {
   const norm = normalizeText(text);
   const conduta    = !STOP_GATE.exigirConduta    || detectaCondutaNaFala(norm);
-  const tratamento = !STOP_GATE.exigirTratamento || detectaTratamentoNaFala(norm);
+  // Conduta REFRATIVA satisfaz o requisito de tratamento: consulta de refração
+  // pura não tem tratamento a ditar — a receita de óculos resolve a consulta.
+  // Caso real 2026-07-15: gate bloqueou "alguma pergunta alguma duvida" com
+  // "falta ditar TRATAMENTO" numa consulta só de óculos + lente de prova,
+  // forçando o médico a usar "encerrar consulta".
+  const tratamento = !STOP_GATE.exigirTratamento
+    || detectaTratamentoNaFala(norm)
+    || detectaCondutaRefrativaNaFala(norm);
   return { conduta, tratamento, ok: conduta && tratamento };
 }
 
@@ -925,6 +983,8 @@ const ClinicalTriggers = {
   STOP_GATE,
   CONDUTA_FALA_MARKERS,
   CONDUTA_FALA_REGEXES,
+  CONDUTA_REFRATIVA_MARKERS,
+  CONDUTA_REFRATIVA_REGEXES,
   TRATAMENTO_FALA_MARKERS,
   TRATAMENTO_FALA_REGEXES,
   matchComboPair,
@@ -932,6 +992,7 @@ const ClinicalTriggers = {
   detectaExameEmAndamento,
   detectaEncerramentoNaFala,
   detectaCondutaNaFala,
+  detectaCondutaRefrativaNaFala,
   detectaTratamentoNaFala,
   checkCondutaTratamentoCaptados,
 };

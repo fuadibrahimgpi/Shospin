@@ -224,8 +224,8 @@ test('[STOP-4] "até a próxima consulta" agenda stop', () => {
   expect(ctx._BRIDGE.stopCommandTimeout).not.toBe(null);
 });
 
-test('[STOP-5] "qualquer dúvida me liga" agenda stop', () => {
-  speak('qualquer dúvida me liga');
+test('[STOP-5] "pode passar no balcão" agenda stop', () => {
+  speak('pode passar no balcão');
   expect(ctx._BRIDGE.stopCommandTimeout).not.toBe(null);
 });
 
@@ -257,9 +257,11 @@ test('[STOP-10] stop não cria segunda entrada na fila de timeouts', () => {
   expect(_timeoutCallbackQueue.length).toBe(countAfterFirst);
 });
 
-test('[STOP-11] "ficou alguma dúvida" agenda stop', () => {
+test('[STOP-11] "ficou alguma dúvida" NÃO agenda stop (pergunta aberta removida 2026-07-15)', () => {
+  // Perguntas abertas sem ação/destino aparecem no meio da explicação e
+  // cortariam a gravação antes do fim real da consulta.
   speak('ficou alguma dúvida');
-  expect(ctx._BRIDGE.stopCommandTimeout).not.toBe(null);
+  expect(ctx._BRIDGE.stopCommandTimeout).toBe(null);
 });
 
 test('[STOP-12] "tudo bom então" agenda stop', () => {
@@ -692,7 +694,7 @@ test('[NO-AUTO-2] "consegue ver melhor assim ou assim" não dispara stop no hook
 // ──────────────────────────────────────────────────────────────────────────────
 
 test('[STOP-FALLBACK-1] frase forte em qualquer posição → encerramento detectado', () => {
-  const t = 'qualquer dúvida me liga e a gente conversa sobre o resultado dos exames depois';
+  const t = 'qualquer dúvida me procura e a gente conversa sobre o resultado dos exames depois';
   expect(ctx.ClinicalTriggers.detectaEncerramentoNaFala(t)).toBe(true);
 });
 
@@ -727,8 +729,8 @@ test('[REGRESSION-STOP-1] "pode ir na recepção" ainda agenda stop (regressão)
   expect(ctx._BRIDGE.isRecording).toBe(false);
 });
 
-test('[REGRESSION-STOP-2] "qualquer dúvida me liga" ainda agenda stop (regressão)', () => {
-  speak('qualquer dúvida me liga');
+test('[REGRESSION-STOP-2] "qualquer dúvida me procura" ainda agenda stop (regressão)', () => {
+  speak('qualquer dúvida me procura');
   expect(ctx._BRIDGE.stopCommandTimeout).not.toBe(null);
 });
 
@@ -1254,11 +1256,14 @@ test('[GATE-17] frases reais do log 2026-07-06 são reconhecidas como CONDUTA', 
 });
 
 test('[GATE-18] REGRESSÃO log 2026-07-06: multifocal corrompido + lubrificante + despedida → stop agenda', () => {
-  // Resumo fiel da consulta real que ficou bloqueada
+  // Resumo da consulta real que ficou bloqueada. A despedida original era
+  // "alguma pergunta alguma duvida" — removida de STOP_COMMANDS em 2026-07-15
+  // (pergunta aberta, dispara no meio da explicação); trocada por despedida
+  // com destino físico, o fraseado atual do médico.
   speakSemCaptura(
     'vai chegar uma hora que nao vai dar o de perto so ele vai ter que ir para um tipo de fogao ' +
     'nao da para ficar de boa so se voce quiser trocar ne ' +
-    'e o lubrificante usa sem do o resto ta tudo em paz alguma pergunta alguma duvida'
+    'e o lubrificante usa sem do o resto ta tudo em paz pode passar no balcao'
   );
   expect(ctx._BRIDGE.stopCommandTimeout).not.toBe(null);
 });
@@ -1352,6 +1357,52 @@ test('[GATE-24] resetSession zera o contador da válvula (stopGateBlockCount)', 
   expect(ctx._BRIDGE.stopGateBlockCount).toBe(1);
   ctx._BRIDGE.StateManager.resetSession();
   expect(ctx._BRIDGE.stopGateBlockCount).toBe(0);
+});
+
+// Caso real 2026-07-15: consulta de refração PURA (correção de grau do óculos
+// multifocal + pedido de lente de prova) — tratamento legitimamente inexistente
+// (Gemini registrou tratamento: null). O gate bloqueou "alguma pergunta alguma
+// duvida" com "falta ditar TRATAMENTO" e o médico teve que forçar com
+// "encerrar consulta". Conduta refrativa agora satisfaz o requisito de
+// tratamento no gate.
+
+test('[GATE-25] frases reais do log 2026-07-15 são reconhecidas como CONDUTA REFRATIVA', () => {
+  const casos = [
+    'bom eu vou corrigir aqui o grau do oculos',
+    'ai eu vou pedir uma lente de prova',
+    'outra alternativa seria a gente ir para alem de multifocal',
+  ];
+  for (const frase of casos) {
+    if (!ctx.ClinicalTriggers.detectaCondutaRefrativaNaFala(frase)) {
+      throw new Error(`Conduta refrativa NÃO detectada em: "${frase}"`);
+    }
+  }
+});
+
+test('[GATE-26] conduta refrativa satisfaz o requisito de TRATAMENTO no gate', () => {
+  const r = ctx.ClinicalTriggers.checkCondutaTratamentoCaptados(
+    'eu vou corrigir aqui o grau do oculos e vou pedir uma lente de prova'
+  );
+  expect(r.conduta).toBe(true);
+  expect(r.tratamento).toBe(true);
+  expect(r.ok).toBe(true);
+});
+
+test('[GATE-27] REGRESSÃO log 2026-07-15: refração pura SEM tratamento + despedida → stop agenda', () => {
+  speakSemCaptura(
+    'de fato deu uma aumentadinha bem pouquinho eu vou corrigir aqui o grau do oculos ' +
+    'ai eu vou pedir uma lente de prova ai pelo menos ela tira essa duvida em relacao a lente ' +
+    'aqui ta a receita do oculos pode passar no balcao'
+  );
+  expect(ctx._BRIDGE.stopCommandTimeout).not.toBe(null);
+  flushTimeouts();
+  expect(ctx._BRIDGE.isRecording).toBe(false);
+});
+
+test('[GATE-28] conduta NÃO-refrativa sem tratamento continua bloqueada (gate preservado)', () => {
+  speakSemCaptura('vou te encaminhar para o especialista de retina pode ir na recepção');
+  expect(ctx._BRIDGE.stopCommandTimeout).toBe(null);
+  expect(ctx._BRIDGE.isRecording).toBe(true);
 });
 
 // ──────────────────────────────────────────────────────────────────────────────

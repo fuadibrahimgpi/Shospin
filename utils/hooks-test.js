@@ -404,6 +404,18 @@ test('[DIL-ENCERR-2] sem despedida, a MESMA frase de dilatação dispara normalm
   expect(ctx._BRIDGE.dilatacaoDetectada).toBe(true);
 });
 
+test('[DIL-ENCERR-3] despedida endAnchored ("até mais") NÃO trava despedidaNaSessao', () => {
+  // 2026-07-17: "bom dia"/"até mais" (endAnchored, canceláveis) marcavam
+  // despedidaNaSessao já no match; se a fala continuava e o stop era cancelado,
+  // a flag ficava presa e suprimia em silêncio uma dilatação legítima depois.
+  // Agora só despedida FORTE/não-cancelável é sticky de imediato.
+  speak('ok então até mais');
+  expect(ctx._BRIDGE.HOOK_STATE.despedidaNaSessao).toBe(false);
+  // A fala continua com uma dilatação real → deve disparar (cancela o stop curto).
+  speak('vou dilatar a pupila');
+  expect(ctx._BRIDGE.dilatacaoDetectada).toBe(true);
+});
+
 test('[DIL-2] "pode esperar lá fora" → dilatacaoDetectada=true', () => {
   speak('pode esperar lá fora');
   expect(ctx._BRIDGE.dilatacaoDetectada).toBe(true);
@@ -577,11 +589,39 @@ test('[DIL-STT-2] "lata" + "aparelho" sem contexto cirúrgico NÃO dispara se em
 // TESTES FASE 2 DE DILATAÇÃO + FALSOS POSITIVOS RETROSPECTIVOS (2026-07-09)
 // ──────────────────────────────────────────────────────────────────────────────
 
-test('[DIL-FASE2-1] fase2DilatacaoAtiva suprime o hook de dilatação ("vou dilatar" não pausa)', () => {
+test('[DIL-FASE2-1] fase2: comando FRESCO na cauda ("vou dilatar" no fim) AINDA pausa', () => {
+  // Contrato novo (2026-07-17): fase2 não suprime mais o hook por completo —
+  // só restringe o match à cauda. Um "vou dilatar" dito agora, no fim da fala,
+  // é uma pausa real (paciente diferente, ou nova dilatação do mesmo) e dispara.
   ctx._BRIDGE.StateManager.setHookFlag('fase2DilatacaoAtiva', true);
   speak('vou dilatar agora');
+  expect(ctx._BRIDGE.dilatacaoDetectada).toBe(true);
+});
+
+test('[DIL-FASE2-1b] fase2: narração retrospectiva LONGE da cauda NÃO pausa', () => {
+  // "vou dilatar" enterrado no meio do transcript acumulado, com >300 chars até
+  // o fim (fora do recentTextBuffer) — narração do retorno, não nova pausa.
+  ctx._BRIDGE.StateManager.setHookFlag('fase2DilatacaoAtiva', true);
+  const normFinal = ctx._BRIDGE.normalizeText('ja dilatou vou dilatar ' + 'a'.repeat(400) + ' otimo pupila reagente');
+  const buf = normFinal.slice(-300);
+  ctx._BRIDGE.runHooks(normFinal, normFinal, buf);
   expect(ctx._BRIDGE.dilatacaoDetectada).toBe(false);
-  expect(ctx._BRIDGE.stopCommandTimeout).toBe(null);
+});
+
+test('[DIL-FASE2-LIMIT] LIMITAÇÃO CONHECIDA: narração retrospectiva NA CAUDA ainda pausa em fase2', () => {
+  // O tail-scan restaura o disparo ao vivo de um comando FRESCO (o bug do
+  // paciente diferente, 2026-07-17), mas NÃO distingue narração retrospectiva
+  // de comando novo quando a frase é dita AGORA, no fim da fala: ao vivo, a
+  // narração do retorno também está na cauda no momento em que é falada.
+  // Ex.: no retorno da dilatação do MESMO paciente, "já pinguei o colírio para
+  // dilatar" dispara uma pausa falsa. Recuperação: botão "Desfazer dilatação"
+  // (cancelarDilatacao). Fix definitivo = fase2 explícita por botão, não
+  // adivinhada por "próxima gravação em 6h". Este teste documenta o
+  // comportamento atual — se ele mudar (ex.: heurística de tempo verbal ou
+  // fase2 opt-in), reavaliar a asserção.
+  ctx._BRIDGE.StateManager.setHookFlag('fase2DilatacaoAtiva', true);
+  speakSemCaptura('deixa eu ver o fundo ja pinguei o colirio para dilatar');
+  expect(ctx._BRIDGE.dilatacaoDetectada).toBe(true);
 });
 
 test('[DIL-FASE2-2] sem fase2, "vou dilatar" continua pausando normalmente', () => {

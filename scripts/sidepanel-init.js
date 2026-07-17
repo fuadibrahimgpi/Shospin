@@ -37,6 +37,10 @@ clearBtn.addEventListener('click', () => clearAll({ clearAudio: true, clearCamer
 // Desfazer dilatação: reprocessa a consulta como completa (gatilho por engano).
 if (cancelDilatacaoBtn) cancelDilatacaoBtn.addEventListener('click', cancelarDilatacao);
 
+// Retomar pós-dilatação: confirma o retorno do MESMO paciente e libera o uso do
+// contexto da fase 1 na próxima gravação (por padrão, cada gravação é paciente novo).
+if (retomarDilatacaoBtn) retomarDilatacaoBtn.addEventListener('click', confirmarRetomadaDilatacao);
+
 // Visibilidade do botão dirigida por UMA fonte: a chave persistida _shospDilatacaoPhase1.
 // storage.onChanged cobre todos os pontos de mutação (injeção de dilatação, undo,
 // clearAll, conclusão da fase 2) sem toggles espalhados. Checa também no load.

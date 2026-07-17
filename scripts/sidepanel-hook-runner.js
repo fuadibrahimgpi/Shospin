@@ -96,7 +96,14 @@ function _hookMatches(hook, normalizedFinal, normalizedCurrent, recentTextBuffer
     return null;
   }
 
-  const sources = hook.tailOnly
+  // Fase 2 da dilatação: quando o hook é fase2TailOnly e esta sessão é o
+  // retorno de uma dilatação, só a CAUDA conta. Assim uma narração
+  // retrospectiva ("já dilatou?", "pinguei o colírio para dilatar") no meio do
+  // transcript acumulado não re-arma a pausa; apenas um comando dito agora, no
+  // fim da fala (recentTextBuffer), dispara. Sem isso, o multiSource varreria o
+  // transcript inteiro e qualquer menção retrospectiva pausaria a consulta.
+  const fase2Tail = hook.fase2TailOnly && HOOK_STATE.fase2DilatacaoAtiva;
+  const sources = (hook.tailOnly || fase2Tail)
     ? [recentTextBuffer]
     : hook.multiSource
       ? [normalizedFinal, normalizedCurrent, recentTextBuffer]
@@ -320,8 +327,12 @@ function _runStopCheck(normalizedFinal, normalizedCurrent, recentTextBuffer) {
     if (!matchedCmd) continue;
 
     // Encerramento (sticky): uma despedida foi DETECTADA — registra mesmo que o
-    // gate bloqueie ou o stop seja cancelado. Suprime dilatação subsequente.
-    if (hook.id !== 'dilatacao') HOOK_STATE.despedidaNaSessao = true;
+    // gate bloqueie. NÃO marca para stops endAnchored (stop_curto/saudacao/
+    // ancorado): essas frases são canceladas quando a fala continua ("bom
+    // dia"/"até mais" no meio da consulta), e marcar aqui deixava a flag presa,
+    // suprimindo em silêncio uma dilatação legítima depois (caso real
+    // 2026-07-17). Só despedida FORTE/não-cancelável é sticky de imediato.
+    if (hook.id !== 'dilatacao' && !hook.endAnchored) HOOK_STATE.despedidaNaSessao = true;
 
     // Gate de captura: sem conduta+tratamento ditados, não encerra a consulta
     if (_stopGateBlocks(hook, normalizedCurrent, matchedCmd)) continue;
@@ -379,8 +390,10 @@ function runHooks(normalizedFinal, normalizedCurrent, recentTextBuffer) {
     const matchedCmd = _hookMatches(hook, normalizedFinal, normalizedCurrent, recentTextBuffer);
     if (!matchedCmd) continue;
 
-    // ── Encerramento (sticky): despedida detectada → suprime dilatação depois ──
-    if (hook.type === 'stop' && hook.id !== 'dilatacao') HOOK_STATE.despedidaNaSessao = true;
+    // ── Encerramento (sticky): despedida detectada → suprime dilatação depois.
+    //    Exclui stops endAnchored (canceláveis): marcá-los deixava a flag presa
+    //    após um "bom dia"/"até mais" cancelado, matando dilatação legítima. ──
+    if (hook.type === 'stop' && hook.id !== 'dilatacao' && !hook.endAnchored) HOOK_STATE.despedidaNaSessao = true;
 
     // ── Gate de captura (stop de fim de consulta): sem conduta+tratamento
     //    ditados na fala, o encerramento é bloqueado e a gravação continua ──

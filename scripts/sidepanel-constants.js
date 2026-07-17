@@ -353,6 +353,7 @@ const actionButtons = document.getElementById('actionButtons');
 const injectAllBtn = document.getElementById('injectAllBtn');
 const clearBtn = document.getElementById('clearBtn');
 const cancelDilatacaoBtn = document.getElementById('cancelDilatacaoBtn');
+const retomarDilatacaoBtn = document.getElementById('retomarDilatacaoBtn');
 const successMessage = document.getElementById('successMessage');
 const btnSearchCid = document.getElementById('btnSearchCid');
 const btnSearchCidRetorno = document.getElementById('btnSearchCidRetorno');

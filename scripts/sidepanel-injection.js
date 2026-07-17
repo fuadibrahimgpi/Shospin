@@ -450,15 +450,21 @@ async function injectAll(force = false) {
   }
   console.log('[InjectAll] Aba de injeção selecionada:', tab.id, tab.url?.slice(0, 60));
 
-  // Carregar dados persistidos da fase 1 de dilatação (se existirem e não expiraram em 6h)
+  // Carregar dados persistidos da fase 1 SOMENTE quando o médico confirmou o
+  // retorno do MESMO paciente (retomar). Sem confirmação, os campos da fase 1
+  // não são mesclados na injeção atual — evita levar a entrevista de um paciente
+  // ao prontuário de outro atendido durante a espera (caso 2026-07-17). O store
+  // expirado é descartado; o não-confirmado é apenas ignorado (o médico ainda
+  // pode confirmar pelo botão numa gravação seguinte).
   let _phase1Data = null;
   try {
-    _phase1Data = await new Promise(resolve =>
+    const _raw = await new Promise(resolve =>
       chrome.storage.local.get('_shospDilatacaoPhase1', d => resolve(d._shospDilatacaoPhase1 || null))
     );
-    if (_phase1Data && Date.now() - (_phase1Data.ts || 0) > 6 * 60 * 60 * 1000) {
-      _phase1Data = null;
+    if (_raw && Date.now() - (_raw.ts || 0) > 6 * 60 * 60 * 1000) {
       chrome.storage.local.remove('_shospDilatacaoPhase1');
+    } else if (_raw && _raw.retomar === true) {
+      _phase1Data = _raw;
     }
   } catch (_e) { _phase1Data = null; }
 

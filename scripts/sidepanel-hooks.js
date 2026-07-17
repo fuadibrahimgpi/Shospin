@@ -195,12 +195,17 @@ const VOICE_HOOKS = [
     // consulta está em fim/encerrada — um "vamos dilatar" agora provavelmente
     // se refere a outra pessoa (acompanhante/próximo paciente), não ao paciente
     // atual. Não sequestrar a consulta encerrada com uma pausa de dilatação.
-    // fase2DilatacaoAtiva: esta sessão é o RETORNO de uma dilatação — frases
-    // retrospectivas ("já dilatou", "pinguei o colírio para dilatar") não são
-    // anúncio de nova pausa. Uma nova dilatação real nesta fase é coberta pelo
-    // fallback onstop (parada manual), que varre a cauda do texto.
-    guard: (s) => s.dilatacaoDetectada || s.despedidaNaSessao || s.fase2DilatacaoAtiva,
+    // fase2DilatacaoAtiva: esta sessão é o RETORNO de uma dilatação. NÃO
+    // suprimimos mais o hook por completo (isso matava a pausa quando a
+    // gravação seguinte era um PACIENTE DIFERENTE, e não o retorno — caso real
+    // 2026-07-17, dois irmãos em sequência). Em vez de bloquear, restringimos o
+    // match à CAUDA da fala (fase2TailOnly) — narração retrospectiva espalhada
+    // pelo transcript ("já dilatou", "pinguei o colírio para dilatar") não
+    // conta; só um comando dito agora, no fim, dispara. Espelha o slice(-300)
+    // dos fallbacks onstop/pós-Gemini e a regra dos combos.
+    guard: (s) => s.dilatacaoDetectada || s.despedidaNaSessao,
     multiSource: true,
+    fase2TailOnly: true,
     onMatch: (text, s) => {
       s.dilatacaoDetectada = true;
       console.log('[Hook] DILATAÇÃO detectada — stop agendado (pausa, não fim de consulta)');

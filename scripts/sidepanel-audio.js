@@ -91,19 +91,21 @@ async function startRecording() {
     stopGateOffset = 0;
     stopGateBlockCount = 0;
 
-    // Fase 2 de dilatação: se há pausa persistida, esta gravação é o RETORNO
-    // do paciente. Suprimir o hook de dilatação por voz nesta sessão — frases
-    // retrospectivas do retorno ("já dilatou", "pinguei o colírio para dilatar
-    // a pupila") re-disparavam a pausa e a consulta nunca fechava.
-    // motivo='exame' (pausa manual no meio do exame, sem dilatação) NÃO
-    // suprime: a dilatação ainda pode ser anunciada na sessão retomada.
+    // Fase 2 de dilatação: só é a fase 2 do MESMO paciente quando o médico
+    // confirmou explicitamente pelo botão "Retomar pós-dilatação" (_store.retomar).
+    // Sem essa confirmação, esta gravação é tratada como paciente NOVO — não se
+    // ativa o modo fase 2 (tail-scan), pois assumir "próxima gravação = retorno"
+    // fazia a pausa de um paciente contaminar/suprimir a consulta do próximo
+    // atendido durante a espera da dilatação (caso real 2026-07-17, dois irmãos).
+    // motivo='exame' (pausa manual no meio do exame, sem dilatação) nunca é fase 2.
     try {
       const _store = await new Promise(resolve =>
         chrome.storage.local.get('_shospDilatacaoPhase1', d => resolve(d._shospDilatacaoPhase1 || null))
       );
-      if (_store && Date.now() - (_store.ts || 0) <= 6 * 60 * 60 * 1000 && _store.motivo !== 'exame') {
+      if (_store && _store.retomar === true && _store.transcript &&
+          Date.now() - (_store.ts || 0) <= 6 * 60 * 60 * 1000 && _store.motivo !== 'exame') {
         StateManager.setHookFlag('fase2DilatacaoAtiva', true);
-        console.log('[Audio] Fase 2 de dilatação — gatilho de dilatação por voz suprimido nesta sessão.');
+        console.log('[Audio] Fase 2 confirmada (mesmo paciente) — gatilho de dilatação restrito à cauda da fala.');
       }
     } catch (_e) { /* storage indisponível — segue sem supressão */ }
 
@@ -388,12 +390,17 @@ async function processAudioInBackground(audioBlob, capturedText) {
     // "vai dilatar" da fase 1 não pode redetectar dilatação na fase 2.
     // Carregado ANTES do guard de exame em andamento: o guard também precisa
     // do acumulado para persistir a transcrição ao adiar a análise.
+    // Só anexa o contexto da fase 1 quando o médico confirmou o retorno do MESMO
+    // paciente (_phase1Store.retomar). Sem confirmação, a transcrição persistida
+    // pertence — potencialmente — a OUTRO paciente atendido durante a espera, e
+    // colá-la aqui contaminaria a análise/prontuário atual (caso 2026-07-17).
     let _phase1Store = null;
     try {
       _phase1Store = await new Promise(resolve =>
         chrome.storage.local.get('_shospDilatacaoPhase1', d => resolve(d._shospDilatacaoPhase1 || null))
       );
-      if (_phase1Store && Date.now() - (_phase1Store.ts || 0) > 6 * 60 * 60 * 1000) {
+      if (_phase1Store && (_phase1Store.retomar !== true ||
+          Date.now() - (_phase1Store.ts || 0) > 6 * 60 * 60 * 1000)) {
         _phase1Store = null;
       }
     } catch (_e) { _phase1Store = null; }
@@ -401,7 +408,7 @@ async function processAudioInBackground(audioBlob, capturedText) {
     let analysisText = textToProcess;
     if (_phase1Store?.transcript) {
       analysisText = _phase1Store.transcript + '\n\n[RETORNO DA DILATACAO]\n\n' + textToProcess;
-      console.log('[Audio] Transcrição da fase pré-dilatação anexada como contexto da análise.');
+      console.log('[Audio] Fase 2 confirmada — transcrição da fase 1 anexada como contexto da análise.');
     }
 
     // Guard pré-Gemini: exame/refração em andamento — não analisar como consulta final.
@@ -618,17 +625,60 @@ async function processAudioInBackground(audioBlob, capturedText) {
 // re-armariam a pausa); chama analyzeConsultation + DecisionEngine + injeção
 // diretamente, com forceComplete=true.
 
-/** Mostra/esconde o botão de desfazer conforme a pausa de dilatação persistida. */
+/**
+ * Mostra/esconde os botões de pós-dilatação conforme a pausa persistida:
+ *  - "Não era dilatação" (cancelarDilatacao): visível enquanto há pausa ativa.
+ *  - "Retomar pós-dilatação" (confirmarRetomadaDilatacao): visível só enquanto
+ *    a pausa AINDA NÃO foi confirmada (store.retomar !== true) — some após o
+ *    médico confirmar o retorno do mesmo paciente, dando feedback do clique.
+ */
 function refreshUndoVisibility() {
-  if (!cancelDilatacaoBtn) return;
+  if (!cancelDilatacaoBtn && !retomarDilatacaoBtn) return;
   try {
     chrome.storage.local.get('_shospDilatacaoPhase1', d => {
       const store = d._shospDilatacaoPhase1;
       const ativo = !!(store && store.transcript &&
         Date.now() - (store.ts || 0) <= 6 * 60 * 60 * 1000);
-      cancelDilatacaoBtn.classList.toggle('hidden', !ativo);
+      if (cancelDilatacaoBtn) cancelDilatacaoBtn.classList.toggle('hidden', !ativo);
+      if (retomarDilatacaoBtn) retomarDilatacaoBtn.classList.toggle('hidden', !(ativo && store.retomar !== true));
     });
   } catch (_e) { /* storage indisponível — mantém oculto */ }
+}
+
+/**
+ * Confirma que o MESMO paciente voltou da dilatação: marca a pausa persistida
+ * com retomar=true. A partir daí, a próxima gravação usa o contexto da fase 1
+ * (anexa a transcrição, mescla campos na injeção e restringe o gatilho de
+ * dilatação à cauda). Enquanto não confirmado, toda gravação é tratada como
+ * paciente novo — o padrão seguro contra contaminação entre pacientes.
+ */
+async function confirmarRetomadaDilatacao() {
+  let store = null;
+  try {
+    store = await new Promise(resolve =>
+      chrome.storage.local.get('_shospDilatacaoPhase1', d => resolve(d._shospDilatacaoPhase1 || null)));
+  } catch (_e) { store = null; }
+
+  if (!store || !store.transcript || Date.now() - (store.ts || 0) > 6 * 60 * 60 * 1000) {
+    chrome.storage.local.remove('_shospDilatacaoPhase1');
+    refreshUndoVisibility();
+    if (statusText) {
+      statusText.textContent = 'Nenhuma pausa de dilatação ativa para retomar.';
+      statusText.style.color = '#eab308';
+    }
+    return;
+  }
+
+  store.retomar = true;
+  chrome.storage.local.set({ _shospDilatacaoPhase1: store }, () => {
+    refreshUndoVisibility();
+    console.log('[Audio] Retomada de dilatação confirmada — próxima gravação usará o contexto da fase 1.');
+    if (statusText) {
+      statusText.textContent = 'Retorno confirmado — grave a fase 2 do mesmo paciente.';
+      statusText.style.color = '#16a34a';
+      statusText.style.fontWeight = 'normal';
+    }
+  });
 }
 
 async function cancelarDilatacao() {

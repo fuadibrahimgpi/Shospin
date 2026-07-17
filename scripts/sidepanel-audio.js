@@ -112,6 +112,7 @@ async function startRecording() {
     // Timestamp de início — usado para calcular duração mínima da sessão
     sessionStartTime = Date.now();
     lastSpeechTime = Date.now();
+    semFalaAvisoAtivo = false;
     if (silenceCheckInterval) clearInterval(silenceCheckInterval);
     silenceCheckInterval = setInterval(_checkSilence, 10_000);
 
@@ -774,17 +775,30 @@ const SILENCE_MIN_WORDS      = 40;      // mínimo de palavras capturadas
 // esquecida sem cortar a consulta em andamento.
 const SILENCE_THRESHOLD_MS   = 180_000; // 3 min sem fala dispara o aviso
 const SILENCE_WARN_MS        = 5_000;   // 5s de aviso antes de parar
+const SEM_FALA_AVISO_MS      = 30_000;  // 30s sem fala mostra aviso de mic morto
 
 function _checkSilence() {
   if (!isRecording || stopCommandTimeout || SessionFlags.dilatacaoDetectada || silencePendingStop) return;
   if (isSpeechPausedByCamera) return;
+
+  const silenceMs = Date.now() - lastSpeechTime;
+
+  // Aviso de captura morta: nenhuma fala reconhecida há 30s+. O médico precisa
+  // VER que o áudio não está chegando antes de dizer a despedida — caso real
+  // 2026-07-16: o STT morreu no fim da consulta e engoliu "passe no balcão",
+  // "boa tarde" e "encerrar a consulta" sem nenhum feedback; o status seguia
+  // mostrando "Gravando..." como se tudo estivesse normal.
+  if (silenceMs >= SEM_FALA_AVISO_MS) {
+    semFalaAvisoAtivo = true;
+    statusText.textContent = `⚠️ Sem fala há ${Math.round(silenceMs / 1000)}s — verifique o microfone antes da despedida`;
+    statusText.style.color = '#f59e0b';
+  }
 
   if (Date.now() - sessionStartTime < SILENCE_MIN_SESSION_MS) return;
 
   const wordCount = recognizedText.trim() ? recognizedText.trim().split(/\s+/).length : 0;
   if (wordCount < SILENCE_MIN_WORDS) return;
 
-  const silenceMs = Date.now() - lastSpeechTime;
   if (silenceMs < SILENCE_THRESHOLD_MS) return;
 
   console.log(`[Silence] ${Math.round(silenceMs / 1000)}s sem fala (${wordCount} palavras) — agendando encerramento`);
@@ -835,6 +849,14 @@ function startSpeechRecognition() {
       if (silencePendingStop) {
         clearTimeout(silencePendingStop);
         silencePendingStop = null;
+        if (isRecording && !stopCommandTimeout) {
+          statusText.textContent = 'Gravando...';
+          statusText.style.color = '#ef4444';
+        }
+      }
+      // Fala voltou a chegar — restaurar o status se o aviso de mic morto estava ativo
+      if (semFalaAvisoAtivo) {
+        semFalaAvisoAtivo = false;
         if (isRecording && !stopCommandTimeout) {
           statusText.textContent = 'Gravando...';
           statusText.style.color = '#ef4444';

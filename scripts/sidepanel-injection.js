@@ -508,7 +508,11 @@ async function injectAll(force = false) {
       const _bioBase = audioData?.dados?.biomicroscopia || BIOMICROSCOPIA_BLEFARITE;
       combinedData.examesNormais = {
         biomicroscopia: getBiomicroscopiaComLente(_bioBase),
-        fundoscopia: FUNDOSCOPIA_NORMAL // blefarite sempre injeta fundoscopia normal
+        // Blefarite é achado de segmento ANTERIOR — não implica fundo normal.
+        // Se o médico discutiu achado posterior (ex.: escavação aumentada suspeita de
+        // glaucoma), o Gemini preenche dados.fundoscopia e ela prevalece; o template
+        // normal só entra quando nada foi descrito no fundo.
+        fundoscopia: audioData?.dados?.fundoscopia || FUNDOSCOPIA_NORMAL
       };
     } else if (!audioData?.dilatacaoDetectada &&
                (audioData?.dados?.biomicroscopia || audioData?.dados?.fundoscopia)) {
@@ -531,6 +535,19 @@ async function injectAll(force = false) {
         fundoscopia: mencionouFundoNaFala ? FUNDOSCOPIA_NORMAL : null,
       };
     }
+  } else if (!audioData?.dilatacaoDetectada && audioData?.dados?.fundoscopia) {
+    // Correção pós-análise: um gatilho de voz (blefarite/exames normais) já injetou
+    // FUNDOSCOPIA_NORMAL no momento em que disparou — antes de o médico descrever o
+    // fundo. Se a análise depois identificou um achado posterior (ex.: escavação
+    // aumentada suspeita de glaucoma), o achado real prevalece sobre o template, que
+    // afirmaria "escavação simétrica e fisiológica" e contradiria o diagnóstico.
+    const _bioBase = audioData?.dados?.biomicroscopia ||
+      (SessionFlags.blefariteInjetada ? BIOMICROSCOPIA_BLEFARITE : BIOMICROSCOPIA_NORMAL);
+    combinedData.examesNormais = {
+      biomicroscopia: getBiomicroscopiaComLente(_bioBase),
+      fundoscopia: audioData.dados.fundoscopia,
+    };
+    console.log('[ExamesNormais] Fundoscopia do gatilho corrigida — achado de fundo descrito na consulta.');
   }
 
   if (audioData?.injectBlefarite) {

@@ -37,16 +37,19 @@ function normalizeText(text) {
 // Frases curtas/ambíguas (despedidas genéricas) ficam em STOP_COMMANDS_CURTOS.
 
 const STOP_COMMANDS = [
-  'algo que eu possa ajudar', 'algo que possa ajudar',
-  'algo que eu posso ajudar', 'algo que posso ajudar',
+  // "ajudar" SEMPRE com "mais": as formas curtas ('algo que eu possa ajudar',
+  // 'posso ajudar em alguma coisa') aparecem no meio de explicações de conduta
+  // e paravam a gravação cedo — removidas na revisão 2026-07-16.
   'algo mais que eu possa ajudar',
   'algo mais que eu posso ajudar',
   'mais alguma coisa que eu possa ajudar',
   'mais alguma coisa que eu posso ajudar',
   'alguma coisa mais que eu possa ajudar',
   'alguma coisa mais que eu posso ajudar',
-  'posso ajudar alguma duvida',
-  'posso ajudar em alguma coisa',
+  'posso ajudar em mais alguma coisa',
+  'posso te ajudar em mais alguma coisa',
+  'posso ajudar em alguma coisa mais',
+  'posso ajudar em algo mais',
   'pode ir na recepcao',
   'pode buscar na recepcao',
   'pode pegar na recepcao',
@@ -77,13 +80,20 @@ const STOP_COMMANDS = [
   'vai ate a recepcao',
   'pode ir la ate a recepcao',
   'passa na recepcao',
+  'passe na recepcao',
   'pode passar na recepcao',
   // BALCÃO — fraseado recorrente do médico para encerrar mandando o paciente
   // ao balcão (2026-07-15). Espelha as variantes de "recepcao".
+  // "passe" (imperativo formal) — caso real 2026-07-16: médico disse "passe no
+  // balcão" e a lista só tinha 'passa'/'passar'.
   'passar no balcao',
   'passa no balcao',
+  'passe no balcao',
   'passar la no balcao',
   'passa la no balcao',
+  'passe la no balcao',
+  'passa ai no balcao',
+  'passe ai no balcao',
   'pode ir no balcao',
   'pode ir la no balcao',
   'pode ir ate o balcao',
@@ -96,53 +106,37 @@ const STOP_COMMANDS = [
   'entregar isso no balcao',
   'entrega isso no balcao',
   'buscar no balcao',
+  'busca no balcao',
   'pegar no balcao',
-  'pode ir pegar a receita',
-  'pode pegar a receita',
+  'pega no balcao',
+  'pega la no balcao',
+  // pagamento no balcão também é encerramento
+  'pagar no balcao',
+  'paga no balcao',
+  'paga la no balcao',
   'pegar a receita na recepcao',
   'pode pegar la na recepcao',
+  // ⚠️ Frases que também são DITADO DE CONDUTA ('retorno em um ano', 'pode
+  // trocar os oculos', 'volta se piorar'...) NÃO entram nesta lista forte —
+  // elas param a gravação no meio da consulta porque o próprio texto satisfaz
+  // o gate de captura. Ficam em STOP_COMMANDS_ANCORADOS (só casam no fim da
+  // fala, com cancelamento). Revisão 2026-07-16.
   'ate o proximo ano',
   'ate ano que vem',
   'nos vemos ano que vem',
-  'volte no ano que vem',
-  'retorno ano que vem',
-  'retorno daqui a um ano',
-  'retorno em um ano',
-  'retorno em 1 ano',
-  'retorno no proximo ano',
-  'volte daqui a um ano',
-  'volte em um ano',
   'ate daqui a um ano',
   'ate daqui a seis meses',
-  'retorno em seis meses',
-  'retorno daqui a seis meses',
-  'volte em seis meses',
-  'volte daqui a seis meses',
   'ate daqui a tres meses',
-  'retorno em tres meses',
-  'volte em tres meses',
   'a gente se ve depois',
   'nos vemos depois',
   'ate a proxima vez',
   'qualquer coisa estamos ai',
   'qualquer coisa estamos aqui',
   'qualquer coisa pode chamar',
-  'pode fazer os oculos',
-  'pode comprar os oculos',
-  'pode trocar os oculos',
-  'vai fazer os oculos',
   'pode ir na farmacia',
   'vai la na farmacia',
   'pode ir la na farmacia',
   'pode ir ate a farmacia',
-  'volta aqui se nao melhorar',
-  'volta aqui se piorar',
-  'volta se nao melhorar',
-  'volta se piorar',
-  'pode voltar se nao melhorar',
-  'pode voltar se piorar',
-  'volta aqui se necessario',
-  'volta se necessario',
   'bom viagem',
   'boa viagem',
 ];
@@ -163,6 +157,57 @@ const STOP_COMMANDS_CURTOS = [
   'ate mais',
   'ate logo',
   'tchau',
+];
+
+// ============================================================================
+// STOP_COMMANDS_ANCORADOS — encerramentos que também são ditado de conduta
+// ============================================================================
+// Frases legítimas de despedida que TAMBÉM aparecem no meio da consulta como
+// ditado de conduta ("retorno em seis meses", "pode trocar os oculos") ou
+// entrega de documento ("declaracao de comparecimento"). Na lista forte elas
+// paravam a gravação NO MEIO da consulta: o próprio texto satisfaz o gate de
+// captura (são marcadores de conduta/conduta refrativa), então o stop
+// disparava em 500ms sem cancelamento. O hook que as consome usa endAnchored:
+// só casam no FIM da fala atual, e o stop agendado é CANCELADO se a fala
+// continuar (mesma mecânica dos STOP curtos). Revisão 2026-07-16.
+
+const STOP_COMMANDS_ANCORADOS = [
+  // óculos / receita (conduta refrativa — o próprio texto satisfaz o gate)
+  'pode fazer os oculos',
+  'pode comprar os oculos',
+  'pode trocar os oculos',
+  'vai fazer os oculos',
+  'pode ir pegar a receita',
+  'pode pegar a receita',
+  // retorno programado (marcador de conduta)
+  'retorno ano que vem',
+  'retorno no proximo ano',
+  'retorno daqui a um ano',
+  'retorno em um ano',
+  'retorno em 1 ano',
+  'retorno em seis meses',
+  'retorno daqui a seis meses',
+  'retorno em tres meses',
+  'volte no ano que vem',
+  'volte daqui a um ano',
+  'volte em um ano',
+  'volte em seis meses',
+  'volte daqui a seis meses',
+  'volte em tres meses',
+  // retorno condicional
+  'volta aqui se nao melhorar',
+  'volta aqui se piorar',
+  'volta se nao melhorar',
+  'volta se piorar',
+  'pode voltar se nao melhorar',
+  'pode voltar se piorar',
+  'volta aqui se necessario',
+  'volta se necessario',
+  // documento de fim de consulta — caso real 2026-07-16: "declaração de
+  // comparecimento" foi a última fala inteligível transcrita antes de o STT
+  // morrer e engolir as despedidas
+  'declaracao de comparecimento',
+  'atestado de comparecimento',
 ];
 
 // ============================================================================
@@ -211,6 +256,51 @@ const STOP_SAUDACAO_COMMANDS = [
   'boa tarde',
   'boa noite',
 ];
+
+// ============================================================================
+// CONTINUAÇÃO DE DESPEDIDA — prorroga (em vez de cancelar) stops ancorados
+// ============================================================================
+// Caso real 2026-07-17: a despedida veio em cadeia — "ta bom entao" (agendou o
+// stop) seguido de "ate daqui a pouquinho obrigada". A mecânica endAnchored
+// cancelou o stop porque "a fala continuou", mas a continuação era a própria
+// despedida; como o trecho final não é gatilho, nada re-disparou e o médico
+// precisou do "consulta encerrada" forçado. Não adianta mapear cada cauda de
+// despedida como gatilho novo (variam infinitamente) — em vez disso, quando a
+// fala continua após uma despedida ancorada, o runner verifica se a
+// continuação é composta APENAS destas palavras: se for, o timer de silêncio é
+// prorrogado; se houver qualquer palavra fora da lista (conteúdo clínico), o
+// stop é cancelado como antes.
+
+const DESPEDIDA_CONTINUACAO_WORDS = new Set([
+  // conectivos e muletas curtas
+  'a', 'o', 'e', 'um', 'uma', 'de', 'do', 'da', 'no', 'na', 'em',
+  'pra', 'para', 'com', 'se', 'que', 'ne', 'viu', 'hein', 'entao',
+  'ta', 'tao', 'ai', 'la', 'ok', 'beleza', 'certo', 'tudo', 'bem',
+  // vocabulário de despedida
+  'ate', 'logo', 'mais', 'breve', 'depois', 'amanha', 'daqui',
+  'pouquinho', 'pouco', 'tchau', 'obrigado', 'obrigada', 'brigado',
+  'brigada', 'valeu', 'prazer', 'foi', 'bom', 'boa', 'dia', 'tarde',
+  'noite', 'semana', 'fim', 'sorte', 'viagem', 'cuida', 'cuide',
+  'deus', 'vai', 'fica', 'tranquilo', 'tranquila', 'abraco', 'gente',
+  'nos', 'vemos', 've', 'proxima', 'consulta', 'retorno', 'ano', 'vem',
+]);
+
+/**
+ * true se o trecho dito APÓS uma despedida ancorada é continuação da própria
+ * despedida ("ate daqui a pouquinho obrigada") e não conteúdo clínico novo.
+ * Toda palavra precisa estar no vocabulário; limite de 12 palavras evita
+ * prorrogação indefinida. Auto-corretivo: se a cauda crescer com qualquer
+ * palavra clínica em eventos seguintes, o cancelamento normal acontece.
+ *
+ * @param {string} tail - texto normalizado após o fim do comando de despedida
+ * @returns {boolean}
+ */
+function isContinuacaoDespedida(tail) {
+  const words = tail.trim().split(/\s+/).filter(Boolean);
+  if (words.length === 0) return true;
+  if (words.length > 12) return false;
+  return words.every(w => DESPEDIDA_CONTINUACAO_WORDS.has(w));
+}
 
 // ============================================================================
 // DILATACAO_COMMANDS — pausa para dilatar pupila (prioridade 50)
@@ -546,6 +636,7 @@ const LIO_COMMANDS = [
   'ja operou os olhos',
   'fez cirurgia de catarata',
   'fez a cirurgia de catarata',
+  'fez uma cirurgia de catarata',   // caso real 2026-07-17: "já que você fez uma cirurgia de catarata traumática"
   // 'cirurgia de catarata' REMOVIDO: ambíguo — dispara quando médico *planeja* cirurgia futura
   // ("agora dá para pensar em mexer"), causando pseudofacia indevida em paciente fácico com catarata.
   // 'fez cirurgia de catarata' já cobre o caso passado com clareza.
@@ -755,6 +846,22 @@ const CONDUTA_REFRATIVA_MARKERS = [
   'tipo de fogao',
 ];
 
+// Marcadores de CONDUTA DE PROCEDIMENTO em consultório — o procedimento
+// resolve a consulta (excisão de calázio, drenagem, retirada de corpo
+// estranho): conta como conduta E satisfaz o requisito de tratamento no gate,
+// como a conduta refrativa. Caso real 2026-07-16: consulta de calázio ("eu vou
+// ate resolver isso aqui") não casava nenhum marcador — a despedida seria
+// bloqueada com "falta ditar CONDUTA e TRATAMENTO" mesmo com a consulta
+// resolvida.
+
+const CONDUTA_PROCEDIMENTO_MARKERS = [
+  'resolver isso aqui', 'resolvo isso aqui', 'vou resolver isso',
+  'tirar isso aqui', 'vou tirar isso', 'remover isso', 'retirar isso',
+  'fazer o procedimento', 'pequeno procedimento', 'pequena cirurgia',
+  'drenar', 'drenagem', 'excisao', 'exerese', 'curetagem',
+  'no consultorio mesmo', 'aqui no consultorio',
+];
+
 // Marcadores de TRATAMENTO falado — prescrição de medicamentos/posologia.
 // As negativas explícitas ("não precisa de tratamento") também CONTAM como
 // tratamento captado: o médico resolveu o campo verbalmente.
@@ -878,6 +985,9 @@ function detectaEncerramentoNaFala(text) {
   if (STOP_COMMANDS.some(cmd => norm.includes(cmd))) return true;
   const tail = norm.slice(-40);
   if (STOP_COMMANDS_CURTOS.some(cmd => tail.includes(cmd))) return true;
+  // Ancorados: aqui a gravação já terminou — se a frase está na cauda, foi a
+  // última coisa dita e vale como encerramento.
+  if (STOP_COMMANDS_ANCORADOS.some(cmd => tail.includes(cmd))) return true;
   // Saudações-despedida: aqui a gravação já terminou, então uma saudação no
   // FIM do texto é despedida (a saudação de abertura fica no início do texto).
   return STOP_SAUDACAO_COMMANDS.some(cmd => tail.includes(cmd));
@@ -894,7 +1004,22 @@ function detectaCondutaNaFala(text) {
   const norm = normalizeText(text);
   if (CONDUTA_FALA_MARKERS.some(m => norm.includes(m))) return true;
   if (CONDUTA_FALA_REGEXES.some(re => re.test(norm))) return true;
+  if (detectaCondutaProcedimentoNaFala(norm)) return true;
   return detectaCondutaRefrativaNaFala(norm);
+}
+
+/**
+ * Detecta se uma CONDUTA DE PROCEDIMENTO em consultório foi ditada na fala
+ * (excisão de calázio, drenagem, retirada de corpo estranho). Como a conduta
+ * refrativa, também satisfaz o requisito de tratamento no gate de captura:
+ * o procedimento É o tratamento da consulta.
+ *
+ * @param {string} text - transcrição (com ou sem acentos)
+ * @returns {boolean}
+ */
+function detectaCondutaProcedimentoNaFala(text) {
+  const norm = normalizeText(text);
+  return CONDUTA_PROCEDIMENTO_MARKERS.some(m => norm.includes(m));
 }
 
 /**
@@ -940,9 +1065,13 @@ function checkCondutaTratamentoCaptados(text) {
   // Caso real 2026-07-15: gate bloqueou "alguma pergunta alguma duvida" com
   // "falta ditar TRATAMENTO" numa consulta só de óculos + lente de prova,
   // forçando o médico a usar "encerrar consulta".
+  // Conduta de PROCEDIMENTO idem: a excisão/drenagem feita em consultório É o
+  // tratamento da consulta (caso real 2026-07-16: calázio resolvido na hora,
+  // nenhum colírio a ditar).
   const tratamento = !STOP_GATE.exigirTratamento
     || detectaTratamentoNaFala(norm)
-    || detectaCondutaRefrativaNaFala(norm);
+    || detectaCondutaRefrativaNaFala(norm)
+    || detectaCondutaProcedimentoNaFala(norm);
   return { conduta, tratamento, ok: conduta && tratamento };
 }
 
@@ -968,8 +1097,11 @@ const ClinicalTriggers = {
   normalizeText,
   STOP_COMMANDS,
   STOP_COMMANDS_CURTOS,
+  STOP_COMMANDS_ANCORADOS,
   STOP_FORCAR_COMMANDS,
   STOP_SAUDACAO_COMMANDS,
+  DESPEDIDA_CONTINUACAO_WORDS,
+  isContinuacaoDespedida,
   DILATACAO_COMMANDS,
   DILATACAO_COMBOS,
   EXAME_EM_ANDAMENTO_COMMANDS,
@@ -985,6 +1117,7 @@ const ClinicalTriggers = {
   CONDUTA_FALA_REGEXES,
   CONDUTA_REFRATIVA_MARKERS,
   CONDUTA_REFRATIVA_REGEXES,
+  CONDUTA_PROCEDIMENTO_MARKERS,
   TRATAMENTO_FALA_MARKERS,
   TRATAMENTO_FALA_REGEXES,
   matchComboPair,
@@ -993,6 +1126,7 @@ const ClinicalTriggers = {
   detectaEncerramentoNaFala,
   detectaCondutaNaFala,
   detectaCondutaRefrativaNaFala,
+  detectaCondutaProcedimentoNaFala,
   detectaTratamentoNaFala,
   checkCondutaTratamentoCaptados,
 };

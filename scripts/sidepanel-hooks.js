@@ -47,8 +47,9 @@ Object.defineProperty(HOOK_STATE, 'lastTriggerTime', {
 //   20–29 → inject sem bloqueio mútuo (olho irritado)
 //   50    → stop de dilatação (pausa, não fim de consulta)
 //   98    → stop forçado (STOP_FORCAR_COMMANDS — ordem explícita, ignora o gate)
-//   99    → stop global (STOP_COMMANDS fortes + STOP_COMMANDS_CURTOS e
-//           STOP_SAUDACAO_COMMANDS ancorados no fim da fala)
+//   99    → stop global (STOP_COMMANDS fortes + STOP_COMMANDS_ANCORADOS,
+//           STOP_COMMANDS_CURTOS e STOP_SAUDACAO_COMMANDS ancorados no fim
+//           da fala, com cancelamento se a fala continuar)
 //
 // GATE DE CAPTURA (requireCaptura): os stops de FIM DE CONSULTA só encerram
 // a gravação se conduta E tratamento já tiverem sido ditados na fala
@@ -254,6 +255,32 @@ const VOICE_HOOKS = [
       s.consultaEncerradaDetectada = true;
       console.log('[Hook] STOP detectado');
       return { statusMessage: 'Comando detectado! Parando...', statusColor: '#16a34a' };
+    },
+  },
+
+  {
+    id: 'stop_ancorado',
+    type: 'stop',
+    priority: 99,
+    commands: STOP_COMMANDS_ANCORADOS,
+    cooldown: 0,
+    // Frases de encerramento que também são ditado de conduta ("pode trocar os
+    // oculos", "retorno em seis meses") ou entrega de documento ("declaracao de
+    // comparecimento"). Na lista forte elas paravam a gravação NO MEIO da
+    // consulta: o próprio texto satisfaz o gate de captura. endAnchored: só
+    // valem como despedida quando são a ÚLTIMA coisa dita — se a fala
+    // continuar, o stop é cancelado (mesma mecânica dos STOP curtos).
+    endAnchored: true,
+    stopDelay: 2000,
+    requireCaptura: true,
+    guard: (s) => s.consultaEncerradaDetectada,
+    onMatch: (text, s) => {
+      s.consultaEncerradaDetectada = true;
+      console.log('[Hook] STOP ancorado detectado (aguardando confirmação por silêncio)');
+      return { statusMessage: 'Encerramento detectado! Parando em 2s — fale para cancelar', statusColor: '#16a34a' };
+    },
+    onCancel: (s) => {
+      s.consultaEncerradaDetectada = false;
     },
   },
 

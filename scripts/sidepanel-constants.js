@@ -131,6 +131,7 @@ let stopGateBlockCount = 0;
 let lastSpeechTime = 0;
 let silenceCheckInterval = null;
 let silencePendingStop = null;
+let semFalaAvisoAtivo = false; // aviso "sem fala há Xs" ativo no status (mic morto)
 
 // Buffer de texto recente — persiste entre restarts do Speech API
 // (sem isso, o hook de stop perde o trigger se o Speech reiniciar no momento exato)
@@ -279,6 +280,11 @@ function getBiomicroscopiaComLente(baseText) {
  *
  * NÃO considera catarata secundária / opacidade de cápsula posterior (H26.4): esse achado
  * é de olho pseudofácico e tem lente própria (LENTE_OPACIDADE_CAPSULA), não "catarata".
+ *
+ * NÃO considera menção HISTÓRICA de catarata já operada — ex.: "Ambliopia OD
+ * (pós-cirurgia de catarata traumática)". Os trechos de contexto cirúrgico são
+ * removidos antes da detecção; um diagnóstico real de catarata sobrevive por CID
+ * (H25.x / H26.0–3) ou pela palavra fora do contexto cirúrgico ("Catarata senil AO").
  */
 function parseCatarataFromDiagnostico(diagnostico) {
   const vazio = { detected: false, grau: null };
@@ -286,26 +292,34 @@ function parseCatarataFromDiagnostico(diagnostico) {
 
   const norm = diagnostico.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
 
+  // Remove menções históricas (cirurgia já realizada) para que a palavra "catarata"
+  // dentro delas não conte como achado ativo. CIDs não aparecem nesses trechos,
+  // então a detecção por H25/H26 não é afetada.
+  const semHistorico = norm
+    .replace(/cirurgia\s+de\s+catarata/g, ' ')
+    .replace(/operad[ao]s?\s+de\s+catarata/g, ' ')
+    .replace(/facectomia/g, ' ');
+
   // Exclui catarata secundária / opacidade de cápsula posterior (olho pseudofácico).
   const secundaria =
-    /catarata\s+secundaria/.test(norm) ||
-    /\bh26\.?4\b/.test(norm) ||
-    /capsula\s+posterior/.test(norm);
+    /catarata\s+secundaria/.test(semHistorico) ||
+    /\bh26\.?4\b/.test(semHistorico) ||
+    /capsula\s+posterior/.test(semHistorico);
   if (secundaria) return vazio;
 
   // Catarata "real" (olho fácico): CID H25.x (senil) ou H26.0–3 (outras cataratas),
   // ou a palavra "catarata" em texto puro.
   const detected =
-    /\bh25\.?\d/.test(norm) ||
-    /\bh26\.?[0-3]\b/.test(norm) ||
-    /\bcatarata\b/.test(norm);
+    /\bh25\.?\d/.test(semHistorico) ||
+    /\bh26\.?[0-3]\b/.test(semHistorico) ||
+    /\bcatarata\b/.test(semHistorico);
   if (!detected) return vazio;
 
   let grau = null;
-  if (/incipiente/.test(norm)) grau = 'incipiente';
-  else if (/inicial/.test(norm)) grau = 'inicial';
-  else if (/moderada/.test(norm)) grau = 'moderada';
-  else if (/avancad[ao]|madura/.test(norm)) grau = 'avançada';
+  if (/incipiente/.test(semHistorico)) grau = 'incipiente';
+  else if (/inicial/.test(semHistorico)) grau = 'inicial';
+  else if (/moderada/.test(semHistorico)) grau = 'moderada';
+  else if (/avancad[ao]|madura/.test(semHistorico)) grau = 'avançada';
 
   return { detected: true, grau };
 }

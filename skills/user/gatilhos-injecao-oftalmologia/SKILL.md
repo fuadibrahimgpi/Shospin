@@ -120,14 +120,31 @@ sem alteração do padrão vascular, escavação simétrica e fisiológica
 
 **STOP_COMMANDS:**
 - Frases de despedida/encerramento que o médico usa AO FIM da consulta
-- Devem ser longas ou ter contexto claro (ex: "qualquer duvida me liga")
+- Devem ser longas ou ter contexto claro (ex: "qualquer duvida me procura")
 - ❌ Evitar: `"ate logo"`, `"boa sorte"`, `"um abraco"` → acompanhante pode dizer
+- ❌ NUNCA colocar aqui frases que também são DITADO DE CONDUTA ("retorno em
+  um ano", "pode trocar os oculos") — o próprio texto satisfaz o gate de
+  captura e a gravação para NO MEIO da consulta → usar STOP_COMMANDS_ANCORADOS
+- "posso ajudar"/"algo que possa ajudar" SEMPRE com "mais" ("posso ajudar em
+  MAIS alguma coisa") — sem o "mais" aparecem no meio de explicações de conduta
+
+**STOP_COMMANDS_ANCORADOS** (encerramentos-conduta — hook `stop_ancorado`):
+- Frases legítimas de despedida que também aparecem no meio da consulta como
+  ditado de conduta ("retorno em seis meses", "pode trocar os oculos") ou
+  entrega de documento ("declaracao de comparecimento")
+- Só valem quando são a ÚLTIMA coisa dita (`endAnchored`, 2s de espera,
+  cancelamento se a fala continuar) — na lista forte paravam a gravação no
+  meio da consulta (revisão 2026-07-16)
 
 **STOP_COMMANDS_CURTOS** (despedidas curtas — hook `stop_curto`):
 - Frases curtas/ambíguas ("tchau", "ta bom entao", "ate logo") que só valem
   como despedida quando estão NO FIM da fala (`endAnchored`)
 - Stop agendado com 2s de espera — CANCELADO se a fala continuar
 - Cancelamento agora exibe aviso visível: "⚠️ Encerramento cancelado"
+- **Despedida em cadeia** (2026-07-17): se a continuação for só vocabulário de
+  despedida ("ate daqui a pouquinho obrigada"), o stop é PRORROGADO em vez de
+  cancelado (`isContinuacaoDespedida` em `clinical-triggers.js`) — vale para
+  todos os hooks endAnchored (curto, ancorado, saudação)
 
 **STOP_SAUDACAO_COMMANDS** (saudações-despedida — hook `stop_saudacao`):
 - `"bom dia"`, `"boa tarde"`, `"boa noite"` usadas como despedida ("tá ok, bom dia")
@@ -211,46 +228,108 @@ Quando `injectExamesNormais = true`:
 
 ## GATILHOS ATUAIS — REFERÊNCIA COMPLETA
 
-### STOP_COMMANDS (encerramento da consulta)
+### STOP_COMMANDS (encerramento da consulta — lista forte, para em 500ms)
 ```
-Frases de ajudar:       'algo que eu possa ajudar', 'algo que possa ajudar',
-                        'algo mais que eu possa ajudar',
-                        'mais alguma coisa que eu possa ajudar'
+Frases de ajudar        'algo mais que eu possa ajudar', 'algo mais que eu posso ajudar',
+(sempre com "mais"):    'mais alguma coisa que eu possa ajudar', 'mais alguma coisa que eu posso ajudar',
+                        'alguma coisa mais que eu possa ajudar', 'alguma coisa mais que eu posso ajudar',
+                        'posso ajudar em mais alguma coisa', 'posso te ajudar em mais alguma coisa',
+                        'posso ajudar em alguma coisa mais', 'posso ajudar em algo mais'
+                        ❌ REMOVIDAS (2026-07-16): 'algo que (eu) poss(a|o) ajudar',
+                           'posso ajudar em alguma coisa', 'posso ajudar alguma duvida'
+                           → sem o "mais" aparecem no meio de explicações
 
-Recepção:               'pode ir na recepcao', 'pode buscar na recepcao',
-                        'pode pegar na recepcao', 'pode ir la na recepcao',
-                        'pode ir ate a recepcao'
-
-Encerramento explícito: 'ate a proxima consulta', 'ate o proximo retorno',
-                        'ate a proxima', 'ate o proximo',
-                        'cuide-se bem', 'nos vemos em breve'
-
-Dúvidas:                'qualquer duvida me procura', 'qualquer duvida me liga',
-                        'qualquer duvida pode ligar', 'qualquer duvida pode me ligar',
-                        'se tiver alguma duvida me procura', 'se tiver duvida me liga',
-                        'se tiver alguma duvida pode me ligar'
-
-Saída:                  'pode se retirar', 'pode ir embora',
-                        'obrigado pela consulta', 'foi um prazer'
-
-Entregar recepção:      'so entregar na recepcao', 'pode entregar na recepcao',
+Recepção:               'pode ir na recepcao', 'pode buscar na recepcao', 'pode pegar na recepcao',
+                        'pode ir la na recepcao', 'pode ir ate a recepcao', 'pode ir para a recepcao',
+                        'vai la para a recepcao', 'vai para a recepcao', 'vai ate a recepcao',
+                        'pode ir la ate a recepcao', 'passa na recepcao', 'passe na recepcao',
+                        'pode passar na recepcao', 'pegar a receita na recepcao', 'pode pegar la na recepcao',
                         'entregar na recepcao', 'entrega na recepcao',
-                        'so entregar isso na recepcao', 'pode entregar isso na recepcao',
-                        'entrega isso na recepcao'
+                        'entregar isso na recepcao', 'entrega isso na recepcao'
 
-Encerramento médico:    'so passar na recepcao', 'pode passar na recepcao',
-                        'passa na recepcao', 'passar na recepcao'
+Balcão                  'passar no balcao', 'passa no balcao', 'passe no balcao',
+(2026-07-15/16):        'passar la no balcao', 'passa la no balcao', 'passe la no balcao',
+                        'passa ai no balcao', 'passe ai no balcao',
+                        'pode ir no balcao', 'pode ir la no balcao', 'pode ir ate o balcao',
+                        'pode ir para o balcao', 'vai la no balcao', 'vai ate o balcao', 'vai para o balcao',
+                        'entregar no balcao', 'entrega no balcao', 'entregar isso no balcao',
+                        'entrega isso no balcao', 'buscar no balcao', 'busca no balcao',
+                        'pegar no balcao', 'pega no balcao', 'pega la no balcao',
+                        'pagar no balcao', 'paga no balcao', 'paga la no balcao'
 
-Dúvidas/perguntas:      'alguma pergunta alguma duvida', 'alguma pergunta ou duvida',
-                        'tem alguma pergunta', 'tem alguma duvida',
-                        'alguma duvida', 'alguma pergunta'
+Encerramento explícito: 'ate a proxima consulta', 'ate o proximo retorno', 'nos vemos em breve',
+                        'ate o proximo ano', 'ate ano que vem', 'nos vemos ano que vem',
+                        'ate daqui a um ano', 'ate daqui a seis meses', 'ate daqui a tres meses',
+                        'a gente se ve depois', 'nos vemos depois', 'ate a proxima vez'
 
-Posso ajudar:           'posso ajudar em alguma coisa mais',
-                        'posso ajudar em mais alguma coisa',
-                        'posso te ajudar em mais alguma coisa',
-                        'posso ajudar em algo mais', 'posso ajudar mais em algo',
-                        'posso ajudar com mais alguma coisa'
+Dúvidas com ação        'qualquer duvida me procura', 'alguma duvida me procura',
+(nunca pergunta         'alguma duvida pode me chamar', 'alguma duvida me chama',
+aberta):                'qualquer coisa estamos ai', 'qualquer coisa estamos aqui',
+                        'qualquer coisa pode chamar'
+                        ❌ REMOVIDAS (2026-07-15): perguntas abertas ('alguma duvida',
+                           'tem alguma pergunta'...) e variantes com "me liga"/"pode ligar"
+                           → não fazem parte do fraseado do médico e disparavam no meio
+                           da consulta (caso real: "alguma pergunta alguma duvida" seguido
+                           de ~2 min de consulta)
+
+Saída/farmácia:         'pode se retirar', 'pode ir embora', 'obrigado pela consulta',
+                        'pode ir na farmacia', 'vai la na farmacia', 'pode ir la na farmacia',
+                        'pode ir ate a farmacia', 'bom viagem', 'boa viagem'
 ```
+
+### STOP_COMMANDS_ANCORADOS (hook `stop_ancorado` — endAnchored, 2s, cancelável)
+```
+Óculos/receita:         'pode fazer os oculos', 'pode comprar os oculos', 'pode trocar os oculos',
+                        'vai fazer os oculos', 'pode ir pegar a receita', 'pode pegar a receita'
+
+Retorno programado:     'retorno ano que vem', 'retorno no proximo ano', 'retorno daqui a um ano',
+                        'retorno em um ano', 'retorno em 1 ano', 'retorno em seis meses',
+                        'retorno daqui a seis meses', 'retorno em tres meses',
+                        'volte no ano que vem', 'volte daqui a um ano', 'volte em um ano',
+                        'volte em seis meses', 'volte daqui a seis meses', 'volte em tres meses'
+
+Retorno condicional:    'volta aqui se nao melhorar', 'volta aqui se piorar', 'volta se nao melhorar',
+                        'volta se piorar', 'pode voltar se nao melhorar', 'pode voltar se piorar',
+                        'volta aqui se necessario', 'volta se necessario'
+
+Documento:              'declaracao de comparecimento', 'atestado de comparecimento'
+```
+> Movidas da lista forte em 2026-07-16: são ditado de conduta — o próprio texto
+> satisfaz o gate de captura e a gravação parava NO MEIO da consulta. Só casam
+> quando são a última coisa dita; o stop é cancelado se a fala continuar.
+
+### STOP_COMMANDS_CURTOS (hook `stop_curto` — endAnchored, 2s, cancelável)
+```
+'tudo bom entao', 'tudo certo entao', 'ta bom entao', 'foi um prazer',
+'ate mais', 'ate logo', 'tchau'
+```
+
+### STOP_SAUDACAO_COMMANDS (hook `stop_saudacao` — endAnchored + ignoradas nos primeiros 30s)
+```
+'bom dia', 'boa tarde', 'boa noite'
+```
+
+### STOP_FORCAR_COMMANDS (ordem explícita à extensão — IGNORAM o gate de captura)
+```
+'pode encerrar a consulta', 'encerrar a consulta', 'encerrar consulta',
+'finalizar a consulta', 'finalizar consulta', 'consulta finalizada',
+'consulta encerrada', 'fim da consulta', 'fim de consulta',
+'pode parar a gravacao', 'parar a gravacao', 'parar gravacao' (+ variantes de gênero)
+```
+
+### GATE DE CAPTURA (condicionante de encerramento)
+
+Os stops de fim de consulta só encerram se **CONDUTA e TRATAMENTO** já tiverem
+sido ditados na fala (`STOP_GATE` + `checkCondutaTratamentoCaptados`). Quando
+bloqueia, o status mostra "⚠️ Falta ditar ..." e é preciso ditar o que falta e
+repetir a despedida. Satisfazem o requisito de **tratamento** mesmo sem
+prescrição:
+- **Conduta REFRATIVA** — a receita de óculos resolve a consulta (2026-07-15)
+- **Conduta de PROCEDIMENTO em consultório** — excisão de calázio, drenagem
+  ("vou resolver isso aqui") — o procedimento É o tratamento (2026-07-16)
+
+Válvula de escape: a **2ª despedida distinta** bloqueada na mesma sessão libera
+o encerramento (provável marcador faltando). `encerrar consulta` ignora o gate.
 
 ### DILATACAO_COMMANDS
 ```
@@ -297,10 +376,15 @@ Posso ajudar:           'posso ajudar em alguma coisa mais',
 'lente esta otima', 'lente ta otima', 'lente esta boa', 'lente ta boa',
 'lente bem posicionada', 'lente no lugar',
 'operou o olho', 'operou os olhos', 'ja operou o olho', 'ja operou os olhos',
-'operou catarata', 'ja operou de catarata',
-'cirurgia de catarata', 'cirurgia foi bem', 'cirurgia ta otima', 'cirurgia deu certo',
+'operou catarata', 'ja operou de catarata', 'operad[ao] de catarata',
+'fez cirurgia de catarata', 'fez a cirurgia de catarata', 'fez uma cirurgia de catarata',
+'cirurgia foi bem', 'cirurgia ta otima', 'cirurgia deu certo',
 'pseudofacico', 'pseudofaquico', 'lio bem posicionada', 'lio transparente'
+(+ variações — ver config/clinical-triggers.js)
 ```
+> ⚠️ `'cirurgia de catarata'` (sem "fez") foi REMOVIDO: ambíguo — dispara quando o médico
+> *planeja* cirurgia futura, causando pseudofacia indevida em paciente fácico com catarata.
+> REGRA: só entram frases que indicam cirurgia JÁ REALIZADA (passado/confirmado).
 
 ### OPACIDADE_CAPSULA_COMMANDS
 ```
@@ -323,8 +407,11 @@ Posso ajudar:           'posso ajudar em alguma coisa mais',
 1. Identificar qual lista corresponde à ação desejada
 2. Escrever a frase **SEM acentos** (normalizeText já remove, mas evita confusão)
 3. Verificar se a frase **não aparece em outras listas** (conflito)
-4. Verificar se a frase **não aparece naturalmente no meio de consultas**
-5. Adicionar variações naturais de fala (ex: `"ta"` e `"esta"`, `"voce"` e `"o senhor"`)
+4. Verificar se a frase **não aparece naturalmente no meio de consultas** —
+   se aparecer mas for despedida legítima no fim (frase de conduta, documento),
+   colocar em `STOP_COMMANDS_ANCORADOS`, nunca na lista forte
+5. Adicionar variações naturais de fala (ex: `"ta"` e `"esta"`, `"voce"` e `"o senhor"`,
+   `"passa"`, `"passar"` E `"passe"` — caso real 2026-07-16)
 
 ---
 
@@ -365,6 +452,31 @@ Posso ajudar:           'posso ajudar em alguma coisa mais',
   2. LIO_COMMANDS não continha variantes das frases reais do médico ("lente tá ótima", "cirurgia tá ótima"), então `lioDetectada` ficava `false`; como `getBiomicroscopiaComLente()` prioriza LIO > catarata, o resultado final foi "catarata" indevido
 **Arquivo corrigido:** `config/clinical-triggers.js` — removido `'a catarata'`; adicionadas variantes em LIO_COMMANDS: `'lente ta otima'`, `'lente esta otima'`, `'lente ta boa'`, `'cirurgia ta otima'`, `'cirurgia foi bem'`, `'cirurgia deu certo'`, `'operou o olho'`, `'operou os olhos'`
 **Data:** 2026-06-15
+
+### Caso 8 — STT morto no fim da consulta engole TODAS as despedidas ⭐
+**Sintoma:** médico disse "boa tarde", "passe no balcão" e até "encerrar a consulta" e nada parou — nenhuma linha `[HookRunner]` no log da sessão inteira: as frases nunca viraram texto
+**Causa:** reconhecimento de voz degradado/morto no trecho final (ciclos de restart do Web Speech + erros no-speech em sequência + backoff de 3s); o status seguia mostrando "Gravando..." sem nenhum indício de que o áudio não estava chegando. Agravante: "**passe** no balcão" nem existia na lista (só 'passa'/'passar')
+**Correções:**
+  1. Aviso visual de captura morta — após 30s sem fala reconhecida o status mostra "⚠️ Sem fala há Xs — verifique o microfone antes da despedida" (`sidepanel-audio.js`, `SEM_FALA_AVISO_MS`)
+  2. Variantes adicionadas: 'passe/paga/pega/busca no balcao', 'passa ai no balcao', 'passe na recepcao'
+  3. Marcadores de conduta de PROCEDIMENTO em consultório (calázio "vou resolver isso aqui") — sem eles o gate bloquearia a despedida mesmo capturada
+**Regra prática:** se a despedida não parar a gravação e o status ainda disser "Gravando...", a frase NÃO foi ouvida — aproximar-se do microfone e dizer "encerrar consulta"
+**Data:** 2026-07-16
+
+### Caso 9 — Despedida em cadeia cancela o próprio stop ⭐
+**Sintoma:** médico encerrou com "tá bom então até daqui a pouquinho obrigada": o `stop_curto` "ta bom entao" foi detectado mas CANCELADO ("a fala continuou após a despedida curta"); como "até daqui a pouquinho" e "obrigada" não são gatilhos, nada re-disparou e foi preciso o "consulta encerrada" forçado. Mesmo padrão na sessão anterior: "bom dia" cancelado 2x — o "tchau" final salvou por acaso
+**Causa:** a mecânica endAnchored tratava QUALQUER continuação de fala como cancelamento, mas despedidas reais vêm em cadeia ("tá bom então → até daqui a pouquinho → obrigada"). Mapear cada cauda como gatilho novo não escala — as variações são infinitas
+**Correção:** quando a fala continua após uma despedida ancorada, o runner verifica se a continuação é composta APENAS de vocabulário de despedida (`DESPEDIDA_CONTINUACAO_WORDS` + `isContinuacaoDespedida` em `config/clinical-triggers.js`, limite de 12 palavras). Se for, o timer de 2s é PRORROGADO (log "STOP prorrogado — a despedida continuou"); se houver qualquer palavra clínica, cancela como antes. Auto-corretivo: uma cadeia que virar conteúdo clínico em evento posterior ainda cancela
+**Arquivos:** `config/clinical-triggers.js` (vocabulário + helper), `scripts/sidepanel-hook-runner.js` (`_maybeCancelAnchoredStop` prorroga; `_armStopTimer` extraído). Testes `[STOP-CURTO-6..8]`, `[STOP-ANCORADO-CADEIA-1]`, `[STOP-SAUDACAO-CADEIA-1]` em `utils/hooks-test.js`
+**Data:** 2026-07-17
+
+### Caso 7c — Derivação por diagnóstico marca catarata a partir de menção HISTÓRICA ⭐
+**Sintoma:** Biomicroscopia injeta "catarata" em paciente pseudofácica (facectomia por catarata traumática). Log 2026-07-17: `[Catarata] Flag derivada do diagnóstico (gatilho de voz não disparou): (grau não especificado)` — nenhum gatilho de voz de catarata/LIO disparou; a flag veio do fallback de reconciliação pelo diagnóstico do Gemini
+**Causa:** Duas falhas combinadas (terceira variação do tema do Caso 7, agora pelo caminho da derivação por diagnóstico):
+  1. `parseCatarataFromDiagnostico()` detectava a palavra solta `\bcatarata\b` em qualquer lugar do texto — inclusive dentro do qualificador histórico `"H530 - Ambliopia OD (pós-cirurgia de catarata traumática)"`, que descreve a CAUSA passada da ambliopia, não achado atual. As exclusões só cobriam catarata secundária/H26.4/cápsula posterior
+  2. A proteção por LIO do guard (não deriva catarata se `lioDetectada`) falhou porque o gatilho de voz de LIO não disparou: o STT quebrou "catarata" em "catara ta" E a variante falada foi "fez **uma** cirurgia de catarata" — LIO_COMMANDS só tinha 'fez'/'fez a'
+**Arquivos corrigidos:** `scripts/sidepanel-constants.js` — `parseCatarataFromDiagnostico()` agora remove os trechos de contexto cirúrgico ('cirurgia de catarata', 'operad[ao] de catarata', 'facectomia') antes da detecção; um diagnóstico real sobrevive por CID H25/H26.0–3 ou pela palavra fora desses contextos. `config/clinical-triggers.js` — adicionado `'fez uma cirurgia de catarata'` em LIO_COMMANDS. Testes `[CAT-DX-7..8]` em `utils/hooks-test.js`
+**Data:** 2026-07-17
 
 ### Caso 7b — Regressão do Caso 7: catarata vence LIO quando ambas as flags disparam ⭐
 **Sintoma:** Biomicroscopia injeta "catarata" em paciente pseudofácico (consulta 2026-06-30: log mostrou `[Hook] Flag: catarata detectada` + `[Hook] Flag: LIO detectada`; o CID veio correto — `Z961 - Presença de lente intra-ocular` — mas a lente da biomicroscopia veio "catarata")

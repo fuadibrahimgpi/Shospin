@@ -577,25 +577,34 @@ CAMPOS:
   | Médico não mencionou óculos                                        | OMITIR — não inferir nem negar     |
 
   ★ REGRA CRÍTICA — QUANDO USAR "multifocais":
-  "Prescrição de óculos multifocais" SOMENTE quando o médico usar EXPLICITAMENTE uma das palavras:
-    ✅ "multifocal", "progressivo", "lente progressiva", "bifocal"
-    ✅ OU descrever claramente longe + perto na MESMA armação (ex.: "óculos que serve para longe e para perto")
+  Use "Prescrição de óculos multifocais" quando QUALQUER um dos critérios abaixo valer:
+    ✅ o médico disse "multifocal", "progressivo" ou "lente progressiva" ("bifocal" → "bifocais")
+    ✅ o médico descreveu longe + perto na MESMA armação (ex.: "óculos que serve para longe e para perto")
+    ✅ o médico prescreveu UM ÚNICO óculos e a conversa da prescrição deixa CLARO que a
+       correção atende LONGE E PERTO: há referência de perto ("para perto nem se fala",
+       "para ler", "para celular") E de longe ("para dirigir", "à noite", "para longe faz
+       falta") associadas ao MESMO óculos prescrito, sem menção a duas armações separadas.
   ❌ NÃO classificar como multifocal com base em:
-    - ADD ou adição presentes no ticket de refração (ADD é medida, não tipo de óculos)
-    - Médico mencionar "grau de perto" isoladamente (pode ser óculos separado)
-    - Médico mencionar "grau de longe" isoladamente
-    - Óculos convencional com qualquer combinação de esfério/cilíndrico sem mencionar longe+perto juntos
-    - Qualquer situação em que o tipo não foi verbalizado pelo médico
-  Se o tipo não foi verbalizado → "Prescrição de óculos" (sem qualificador).
+    - ADD ou adição presentes APENAS no ticket de refração, sem o médico falar de correção
+      de perto na consulta (ADD é medida, não tipo de óculos)
+    - "grau de perto" isolado, sem nenhuma referência a longe (pode ser óculos só de leitura)
+    - "grau de longe" isolado, sem nenhuma referência a perto
+    - Médico que falou em DOIS óculos/armações separados ("um para longe e outro para perto")
+      → são DUAS linhas de prescrição, não multifocal
+  Se nenhum critério permitir identificar o tipo → "Prescrição de óculos" (sem qualificador).
 
   Exemplos:
     Médico: "vou passar multifocal" → "Prescrição de óculos multifocais" ✅
     Médico: "vou fazer óculos progressivo" → "Prescrição de óculos multifocais" ✅
     Médico: "óculos que serve para perto e longe" → "Prescrição de óculos multifocais" ✅
-    Médico: "vou mudar o grau" (ticket tem ADD) → "Prescrição de óculos" ❌ não multifocal
-    Médico: "vai pra ótica" (ticket tem ADD) → "Prescrição de óculos" ❌ não multifocal
+    Médico (paciente présbita, UM óculos prescrito): "para perto aí nem se fala... vai ver que
+      para longe o óculos também faz falta, para estrada e à noite sempre de óculos"
+      → "Prescrição de óculos multifocais" ✅ (correção de longe E perto no mesmo óculos)
+    Médico: "vou mudar o grau" (ticket tem ADD, sem fala de perto) → "Prescrição de óculos" ❌ não multifocal
+    Médico: "vai pra ótica" (ticket tem ADD, sem fala de perto) → "Prescrição de óculos" ❌ não multifocal
     Médico: "precisa de óculos para longe" → "Prescrição de óculos para longe" ❌ não multifocal
     Médico: "vou passar óculos para perto" → "Prescrição de óculos para perto" ❌ não multifocal
+    Médico: "um óculos para longe e outro para leitura" → duas linhas de prescrição ❌ não multifocal
 
   ★ INFERÊNCIA DE PRESCRIÇÃO DE ÓCULOS (quando o médico não verbaliza explicitamente):
   Em consultas de refração, a prescrição de óculos é a conclusão natural da consulta.
@@ -603,8 +612,9 @@ CAMPOS:
     a) Houve refração (ticket TOPCON ou refração subjetiva mencionada na consulta).
     b) O médico orientou o paciente a ir a uma ótica ou comprar óculos (mesmo de forma coloquial).
     c) NÃO houve declaração do médico de que não vai prescrever.
-  Nesse caso → registre "Prescrição de óculos" (sem qualificador de tipo — não inferir multifocal).
-  Para usar "multifocais", aplicar a REGRA CRÍTICA acima: o médico deve ter dito a palavra.
+  Nesse caso → registre "Prescrição de óculos" (sem qualificador de tipo).
+  Para usar "multifocais", aplicar a REGRA CRÍTICA acima: palavra explícita OU correção de
+  longe E perto claramente atribuída ao mesmo óculos na fala do médico.
   ❌ NUNCA inferir prescrição quando o médico não mencionou óculos de forma alguma.
 
   ⚠️ Longe + perto na MESMA armação = multifocal ou bifocal — NÃO duas linhas separadas.

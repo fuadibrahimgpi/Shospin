@@ -252,6 +252,28 @@ test('[C5] clearAll reseta dilatacaoDetectada também quando apenas clearCamera 
 });
 
 // ──────────────────────────────────────────────────────────────────────────────
+// FUNDOSCOPIA — achado de fundo prevalece sobre o template normal
+// Regressão 2026-07-16: consulta com blefarite + nervo "fora do padrão" (suspeita
+// de glaucoma) gravou "escavação simétrica e fisiológica" no prontuário, porque a
+// injeção de blefarite fixava FUNDOSCOPIA_NORMAL e descartava dados.fundoscopia —
+// contradizendo o CID H400 injetado na mesma consulta.
+// ──────────────────────────────────────────────────────────────────────────────
+
+test('[FUNDO-1] branch de blefarite não fixa mais FUNDOSCOPIA_NORMAL — prefere dados.fundoscopia', () => {
+  expect(injectionJsSource).toContain("fundoscopia: audioData?.dados?.fundoscopia || FUNDOSCOPIA_NORMAL");
+  // O comentário que sustentava o bug ("blefarite sempre injeta fundoscopia normal")
+  // não pode voltar: blefarite é achado de segmento anterior e não implica fundo normal.
+  expect(/blefarite sempre injeta fundoscopia normal/.test(injectionJsSource)).toBe(false);
+});
+
+test('[FUNDO-2] achado de fundo corrige a fundoscopia normal já injetada por gatilho de voz', () => {
+  // Sem este branch, o guard !blefariteInjetada && !examesNormaisInjetados faz o
+  // injectAll pular todo o bloco de exames e a fundoscopia normal do gatilho persiste.
+  expect(injectionJsSource).toContain('} else if (!audioData?.dilatacaoDetectada && audioData?.dados?.fundoscopia) {');
+  expect(injectionJsSource).toContain('fundoscopia: audioData.dados.fundoscopia,');
+});
+
+// ──────────────────────────────────────────────────────────────────────────────
 // CORREÇÃO 6 — captureAndProcess desabilita botão imediatamente
 // ──────────────────────────────────────────────────────────────────────────────
 

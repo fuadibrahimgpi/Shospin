@@ -257,13 +257,19 @@ function _scheduleStop(hook, matchedCmd) {
     cmd: matchedCmd,
     endAnchored: !!hook.endAnchored,
     endAnchorSlack: hook.endAnchorSlack ?? 10,
+    stopDelay: hook.stopDelay ?? 500,
     onCancel: hook.onCancel || null,
   };
+  _armStopTimer(stopPendingInfo.stopDelay);
+}
+
+/** Arma (ou re-arma) o timer que confirma o stop pendente por silêncio. */
+function _armStopTimer(delayMs) {
   stopCommandTimeout = setTimeout(() => {
     if (isRecording) stopRecording();
     stopCommandTimeout = null;
     stopPendingInfo = null;
-  }, hook.stopDelay ?? 500);
+  }, delayMs);
 }
 
 /**
@@ -277,6 +283,19 @@ function _maybeCancelAnchoredStop(normalizedCurrent) {
   const idx = normalizedCurrent.lastIndexOf(cmd);
   const aindaNoFim = idx !== -1 && (idx + cmd.length) >= normalizedCurrent.length - endAnchorSlack;
   if (aindaNoFim) return false;
+
+  // Despedida em cadeia ("ta bom entao ate daqui a pouquinho obrigada"): se a
+  // continuação é vocabulário de despedida, a intenção de encerrar se mantém —
+  // prorroga o timer de silêncio em vez de cancelar. Caso real 2026-07-17.
+  if (idx !== -1) {
+    const tail = normalizedCurrent.slice(idx + cmd.length);
+    if (ClinicalTriggers.isContinuacaoDespedida(tail)) {
+      clearTimeout(stopCommandTimeout);
+      _armStopTimer(stopPendingInfo.stopDelay ?? 2000);
+      console.log(`[HookRunner] STOP "${cmd}" prorrogado — a despedida continuou ("${tail.trim()}")`);
+      return false;
+    }
+  }
 
   clearTimeout(stopCommandTimeout);
   stopCommandTimeout = null;

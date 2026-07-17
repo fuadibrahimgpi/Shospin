@@ -214,8 +214,8 @@ test('[STOP-2] "pode ir na recepção" → após timeout, chama stopRecording', 
   expect(ctx._BRIDGE.isRecording).toBe(false);
 });
 
-test('[STOP-3] "algo que eu possa ajudar" agenda stop', () => {
-  speak('algo que eu possa ajudar');
+test('[STOP-3] "algo mais que eu possa ajudar" agenda stop', () => {
+  speak('algo mais que eu possa ajudar');
   expect(ctx._BRIDGE.stopCommandTimeout).not.toBe(null);
 });
 
@@ -255,6 +255,81 @@ test('[STOP-10] stop não cria segunda entrada na fila de timeouts', () => {
   const countAfterFirst = _timeoutCallbackQueue.length;
   speak('pode ir na recepção');
   expect(_timeoutCallbackQueue.length).toBe(countAfterFirst);
+});
+
+test('[STOP-11] "passe no balcão" agenda stop (caso real 2026-07-16)', () => {
+  speak('a receita está pronta passe no balcão');
+  expect(ctx._BRIDGE.stopCommandTimeout).not.toBe(null);
+});
+
+test('[STOP-12] "paga lá no balcão" agenda stop', () => {
+  speak('está tudo certo paga lá no balcão');
+  expect(ctx._BRIDGE.stopCommandTimeout).not.toBe(null);
+});
+
+test('[STOP-13] "ajudar" sem "mais" NÃO agenda stop (removidas na revisão 2026-07-16)', () => {
+  speak('algo que eu possa ajudar na sua adaptação é explicar como usar a lente');
+  expect(ctx._BRIDGE.stopCommandTimeout).toBe(null);
+});
+
+// ──────────────────────────────────────────────────────────────────────────────
+// STOP ANCORADO — frases de conduta só encerram quando são a ÚLTIMA coisa dita
+// (revisão 2026-07-16: na lista forte elas paravam a gravação NO MEIO da
+// consulta, porque o próprio texto satisfaz o gate de captura)
+// ──────────────────────────────────────────────────────────────────────────────
+
+test('[ANC-1] "pode trocar os óculos" no MEIO da fala NÃO agenda stop', () => {
+  speak('pode trocar os óculos se quiser mas antes deixa eu medir a sua pressão');
+  expect(ctx._BRIDGE.stopCommandTimeout).toBe(null);
+});
+
+test('[ANC-2] "pode trocar os óculos" no FIM da fala agenda stop e encerra', () => {
+  speak('está tudo certo pode trocar os óculos');
+  expect(ctx._BRIDGE.stopCommandTimeout).not.toBe(null);
+  flushTimeouts();
+  expect(ctx._BRIDGE.isRecording).toBe(false);
+});
+
+test('[ANC-3] stop ancorado é CANCELADO se a fala continuar após a frase', () => {
+  speak('está tudo certo pode trocar os óculos');
+  expect(ctx._BRIDGE.stopCommandTimeout).not.toBe(null);
+  speak('está tudo certo pode trocar os óculos porque o grau mudou e eu vou medir de novo');
+  expect(ctx._BRIDGE.stopCommandTimeout).toBe(null);
+  expect(ctx._BRIDGE.consultaEncerradaDetectada).toBe(false);
+});
+
+test('[ANC-4] "retorno em seis meses" ditado no meio da conduta NÃO para a gravação', () => {
+  speak('a conduta é retorno em seis meses e vou passar um lubrificante para usar duas vezes ao dia');
+  expect(ctx._BRIDGE.stopCommandTimeout).toBe(null);
+});
+
+test('[ANC-5] "declaração de comparecimento" no fim da fala agenda stop', () => {
+  speak('vou deixar pronta a sua declaração de comparecimento');
+  expect(ctx._BRIDGE.stopCommandTimeout).not.toBe(null);
+});
+
+// ──────────────────────────────────────────────────────────────────────────────
+// GATE — conduta de PROCEDIMENTO em consultório satisfaz conduta E tratamento
+// (caso real 2026-07-16: excisão de calázio "vou resolver isso aqui" não tinha
+// marcador; a despedida seria bloqueada com "falta ditar CONDUTA e TRATAMENTO")
+// ──────────────────────────────────────────────────────────────────────────────
+
+test('[GATE-PROC-1] "vou resolver isso aqui" satisfaz conduta E tratamento no gate', () => {
+  const r = ctx.ClinicalTriggers.checkCondutaTratamentoCaptados(
+    'esse carocinho é um cisto eu vou resolver isso aqui no consultório mesmo'
+  );
+  expect(r.conduta).toBe(true);
+  expect(r.tratamento).toBe(true);
+  expect(r.ok).toBe(true);
+});
+
+test('[GATE-PROC-2] consulta de calázio resolvida em consultório + balcão → stop sem bloqueio', () => {
+  speakSemCaptura(
+    'esse carocinho e um cisto eu vou resolver isso aqui agora prontinho resolvido o seu problema pode passar no balcao'
+  );
+  expect(ctx._BRIDGE.stopCommandTimeout).not.toBe(null);
+  flushTimeouts();
+  expect(ctx._BRIDGE.isRecording).toBe(false);
 });
 
 test('[STOP-11] "ficou alguma dúvida" NÃO agenda stop (pergunta aberta removida 2026-07-15)', () => {
@@ -322,6 +397,52 @@ test('[STOP-CURTO-5] stop curto confirmado por silêncio chama stopRecording', (
   speak('então é isso até logo');
   flushTimeouts();
   expect(ctx._injectCounts.stop).toBe(1);
+  expect(ctx._BRIDGE.isRecording).toBe(false);
+});
+
+// Despedida em cadeia — caso real 2026-07-17: "ta bom entao ate daqui a
+// pouquinho obrigada" cancelava o stop e nada re-disparava; precisou do
+// "consulta encerrada" forçado. Continuação de despedida deve PRORROGAR.
+
+test('[STOP-CURTO-6] cadeia de despedida PRORROGA o stop em vez de cancelar (caso real 2026-07-17)', () => {
+  speak('tá bom então');
+  expect(ctx._BRIDGE.stopCommandTimeout).not.toBe(null);
+  speak('tá bom então até daqui a pouquinho obrigada');
+  expect(ctx._BRIDGE.stopCommandTimeout).not.toBe(null); // prorrogado, não cancelado
+  flushTimeouts();
+  expect(ctx._injectCounts.stop).toBe(1);
+  expect(ctx._BRIDGE.isRecording).toBe(false);
+});
+
+test('[STOP-CURTO-7] cadeia de despedida seguida de conteúdo clínico CANCELA', () => {
+  speak('tá bom então');
+  speak('tá bom então até daqui a pouquinho obrigada'); // prorroga
+  speak('tá bom então até daqui a pouquinho obrigada deixa eu ver a pressão'); // cancela
+  expect(ctx._BRIDGE.stopCommandTimeout).toBe(null);
+  expect(ctx._BRIDGE.HOOK_STATE.consultaEncerradaDetectada).toBe(false); // onCancel desfez
+  flushTimeouts();
+  expect(ctx._BRIDGE.isRecording).toBe(true);
+});
+
+test('[STOP-CURTO-8] continuação clínica direta ainda CANCELA (sem regressão do STOP-CURTO-3)', () => {
+  speak('tá bom então');
+  speak('tá bom então agora vamos conferir o grau no aparelho');
+  expect(ctx._BRIDGE.stopCommandTimeout).toBe(null);
+});
+
+test('[STOP-ANCORADO-CADEIA-1] "declaração de comparecimento" + conteúdo não-despedida CANCELA', () => {
+  speak('ela pode pegar a declaração de comparecimento');
+  expect(ctx._BRIDGE.stopCommandTimeout).not.toBe(null);
+  speak('ela pode pegar a declaração de comparecimento para alguma atividade física');
+  expect(ctx._BRIDGE.stopCommandTimeout).toBe(null);
+});
+
+test('[STOP-SAUDACAO-CADEIA-1] "bom dia" seguido de "tchau tchau" mantém o stop agendado', () => {
+  speak('tá certo obrigada bom dia');
+  expect(ctx._BRIDGE.stopCommandTimeout).not.toBe(null);
+  speak('tá certo obrigada bom dia tchau tchau');
+  expect(ctx._BRIDGE.stopCommandTimeout).not.toBe(null);
+  flushTimeouts();
   expect(ctx._BRIDGE.isRecording).toBe(false);
 });
 
@@ -1062,6 +1183,24 @@ test('[CAT-DX-5] diagnóstico sem catarata → NÃO detected', () => {
 test('[CAT-DX-6] diagnóstico nulo/vazio → NÃO detected (sem crash)', () => {
   expect(ctx._BRIDGE.parseCatarataFromDiagnostico(null).detected).toBe(false);
   expect(ctx._BRIDGE.parseCatarataFromDiagnostico('').detected).toBe(false);
+});
+
+test('[CAT-DX-7] regressão (2026-07-17): menção histórica "pós-cirurgia de catarata" → NÃO detected', () => {
+  // Caso real: paciente pseudofácica (facectomia por catarata traumática), gatilho de
+  // voz de LIO não disparou (STT quebrou "catarata" em "catara ta"). O Gemini gerou
+  // "Ambliopia OD (pós-cirurgia de catarata traumática)" e a derivação por diagnóstico
+  // marcava catarata ativa — biomicroscopia saía com "catarata" em olho já operado.
+  const dx = 'H010 - Blefarite bilateral\nH521 - Miopia AO\nH530 - Ambliopia OD (pós-cirurgia de catarata traumática)';
+  expect(ctx._BRIDGE.parseCatarataFromDiagnostico(dx).detected).toBe(false);
+  expect(ctx._BRIDGE.parseCatarataFromDiagnostico('Pseudofacia OD (operado de catarata)').detected).toBe(false);
+  expect(ctx._BRIDGE.parseCatarataFromDiagnostico('Facectomia prévia OE').detected).toBe(false);
+});
+
+test('[CAT-DX-8] catarata ativa + menção cirúrgica na mesma linha → ainda detected', () => {
+  // A remoção do contexto histórico não pode engolir um diagnóstico real de catarata:
+  // "indicada cirurgia de catarata" convive com a catarata ativa do olho fácico.
+  const r = ctx._BRIDGE.parseCatarataFromDiagnostico('H250 - Catarata senil AO — indicada cirurgia de catarata');
+  expect(r.detected).toBe(true);
 });
 
 // ──────────────────────────────────────────────────────────────────────────────

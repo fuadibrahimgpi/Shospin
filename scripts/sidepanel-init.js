@@ -31,23 +31,26 @@ injectAllBtn.addEventListener('click', async () => {
   try { await injectAll(); } catch (e) { console.log('[UI] Erro na injeção manual:', e.message); }
 });
 
-// Limpeza manual descarta também a fase 1 de dilatação persistida (novo paciente)
+// Limpeza manual (novo paciente) DESARMA retomadas pendentes; as pausas dos
+// pacientes em dilatação permanecem na sala de espera (descarte pelo ✕).
 clearBtn.addEventListener('click', () => clearAll({ clearAudio: true, clearCamera: true, discardDilatacao: true }));
 
 // Desfazer dilatação: reprocessa a consulta como completa (gatilho por engano).
+// Age sobre a pausa mais recente da fila.
 if (cancelDilatacaoBtn) cancelDilatacaoBtn.addEventListener('click', cancelarDilatacao);
 
-// Retomar pós-dilatação: confirma o retorno do MESMO paciente e libera o uso do
-// contexto da fase 1 na próxima gravação (por padrão, cada gravação é paciente novo).
-if (retomarDilatacaoBtn) retomarDilatacaoBtn.addEventListener('click', confirmarRetomadaDilatacao);
-
-// Visibilidade do botão dirigida por UMA fonte: a chave persistida _shospDilatacaoPhase1.
-// storage.onChanged cobre todos os pontos de mutação (injeção de dilatação, undo,
-// clearAll, conclusão da fase 2) sem toggles espalhados. Checa também no load.
+// Sala de espera de dilatação dirigida por UMA fonte: a fila persistida
+// _shospDilatacaoPausas (os botões "retomar"/"✕" de cada linha são criados por
+// renderDilatacaoPausas). storage.onChanged cobre todos os pontos de mutação
+// (nova pausa, retomada armada/desarmada, consumo da fase 2, descarte) sem
+// toggles espalhados. Renderiza também no load — inclusive a migração da
+// chave legada _shospDilatacaoPhase1, convertida em slot na primeira leitura.
 chrome.storage.onChanged.addListener((changes, area) => {
-  if (area === 'local' && changes._shospDilatacaoPhase1) refreshUndoVisibility();
+  if (area === 'local' && (changes[DilatacaoPausas.STORAGE_KEY] || changes[DilatacaoPausas.LEGACY_KEY])) {
+    renderDilatacaoPausas();
+  }
 });
-refreshUndoVisibility();
+renderDilatacaoPausas();
 
 // ============================================================================
 // SELETOR DE MODO

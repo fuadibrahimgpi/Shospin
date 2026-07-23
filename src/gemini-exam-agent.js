@@ -1,5 +1,14 @@
 /**
- * GEMINI SERVICE v5.3.4 — Agente de Exames (OCR) + Agente de Entrevista
+ * GEMINI SERVICE v5.3.5 — Agente de Exames (OCR) + Agente de Entrevista
+ *
+ * v5.3.5 (FIX: eixo não conferido injetado — desempate de eixo por 3ª chamada):
+ *   - Discordância de eixo entre 1ª e 2ª leituras (>8°, circular) era 'soft' e
+ *     a math-consistency (S+C/2≈SE) NÃO envolve o eixo — então soft+math-ok
+ *     jamais bloqueava e o eixo ia NÃO-CONFERIDO ao prontuário (3 de 4 capturas,
+ *     log 2026-07-21). Agora dispara _tiebreakAxis (3ª chamada focada só na 3ª
+ *     coluna A da MÉDIA), 2-de-3 como já se faz para sinal e cilindro. Diferença
+ *     crucial: confirmar a 2ª OU inconclusivo FORÇA bloqueio (severity='hard') —
+ *     o eixo não tem corroboração matemática, então "não confirmei" ⇒ "não injeta".
  *
  * v5.3.4 (FIX: sinal de esfera invertido pela verificação + média vs medições):
  *   - Desempate de sinal (3ª chamada): quando 1ª e 2ª leituras discordam da
@@ -273,6 +282,29 @@ class GeminiExamAgent {
           }
         }
 
+        // ── Desempate de Eixo (3ª chamada focada) ──────────────
+        // Eixo discordante é 'soft', mas a math-consistency (S+C/2≈SE) NÃO
+        // envolve o eixo — então soft+math-ok jamais bloqueava e o eixo ia
+        // NÃO-CONFERIDO ao prontuário (3 de 4 capturas, log 2026-07-21). Uma
+        // 3ª leitura focada só na 3ª coluna (A) da MÉDIA desempata 2-de-3, como
+        // já se faz para sinal e cilindro. Diferença crucial: quando o desempate
+        // confirma a 2ª OU é inconclusivo, FORÇA bloqueio (severity='hard') — ao
+        // contrário de S/C, o eixo não tem corroboração matemática que o resgate,
+        // então "não pude confirmar" ⇒ "não injeta".
+        if (mismatch && mismatch.isAxisMismatch && mismatch.pEixo != null && mismatch.vEixo != null) {
+          const vereditoEixo = await this._tiebreakAxis(mismatch, imageParts, apiService);
+          if (vereditoEixo === 'primeira') {
+            processed._avisos = processed._avisos || [];
+            processed._avisos.push(`${mismatch.eye.toUpperCase()}: 2ª chamada leu eixo diferente (1ª=${mismatch.pEixo}° vs 2ª=${mismatch.vEixo}°); desempate por 3ª leitura confirmou a 1ª. Confira manualmente.`);
+            mismatch = null;
+          } else {
+            mismatch.severity = 'hard';
+            mismatch.message = vereditoEixo === 'segunda'
+              ? `${mismatch.eye.toUpperCase()}: eixo da 1ª leitura provavelmente errado — desempate (3ª leitura) concordou com a 2ª (${mismatch.vEixo}°). Refaça a captura.`
+              : `${mismatch.eye.toUpperCase()}: eixo discordante entre leituras (1ª=${mismatch.pEixo}° vs 2ª=${mismatch.vEixo}°) e 3ª leitura não desempatou. Refaça a captura.`;
+          }
+        }
+
         if (mismatch) {
           // Política: se a discordância é 'soft' (numérica) E o olho da 1ª
           // leitura é matematicamente autoconsistente (S+C/2 ≈ S.E. com diff
@@ -523,6 +555,61 @@ Responda APENAS JSON puro (sem markdown). Exemplo de formato:
   }
 
   /**
+   * Desempate de Eixo — 3ª chamada hiperfocada.
+   *
+   * Disparada quando 1ª e 2ª discordam do eixo (>8°, circular). Lê APENAS a 3ª
+   * coluna (A) da linha MÉDIA. Comparação circular (1° ≡ 180°). O valor da 3ª
+   * leitura precisa bater com a 1ª OU a 2ª (±8°); um 3º valor diferente é
+   * inconclusivo. Retorna 'primeira' | 'segunda' | null.
+   */
+  async _tiebreakAxis(mismatch, imageParts, apiService) {
+    try {
+      this.logger.info(`[OCR] Desempate de Eixo (3ª chamada) para ${mismatch.eye.toUpperCase()}...`);
+      const { text } = await apiService.callGeminiAPI(
+        [{ text: this._getAxisTiebreakPrompt() }, ...imageParts],
+        EXAM_CONFIG
+      );
+      const tie = _parseGeminiJSON(text, 'tiebreak_eixo');
+      const t = tie?.[mismatch.eye];
+      if (t === undefined || t === null || t === 'null') {
+        this.logger.warn('[OCR] Desempate de Eixo não retornou leitura legível');
+        return null;
+      }
+      const tEixo = parseInt(t, 10);
+      if (isNaN(tEixo)) return null;
+      const circ = (a, b) => { const d = Math.abs(a - b); return Math.min(d, 180 - d); };
+      if (circ(tEixo, mismatch.pEixo) <= 8) {
+        this.logger.info(`[OCR] Desempate de Eixo retornou ${tEixo}° (confirmou a 1ª)`);
+        return 'primeira';
+      }
+      if (circ(tEixo, mismatch.vEixo) <= 8) {
+        this.logger.info(`[OCR] Desempate de Eixo retornou ${tEixo}° (confirmou a 2ª)`);
+        return 'segunda';
+      }
+      this.logger.warn(`[OCR] Desempate de Eixo retornou um 3º valor: ${tEixo}° (disputa era ${mismatch.pEixo}° vs ${mismatch.vEixo}°) — inconclusivo`);
+      return null;
+    } catch (err) {
+      this.logger.warn('[OCR] Desempate de Eixo falhou:', err.message);
+      return null;
+    }
+  }
+
+  _getAxisTiebreakPrompt() {
+    return `DESEMPATE DE EIXO — TAREFA ÚNICA E MÍNIMA.
+
+Você vê um ticket TOPCON. Na seção REF.DATA há dois blocos: <R> (olho direito) e <L> (olho esquerdo).
+
+Sua ÚNICA tarefa: para cada olho, identificar a linha da MÉDIA e ler EXCLUSIVAMENTE O TERCEIRO NÚMERO (Coluna da Direita — Eixo/A).
+NÃO conte as linhas de cima para baixo. A linha MÉDIA é a linha em negrito que fica IMEDIATAMENTE ACIMA da linha que diz "S.E.".
+
+O eixo é um inteiro de 1 a 180, SEM sinal. Se a coluna estiver vazia, em branco, ou ausente, retorne a string "null".
+
+Responda APENAS JSON puro (sem markdown). Exemplo de formato:
+{"od": 84, "oe": 64}
+`;
+  }
+
+  /**
    * Checa se o olho da 1ª leitura é matematicamente autoconsistente:
    * esf, cil e se todos presentes e |esf + cil/2 - se| <= 0.15D.
    *
@@ -673,7 +760,7 @@ Responda APENAS JSON puro (sem markdown). Exemplo de formato:
           const diff = Math.abs(pEixo - vEixo);
           const circularDiff = Math.min(diff, 180 - diff); // 1° ≡ 180°
           if (circularDiff > 8) {
-            return { eye: lado, severity: 'soft', message: `${lado.toUpperCase()}: eixo discordante entre leituras (1ª=${pEixo}° vs 2ª=${vEixo}°). Refaça a captura.` };
+            return { eye: lado, severity: 'soft', isAxisMismatch: true, pEixo, vEixo, message: `${lado.toUpperCase()}: eixo discordante entre leituras (1ª=${pEixo}° vs 2ª=${vEixo}°). Refaça a captura.` };
           }
         }
       }

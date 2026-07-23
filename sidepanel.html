@@ -50,21 +50,18 @@
         <p id="processingStatus">Processando...</p>
       </div>
 
-      <!-- Retomar pós-dilatação: o MESMO paciente voltou da dilatação. Confirma
-           que a próxima gravação é a fase 2 e libera a mesclagem do contexto da
-           fase 1. Por padrão (sem clicar) toda gravação é tratada como paciente
-           NOVO — evita que a anamnese de um paciente entre no prontuário de
-           outro atendido durante a espera. Visível só quando há pausa persistida
-           ainda não confirmada. -->
-      <button id="retomarDilatacaoBtn" class="btn btn-primary hidden"
-              style="margin-top: 8px; width: 100%;"
-              title="O mesmo paciente voltou da dilatação — usar o contexto da fase 1 na próxima gravação">
-        Mesmo paciente voltou — retomar pós-dilatação
-      </button>
+      <!-- Sala de espera de dilatação: UMA linha por paciente pausado, com
+           botão próprio de "retomar" (arma a fase 2 daquele paciente) e "✕"
+           (descarta a pausa). Vários pacientes podem dilatar ao mesmo tempo;
+           por padrão toda gravação é paciente NOVO — só o clique em "retomar"
+           anexa o contexto da fase 1 correspondente. Renderizada por
+           renderDilatacaoPausas() a partir da fila _shospDilatacaoPausas. -->
+      <div id="dilatacaoPausasContainer" class="hidden" style="margin-top: 8px;"></div>
 
       <!-- Desfazer dilatação: reprocessa a consulta como completa quando o
            gatilho de dilatação disparou por engano (ex.: "vamos dilatar" era
-           sobre outra pessoa). Visível só enquanto há uma pausa persistida. -->
+           sobre outra pessoa). Age sobre a pausa MAIS RECENTE da fila (o engano
+           é percebido na hora). Visível só enquanto há pausa de dilatação. -->
       <button id="cancelDilatacaoBtn" class="btn btn-secondary hidden"
               style="margin-top: 8px; width: 100%;"
               title="A consulta foi marcada como dilatação por engano — reprocessar como consulta completa">
@@ -321,6 +318,7 @@
   <!-- Side Panel Modules (ordem importa!) -->
   <script src="scripts/sidepanel-constants.js"></script>
   <script src="scripts/state-manager.js"></script>
+  <script src="scripts/dilatacao-pausas.js"></script>
   <script src="scripts/sidepanel-hooks.js"></script>
   <script src="scripts/sidepanel-hook-runner.js"></script>
   <script src="scripts/sidepanel-audio.js"></script>

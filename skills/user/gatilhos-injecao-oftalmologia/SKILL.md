@@ -183,7 +183,16 @@ Quando `injectBlefarite = true`:
 
 ---
 
-## LÓGICA DE INJEÇÃO — DILATAÇÃO (fluxo em 2 fases)
+## LÓGICA DE INJEÇÃO — DILATAÇÃO (fila multi-paciente, 2 fases por paciente)
+
+> **Rotina real do consultório (v5.1.5):** o paciente sai para dilatar e OUTRAS
+> consultas acontecem enquanto o colírio faz efeito — inclusive outras
+> dilatações. A extensão nunca fica "em espera": cada pausa vira um **slot
+> independente** na fila persistida `_shospDilatacaoPausas`
+> (`chrome.storage.local`, TTL 6h por slot, módulo `scripts/dilatacao-pausas.js`).
+> O painel mostra a **sala de espera**: uma linha por paciente pausado, com
+> rótulo (tipo + hora + título da aba do prontuário), botão **Retomar** próprio
+> e **✕** para descartar.
 
 ### Fase 1 — pausa (`dilatacaoDetectada = true`)
 
@@ -194,25 +203,42 @@ Quando `injectBlefarite = true`:
 3. A **ENTREVISTA é injetada imediatamente**: HDA/retorno, medicações em uso,
    antecedentes, alterações sistêmicas, antecedentes familiares e diagnóstico
    (se já mencionado)
-4. A transcrição da fase 1 é persistida em `_shospDilatacaoPhase1`
-   (`chrome.storage.local`, TTL 6h) — **mesmo quando não há dado clínico**
-   ("pausa pura"): nada da entrevista se perde
-5. Os dados de áudio injetados também são persistidos para re-injeção na fase 2
-   (caso o SHOSP descarte campos não salvos)
+4. Nasce um **slot novo na fila** com a transcrição da fase 1 e a identidade do
+   prontuário aberto (URL/título da aba) — **mesmo quando não há dado clínico**
+   ("pausa pura"): nada da entrevista se perde. Slots de outros pacientes já em
+   dilatação **não são tocados** (o modelo antigo de chave única sobrescrevia)
+5. Os dados de áudio injetados também são gravados no slot para re-injeção na
+   fase 2 (caso o SHOSP descarte campos não salvos)
 
-### Fase 2 — retorno da dilatação (nova gravação)
+### Consultas intercaladas (enquanto o colírio faz efeito)
 
-1. Ao processar a nova sessão, a transcrição da fase 1 é anexada ANTES do texto
-   atual, separada pelo marcador `[RETORNO DA DILATACAO]`
-2. O Gemini analisa a consulta COMPLETA e agora extrai conduta, tratamento,
+- Toda gravação sem retomada armada é **paciente NOVO**: nada da fila é
+  anexado, mesclado — **nem apagado**. (Correção v5.1.5: a injeção de um
+  paciente intercalado apagava a pausa de quem estava esperando.)
+- Vários pacientes podem estar na sala de espera ao mesmo tempo; cada um tem
+  seu slot e seu botão **Retomar**.
+
+### Fase 2 — retorno da dilatação (armar o slot + nova gravação)
+
+1. O médico clica em **Retomar** na linha do paciente que voltou (arma
+   `retomar=true` naquele slot; no máximo UM slot armado por vez — armar um
+   desarma o outro; há botão **Desarmar** para desfazer)
+2. Ao processar a nova sessão, a transcrição do slot armado é anexada ANTES do
+   texto atual, separada pelo marcador `[RETORNO DA DILATACAO]`
+3. O Gemini analisa a consulta COMPLETA e agora extrai conduta, tratamento,
    biomicroscopia e fundoscopia normalmente (regra do marcador no prompt)
-3. O marcador impede que o *"vai dilatar"* da fase 1 redetecte dilatação;
-   os fallbacks de gatilho no código varrem apenas o texto da sessão atual
-4. A injeção da fase 2 mescla os dados persistidos da fase 1 nos campos vazios
-   e remove `_shospDilatacaoPhase1` ao concluir
+4. O marcador impede que o *"vai dilatar"* da fase 1 redetecte dilatação;
+   os fallbacks de gatilho no código varrem apenas a cauda do texto da sessão
+5. A injeção da fase 2 mescla os dados do slot nos campos vazios e **remove só
+   aquele slot** ao concluir (injeção só de câmera no meio da fase 2 não
+   consome o slot). Se o prontuário aberto difere do prontuário onde a pausa
+   nasceu, um aviso é logado (sanidade anti-contaminação)
 
-> ⚠️ O botão **Limpar** manual descarta a fase 1 persistida (novo paciente).
-> O clearAll automático pós-injeção preserva.
+> ⚠️ O botão **Limpar** manual apenas DESARMA retomadas pendentes (paciente
+> novo); as pausas dos demais pacientes ficam na fila — descarte individual
+> pelo **✕** da sala de espera. O clearAll automático pós-injeção preserva tudo.
+> Pausas com `motivo='exame'` (pausa manual no meio do exame, paciente ainda na
+> sala) nascem ARMADAS: a gravação seguinte continua a mesma consulta.
 
 ---
 

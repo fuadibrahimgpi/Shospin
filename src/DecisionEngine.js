@@ -300,6 +300,63 @@
     }
   }
 
+  // Marcador inserido por sidepanel-audio.js quando a transcrição da fase 1
+  // (pré-dilatação) é anexada como contexto da análise da fase 2.
+  const _MARCADOR_FASE2_RE = /\[\s*retorno\s+da\s+dilatacao\s*\]/;
+
+  // Fala que caracteriza a DESCRIÇÃO ou DECLARAÇÃO dos exames pelo médico.
+  // Termos anatômicos do fundo só são ditos ao descrever o exame; as frases de
+  // "exames normais" são o gatilho de voz equivalente (EXAMES_NORMAIS_COMMANDS).
+  const _FALA_EXAMES_RE = new RegExp([
+    // Até 3 modificadores entre "exames" e o qualificador: cobre "exames estão
+    // TODOS normais" e "exames DE HOJE ESTÃO normais" (entradas literais de
+    // EXAMES_NORMAIS_COMMANDS). Um único slot opcional não dava conta.
+    'exames?\\s+(?:[a-z]+\\s+){0,3}(?:normais|normal|otimos|bons|tranquilos|certos?|paz)',
+    '(?:tudo|ta\\s+tudo|esta\\s+tudo)\\s+(?:normal|certo|bem|tranquilo|em\\s+paz)\\s+(?:n?os?\\s+)?exames?',
+    'biomicroscopia|fundoscopia|mapeamento\\s+de\\s+retina',
+    // "fundo de olho", "fundo alterado", "fundo tá bem" — mas não "lá no fundo".
+    'fundo\\s+d[eo]\\s+olho',
+    'fundo\\s+(?:(?:esta|ta|foi|ficou|estava)\\s+)?(?:alterado|normal|limpo|bom|bem|tranquilo|ok|sem)',
+    'retina|macula|macular|nervo\\s+optico|escavacao|papila|vitreo',
+    'cristalino|camara\\s+anterior|cornea|conjuntiva|iris\\b'
+  ].join('|'));
+
+  /**
+   * Guard 7: na fase 2 (retomada pós-dilatação), a declaração de exames normais
+   * precisa vir da fala DA FASE 2 — não da fase 1.
+   *
+   * 2026-07-21: consulta das 13:39. A fase 2 teve 37 palavras, nenhuma sobre
+   * fundo de olho, e mesmo assim injectExamesNormais saiu true: o LLM se apoiou
+   * em "o resto tá tudo em paz com olho", dito ANTES da dilatação. A dilatação
+   * existe justamente para ver o fundo — declarar fundoscopia normal a partir
+   * de fala pré-dilatação lauda um exame que não foi feito.
+   *
+   * Só o trecho após o marcador é varrido. Fase 2 silenciosa sobre os exames →
+   * derruba a flag e a descrição de fundoscopia. Perder uma biomicroscopia
+   * legítima da fase 1 (o médico redigita) é preferível a fabricar fundoscopia.
+   */
+  function _guardExamesNormaisFase2(cloned, ctx, log) {
+    const texto = _normalizeForGuard(ctx.transcribedText || '');
+    const marcador = texto.match(_MARCADOR_FASE2_RE);
+    if (!marcador) return; // não é fase 2 — guard não se aplica
+
+    const falaFase2 = texto.slice(marcador.index + marcador[0].length);
+    if (_FALA_EXAMES_RE.test(falaFase2)) return; // exames descritos na fase 2
+
+    const alterado = [];
+    if (cloned.injectExamesNormais === true) {
+      cloned.injectExamesNormais = false;
+      alterado.push('injectExamesNormais');
+    }
+    if (cloned.dados && cloned.dados.fundoscopia != null) {
+      cloned.dados.fundoscopia = null;
+      alterado.push('fundoscopia');
+    }
+    if (alterado.length) {
+      log.push(`Fase 2 pós-dilatação: ${alterado.join(', ')} zerado(s) — os exames não foram descritos após a dilatação (evidência vinha da fala pré-dilatação)`);
+    }
+  }
+
   /**
    * Guard 4: garante indicação sobre óculos na conduta.
    * Só dispara quando a conduta já contém ao menos uma DECISÃO CLÍNICA
@@ -325,9 +382,18 @@
 
   /**
    * Guard 6: Presbiopia obrigatória quando (a) óculos multifocal/progressivo/bifocal
-   * é prescrito na conduta, OU (b) "presbiopia" é mencionada explicitamente na transcrição.
-   * Ambas as opções exigem a menção de "óculos para perto" na consulta.
+   * é prescrito na conduta E a consulta tratou de visão de perto, OU (b) "presbiopia"
+   * é mencionada explicitamente na transcrição.
    * Garante que o diagnóstico contém "H524 - Presbiopia".
+   *
+   * 2026-07-21: a evidência de "perto" exigia o token literal `oculos` a ≤6
+   * palavras de `perto`. Na fala real o médico explica o multifocal SEM repetir
+   * "óculos" ("multifocal é o que tem grau de longe perto junto", "longe de
+   * perto junto") — o AND falhava e o guard REMOVIA presbiopia legítima em 3 de
+   * 3 consultas do log de 2026-07-21. A evidência de perto agora aceita também
+   * a dupla longe+perto e o vocabulário de leitura (óculos de farmácia, para
+   * ler). O AND foi mantido: "óculos para perto" sozinho continua insuficiente
+   * (PRES-6) e multifocal declarado só para longe também (PRES-7).
    */
   function _guardPresbiopiaObrigatoria(cloned, ctx, log) {
     if (!cloned.dados) return;
@@ -338,12 +404,24 @@
     // Limpa pontuações da transcrição para busca robusta de termos próximos.
     const cleanText = transcricaoNorm.replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?]/g, " ");
     const hasOculosParaPerto = /oculos\s+(?:[a-z]+\s+){0,6}perto|perto\s+(?:[a-z]+\s+){0,6}oculos/.test(cleanText);
+    // "longe ... perto" (em qualquer ordem): forma como o médico descreve a
+    // lente multifocal sem nomear "óculos" de novo.
+    const hasLongePerto = /longe\s+(?:[a-z]+\s+){0,4}perto|perto\s+(?:[a-z]+\s+){0,4}longe/.test(cleanText);
+    // Vocabulário de correção para perto já em uso pelo paciente.
+    const hasLeitura = /oculos\s+(?:de\s+)?(?:leitura|farmacia|pronto)|oculos\s+(?:[a-z]+\s+){0,4}(?:para\s+)?ler\b/.test(cleanText);
+    const hasEvidenciaPerto = hasOculosParaPerto || hasLongePerto || hasLeitura;
 
-    const hasMultifocal = /multifocal|progressiv|bifocal/.test(condutaNorm);
+    // Plural obrigatório: a frase canônica do prompt é "Prescrição de óculos
+    // MULTIFOCAIS" — e "multifocais" NÃO contém "multifocal". O padrão antigo
+    // (/multifocal/) nunca casava com a conduta que o prompt manda emitir; os
+    // testes passavam só porque usavam o singular. Causa raiz da remoção de
+    // presbiopia em 3 de 3 consultas do log de 2026-07-21.
+    const hasMultifocal = /multifoca(?:l|is)|bifoca(?:l|is)|progressiv/.test(condutaNorm);
     const hasPresbiopiaNoTexto = /presbiop/.test(transcricaoNorm);
 
-    // Presbiopia só é elegível se houver menção a óculos para perto AND (multifocal/progressivo ou menção explícita de presbiopia)
-    const canHavePresbiopia = hasOculosParaPerto && (hasMultifocal || hasPresbiopiaNoTexto);
+    // Menção explícita de presbiopia basta por si só; multifocal exige que a
+    // consulta tenha tratado de visão de perto.
+    const canHavePresbiopia = hasPresbiopiaNoTexto || (hasMultifocal && hasEvidenciaPerto);
 
     const diagnostico = cloned.dados.diagnostico || '';
     const hasPresbiopia = /h52\.?4|presbiop/i.test(diagnostico);
@@ -427,6 +505,9 @@
     // Guard 0: ruído/incoerência — roda ANTES e fora do bloco dados (dados pode ser null)
     if (cloned) {
       _guardTranscricaoIncoerente(cloned, ctx, guardsApplied);
+      // Guard 7: fase 2 pós-dilatação. Fora do bloco `dados` porque
+      // injectExamesNormais vive na raiz da resposta. Precede _reconcileInjectFlags.
+      _guardExamesNormaisFase2(cloned, ctx, guardsApplied);
     }
 
     if (cloned && cloned.dados) {

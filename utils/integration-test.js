@@ -1050,6 +1050,165 @@ test('[PRES-8] Injeta Presbiopia se multifocal é prescrito E há menção de ó
 });
 
 // ──────────────────────────────────────────────────────────────────────────────
+// 2026-07-21 — Presbiopia removida indevidamente em 3/3 consultas do log.
+// A evidência de "perto" exigia o token literal `oculos` a ≤6 palavras de
+// `perto`; na fala real o médico explica o multifocal sem repetir "óculos".
+// ──────────────────────────────────────────────────────────────────────────────
+
+test('[PRES-9] Injeta Presbiopia quando o médico explica o multifocal como "longe perto junto" (sem repetir "óculos")', () => {
+  const raw = {
+    tipo_consulta: 'primeira_consulta',
+    dados: {
+      conduta: 'Prescrição de óculos multifocais com orientações sobre o uso',
+      diagnostico: 'H250 - Catarata senil incipiente AO\nH529 - Transtorno da refração não especificado'
+    }
+  };
+  // Fala real da consulta de 2026-07-21 12:56
+  const decision = DecisionEngine.buildDecision(raw, {
+    transcribedText: 'multifocal que e o que tem grau de longe perto junto nao precisa usar direto mas vai ficar bem melhor',
+    hookFlags: {}
+  });
+  expect(decision.clonedAIResponse.dados.diagnostico).toContain('H524 - Presbiopia');
+});
+
+test('[PRES-10] Injeta Presbiopia com óculos de farmácia para perto + multifocal na conduta', () => {
+  const raw = {
+    tipo_consulta: 'primeira_consulta',
+    dados: {
+      conduta: 'Prescrição de óculos multifocal',
+      diagnostico: 'H52.1 - Miopia'
+    }
+  };
+  const decision = DecisionEngine.buildDecision(raw, {
+    transcribedText: 'ele usa oculos de farmacia a noite para dar uma ajudinha, vou deixar multifocal',
+    hookFlags: {}
+  });
+  expect(decision.clonedAIResponse.dados.diagnostico).toContain('H524 - Presbiopia');
+});
+
+test('[PRES-12] Reconhece a frase CANÔNICA do prompt no plural ("óculos multifocais")', () => {
+  // Os testes PRES-1..8 usavam o singular; o prompt emite o plural. O padrão
+  // /multifocal/ não casa com "multifocais" — guard nunca disparava em produção.
+  const condutaCanonica = 'Prescrição de óculos multifocais com orientações sobre o uso';
+  const raw = {
+    tipo_consulta: 'primeira_consulta',
+    dados: { conduta: condutaCanonica, diagnostico: 'H52.2 - Astigmatismo' }
+  };
+  const decision = DecisionEngine.buildDecision(raw, {
+    transcribedText: 'o oculos novo tem grau de longe e de perto junto, o grau ta bom',
+    hookFlags: {}
+  });
+  expect(decision.clonedAIResponse.dados.diagnostico).toContain('H524 - Presbiopia');
+});
+
+test('[PRES-13] A frase canônica de multifocais do prompt é reconhecida pelo padrão do guard', () => {
+  // Trava de sincronia prompt↔guard: se o prompt mudar o fraseado, este teste cai.
+  const promptSrc = readSrcNormalized('src', 'gemini-interview-agent.js');
+  const m = promptSrc.match(/Prescri[çc][ãa]o de [óo]culos multifoca\w*/i);
+  expect(m !== null).toBe(true);
+  const condutaNorm = m[0].toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+  expect(/multifoca(?:l|is)|bifoca(?:l|is)|progressiv/.test(condutaNorm)).toBe(true);
+});
+
+test('[PRES-11] Menção explícita de presbiopia basta, mesmo sem vocabulário de perto', () => {
+  const raw = {
+    tipo_consulta: 'primeira_consulta',
+    dados: {
+      conduta: 'Retorno em 12 meses',
+      diagnostico: 'H52.1 - Miopia'
+    }
+  };
+  const decision = DecisionEngine.buildDecision(raw, {
+    transcribedText: 'o paciente ja apresenta presbiopia compativel com a idade',
+    hookFlags: {}
+  });
+  expect(decision.clonedAIResponse.dados.diagnostico).toContain('H524 - Presbiopia');
+});
+
+// ──────────────────────────────────────────────────────────────────────────────
+// 2026-07-21 — Fase 2 pós-dilatação: exames normais só valem se descritos DEPOIS
+// da dilatação. Consulta das 13:39: fase 2 com 37 palavras, nenhuma sobre fundo
+// de olho, e injectExamesNormais saiu true a partir de fala pré-dilatação.
+// ──────────────────────────────────────────────────────────────────────────────
+
+const MARCADOR_F2 = '\n\n[RETORNO DA DILATACAO]\n\n';
+
+test('[F2-1] Derruba injectExamesNormais quando a fase 2 não descreve os exames', () => {
+  const raw = {
+    tipo_consulta: 'retorno',
+    injectExamesNormais: true,
+    dados: { conduta: 'Orientações sobre cirurgia refrativa', diagnostico: 'H52.9 - Transtorno da refração' }
+  };
+  // Fala real de 2026-07-21: fase 1 declara "tudo em paz", fase 2 não fala de exame.
+  const fase1 = 'o oculos manchou bastante mas o resto ta tudo em paz com olho, vai dilatar';
+  const fase2 = 'orientacoes sobre cirurgia refrativa, oriento procurar um local com aparelho para a simulacao';
+  const decision = DecisionEngine.buildDecision(raw, {
+    transcribedText: fase1 + MARCADOR_F2 + fase2,
+    hookFlags: {}
+  });
+  expect(decision.injectFlags.injectExamesNormais).toBe(false);
+  expect(decision.guardsApplied.some(g => /Fase 2 pós-dilatação/i.test(g))).toBe(true);
+});
+
+test('[F2-2] Zera a fundoscopia inventada quando a fase 2 é silenciosa sobre os exames', () => {
+  const raw = {
+    tipo_consulta: 'retorno',
+    injectExamesNormais: false,
+    dados: {
+      conduta: 'Retorno em 12 meses',
+      fundoscopia: 'Escavação fisiológica, mácula e retina sem alterações em AO'
+    }
+  };
+  const decision = DecisionEngine.buildDecision(raw, {
+    transcribedText: 'fundo de olho sera avaliado, vai dilatar' + MARCADOR_F2 + 'entao ta bom, qualquer duvida voce volta',
+    hookFlags: {}
+  });
+  expect(decision.clonedAIResponse.dados.fundoscopia).toBe(null);
+});
+
+test('[F2-3] Mantém injectExamesNormais quando a fase 2 declara os exames normais', () => {
+  const raw = {
+    tipo_consulta: 'retorno',
+    injectExamesNormais: true,
+    dados: { conduta: 'Retorno em 12 meses', diagnostico: 'H52.1 - Miopia' }
+  };
+  const decision = DecisionEngine.buildDecision(raw, {
+    transcribedText: 'vai dilatar' + MARCADOR_F2 + 'olhei o fundo de olho e esta tudo certo',
+    hookFlags: {}
+  });
+  expect(decision.injectFlags.injectExamesNormais).toBe(true);
+  expect(decision.guardsApplied.some(g => /Fase 2 pós-dilatação/i.test(g))).toBe(false);
+});
+
+test('[F2-5] Reconhece as frases literais de EXAMES_NORMAIS_COMMANDS sem apoio de termo anatômico', () => {
+  // A versão anterior de _FALA_EXAMES_RE aceitava só UM modificador entre
+  // "exames" e o qualificador — "exames estão TODOS normais" falhava, e o F2-3
+  // mascarava isso passando por causa de "fundo de olho" na mesma frase.
+  const frases = ClinicalTriggers.EXAMES_NORMAIS_COMMANDS.slice(0, 20);
+  const rejeitadas = frases.filter(f => {
+    const decision = DecisionEngine.buildDecision(
+      { tipo_consulta: 'retorno', injectExamesNormais: true, dados: { conduta: 'Retorno em 12 meses' } },
+      { transcribedText: 'vai dilatar' + MARCADOR_F2 + f, hookFlags: {} }
+    );
+    return decision.injectFlags.injectExamesNormais !== true;
+  });
+  expect(rejeitadas).toEqual([]);
+});
+
+test('[F2-4] Guard não se aplica fora da fase 2 (sem marcador de retomada)', () => {
+  const raw = {
+    tipo_consulta: 'primeira_consulta',
+    injectExamesNormais: true,
+    dados: { conduta: 'Retorno em 12 meses', diagnostico: 'H52.1 - Miopia' }
+  };
+  const decision = DecisionEngine.buildDecision(raw, {
+    transcribedText: 'consulta comum sem dilatacao, o resto ta tudo em paz',
+    hookFlags: {}
+  });
+  expect(decision.injectFlags.injectExamesNormais).toBe(true);
+});
+
+// ──────────────────────────────────────────────────────────────────────────────
 // 2026-05-14 — _sanitizeCondutaTratamento corrigida (sem inversão compressa/higiene)
 // ──────────────────────────────────────────────────────────────────────────────
 
@@ -1090,7 +1249,7 @@ test('[SAN-3] Bloco tratamento→conduta não usa ORIENTACAO_PROCEDIMENTAL_RE (s
 test('[V6-IDP-4] sidepanel-injection.js reverte flags no else de injectResp.success', () => {
   // Verifica se o caminho de falha de injectResp.success reverte temAudio e temCamera.
   // Âncora no log "Revertendo flags" — o primeiro `else` após injectResp.success
-  // é o do _shospDilatacaoPhase1 (dentro do ramo de SUCESSO), não o de falha.
+  // é o da fila de pausas de dilatação (dentro do ramo de SUCESSO), não o de falha.
   const successIndex = injectionJsSource.indexOf('if (injectResp.success)');
   expect(successIndex > 0).toBe(true);
   const revertIndex = injectionJsSource.indexOf('Revertendo flags', successIndex);
@@ -1463,6 +1622,197 @@ test('[CID-REFRAC-4] a retificação é chamada após a fusão dos CIDs do OCR',
 });
 
 // ──────────────────────────────────────────────────────────────────────────────
+// 2026-07-23 — Retificação CROSS-INJEÇÃO de H52.9 (content.js, handler searchCid).
+// _dropUnspecifiedRefraction (sidepanel) só vê um campo por vez. Quando os
+// específicos do OCR chegam numa rodada de injeção e o H52.9 do áudio noutra, o
+// Set __shospInjectedCids é a única visão cumulativa. Guard: pular H52.9 se o Set
+// já tem um H52.0–H52.4 (cobre a ordem OCR→áudio). Bug "H52.9 duplicado" 2026-07-21.
+// ──────────────────────────────────────────────────────────────────────────────
+
+const _isRedundantUnspecifiedRefraction = new Function(
+  _extractFn(contentJsSource, '_isRedundantUnspecifiedRefraction') +
+    '\nreturn _isRedundantUnspecifiedRefraction;'
+)();
+
+test('[CID-REFRAC-5] pula H52.9 quando um específico H52.0/H52.2 já foi injetado (caso desta sessão)', () => {
+  expect(_isRedundantUnspecifiedRefraction('H529', new Set(['H520', 'H522']))).toBe(true);
+  expect(_isRedundantUnspecifiedRefraction('H529', new Set(['H521']))).toBe(true);
+});
+
+test('[CID-REFRAC-6] presbiopia (H52.4) no Set também habilita pular H52.9 (consistente com _dropUnspecifiedRefraction)', () => {
+  expect(_isRedundantUnspecifiedRefraction('H529', new Set(['H524']))).toBe(true);
+});
+
+test('[CID-REFRAC-7] NÃO pula H52.9 sem específico no Set, nem age sobre outros códigos', () => {
+  // Set sem refrativo específico → H52.9 é injetado normalmente
+  expect(_isRedundantUnspecifiedRefraction('H529', new Set())).toBe(false);
+  expect(_isRedundantUnspecifiedRefraction('H529', new Set(['H010', 'H409']))).toBe(false);
+  // guard indefinido/Set ausente
+  expect(_isRedundantUnspecifiedRefraction('H529', null)).toBe(false);
+  // não interfere em códigos que não sejam H52.9
+  expect(_isRedundantUnspecifiedRefraction('H520', new Set(['H522']))).toBe(false);
+  expect(_isRedundantUnspecifiedRefraction('H524', new Set(['H520']))).toBe(false);
+});
+
+test('[CID-REFRAC-8] o guard é chamado dentro do handler searchCid, antes do click', () => {
+  expect(contentJsSource.includes('_isRedundantUnspecifiedRefraction(normCode, cidSet)')).toBe(true);
+  // o guard precede o targetRow.click() (skip antes de adicionar o CID à lista)
+  const guardIdx = contentJsSource.indexOf('_isRedundantUnspecifiedRefraction(normCode, cidSet)');
+  const clickIdx = contentJsSource.indexOf('targetRow.click()');
+  expect(guardIdx !== -1 && clickIdx !== -1 && guardIdx < clickIdx).toBe(true);
+});
+
+// ──────────────────────────────────────────────────────────────────────────────
+// 2026-07-23 — prontuarioOpen robusto (content.js, handler checkPage). Antes só
+// `td[id^="tdCadastro-"]`: quando o SHOSP troca a tag/id, a ficha ABERTA era lida
+// como fechada → 8/8 injeções caíram no fallback (~5s + aba cega, log 2026-07-21).
+// Agora OR de 3 marcadores; os dois primeiros são os alvos reais da injeção
+// (confirmados presentes quando a injeção funciona).
+// ──────────────────────────────────────────────────────────────────────────────
+
+const _isProntuarioOpen = new Function(
+  _extractFn(contentJsSource, '_isProntuarioOpen') + '\nreturn _isProntuarioOpen;'
+)();
+
+// doc falso: querySelector(sel) devolve um objeto se `sel` estiver no conjunto presente.
+const _fakeDoc = (presentSelectors) => ({
+  querySelector: (sel) => (presentSelectors.includes(sel) ? {} : null),
+});
+
+test('[PRONT-1] detecta ficha aberta por qualquer um dos 3 marcadores', () => {
+  expect(_isProntuarioOpen(_fakeDoc(['[id*="prontuario_resp"]']))).toBe(true);
+  expect(_isProntuarioOpen(_fakeDoc(['[id*="divTextoProntuarioServico"]']))).toBe(true);
+  expect(_isProntuarioOpen(_fakeDoc(['[id*="tdCadastro"]']))).toBe(true);
+});
+
+test('[PRONT-2] ficha fechada/agenda (nenhum marcador) → false; doc ausente → false', () => {
+  expect(_isProntuarioOpen(_fakeDoc([]))).toBe(false);
+  expect(_isProntuarioOpen(_fakeDoc(['[id*="divAgenda"]', '[id*="menuLateral"]']))).toBe(false);
+  expect(_isProntuarioOpen(null)).toBe(false);
+  expect(_isProntuarioOpen(undefined)).toBe(false);
+});
+
+test('[PRONT-3] checkPage usa _isProntuarioOpen(document) e o seletor estrito antigo sumiu', () => {
+  expect(contentJsSource.includes('_isProntuarioOpen(document)')).toBe(true);
+  expect(contentJsSource.includes('querySelectorAll(\'td[id^="tdCadastro-"]\').length')).toBe(false);
+});
+
+// ──────────────────────────────────────────────────────────────────────────────
+// 2026-07-23 — Desempate de EIXO por 3ª chamada (src/gemini-exam-agent.js).
+// Eixo divergente era 'soft' e a math-consistency (S+C/2≈SE) não envolve o eixo,
+// então soft+math-ok jamais bloqueava → eixo NÃO-conferido injetado (3/4 capturas,
+// log 2026-07-21). Agora _tiebreakAxis desempata 2-de-3; confirmar a 2ª OU
+// inconclusivo força bloqueio (severity='hard'). Carrega a classe REAL via shim.
+// ──────────────────────────────────────────────────────────────────────────────
+
+const examJsSource = readSrcNormalized('src', 'gemini-exam-agent.js');
+const _LoggerShim = class { info() {} warn() {} error() {} success() {} debug() {} };
+const _parseGeminiJSONShim = (t) => { try { return JSON.parse(t); } catch { return null; } };
+const _GeminiExamAgent = new Function(
+  'Logger', '_parseGeminiJSON',
+  examJsSource + '\nreturn GeminiExamAgent;'
+)(_LoggerShim, _parseGeminiJSONShim);
+const _examAgent = new _GeminiExamAgent();
+
+test('[AXIS-1] eixo divergente >8° (ambos com cilindro, 1ª math-consistent) → mismatch marcado', () => {
+  // esf + cil/2 = 1.00 + (-1.00)/2 = 0.50 = se → 1ª math-consistent (o caso em
+  // que a política antiga NUNCA bloquearia o eixo).
+  const processed = { od: { esf: '+1.00', cil: -1.00, eixo: 80, se: '+0.50' }, oe: null };
+  const verify    = { od: { s: '+1.00', c: -1.00, a: 100, se: '+0.50' }, oe: null };
+  const m = _examAgent._compareRefractionAgainstVerify(processed, verify);
+  expect(m !== null).toBe(true);
+  expect(m.isAxisMismatch).toBe(true);
+  expect(m.pEixo).toBe(80);
+  expect(m.vEixo).toBe(100);
+  expect(m.severity).toBe('soft');
+});
+
+test('[AXIS-2] eixo circularmente adjacente (2° vs 179°) NÃO é mismatch', () => {
+  const processed = { od: { esf: '+1.00', cil: -1.00, eixo: 2, se: '+0.50' }, oe: null };
+  const verify    = { od: { s: '+1.00', c: -1.00, a: 179, se: '+0.50' }, oe: null };
+  expect(_examAgent._compareRefractionAgainstVerify(processed, verify)).toBe(null);
+});
+
+test('[AXIS-7] caller despacha _tiebreakAxis e FORÇA bloqueio (hard) quando não confirma a 1ª', () => {
+  expect(examJsSource.includes('_tiebreakAxis(mismatch, imageParts, apiService)')).toBe(true);
+  expect(examJsSource.includes('mismatch.isAxisMismatch')).toBe(true);
+  // no ramo não-'primeira' a severidade vira 'hard' (senão soft+math-ok passaria)
+  const idx = examJsSource.indexOf('vereditoEixo');
+  expect(idx !== -1).toBe(true);
+  expect(examJsSource.slice(idx, idx + 900).includes("mismatch.severity = 'hard'")).toBe(true);
+});
+
+// Grupo async: voto do desempate de eixo (apiService e _parseGeminiJSON fakes).
+async function _axisTiebreakTests() {
+  const mk = (jsonText) => ({ callGeminiAPI: async () => ({ text: jsonText }) });
+  const mismatch = { eye: 'od', pEixo: 80, vEixo: 100 };
+
+  await testAsync('[AXIS-3] 3ª leitura perto da 1ª (82°) → "primeira" (não bloqueia)', async () => {
+    expect(await _examAgent._tiebreakAxis(mismatch, [], mk('{"od":82,"oe":64}'))).toBe('primeira');
+  });
+  await testAsync('[AXIS-4] 3ª leitura perto da 2ª (98°) → "segunda" (bloqueia)', async () => {
+    expect(await _examAgent._tiebreakAxis(mismatch, [], mk('{"od":98,"oe":64}'))).toBe('segunda');
+  });
+  await testAsync('[AXIS-5] 3ª leitura é um 3º valor (45°) → null (inconclusivo → bloqueia)', async () => {
+    expect((await _examAgent._tiebreakAxis(mismatch, [], mk('{"od":45,"oe":64}'))) === null).toBe(true);
+  });
+  await testAsync('[AXIS-6] 3ª leitura ilegível ("null") → null (inconclusivo → bloqueia)', async () => {
+    expect((await _examAgent._tiebreakAxis(mismatch, [], mk('{"od":"null","oe":64}'))) === null).toBe(true);
+  });
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// 2026-07-23 — Visibilidade de CID recusado pelo SHOSP (sidepanel-injection.js).
+// H16.2 (Ceratoconjuntivite) é rejeitado porque o SHOSP não tem a categoria H16
+// (a busca tenta H162, H16.2 e a categoria "H16" — todas sem resultado). Não é
+// bug de busca nem CID inválido → não se remove do prompt. Correção: a falha, que
+// antes só aparecia num toast fugaz e o CID sumia, agora vira aviso PERSISTENTE
+// no fim da cadeia listando os CIDs a adicionar manualmente.
+// ──────────────────────────────────────────────────────────────────────────────
+
+const _formatFailedCidsMessage = new Function(
+  _extractFn(injectionJsSource, '_formatFailedCidsMessage') + '\nreturn _formatFailedCidsMessage;'
+)();
+
+test('[CIDFAIL-1] sem falhas (vazio/null/undefined) → null (nada a mostrar)', () => {
+  expect(_formatFailedCidsMessage([])).toBe(null);
+  expect(_formatFailedCidsMessage(null)).toBe(null);
+  expect(_formatFailedCidsMessage(undefined)).toBe(null);
+  expect(_formatFailedCidsMessage(['   ', ''])).toBe(null); // só espaços em branco
+});
+
+test('[CIDFAIL-2] um CID → singular "não aceito" e lista o código', () => {
+  const msg = _formatFailedCidsMessage(['H16.2 - Ceratoconjuntivite']);
+  expect(msg.includes('1 CID não aceito')).toBe(true);
+  expect(msg.includes('adicione manualmente')).toBe(true);
+  expect(msg.includes('H16.2 - Ceratoconjuntivite')).toBe(true);
+});
+
+test('[CIDFAIL-3] múltiplos CIDs → plural e junta a lista', () => {
+  const msg = _formatFailedCidsMessage(['H16.2 - Ceratoconjuntivite', 'H18.1 - Queratopatia']);
+  expect(msg.includes('2 CIDs não aceitos')).toBe(true);
+  expect(msg.includes('H16.2 - Ceratoconjuntivite, H18.1 - Queratopatia')).toBe(true);
+});
+
+test('[CIDFAIL-4] wiring: acumula na falha, mostra no fim da cadeia e reseta no início', () => {
+  // acumulador populado na branch de falha e exibido nos dois fins de cadeia
+  expect(injectionJsSource.includes('handleSearchCid._failed = [])).push(rawTerm)')).toBe(true);
+  const surfaceCount = (injectionJsSource.match(/_surfaceFailedCids\(\)/g) || []).length;
+  expect(surfaceCount >= 3).toBe(true); // definição + 2 fins de cadeia (sucesso e falha)
+  // reset nos iniciadores (botões + injectAll), não dentro da recursão
+  expect((injectionJsSource.match(/handleSearchCid\._failed = \[\]/g) || []).length >= 3).toBe(true);
+});
+
+test('[CIDFAIL-5] wiring: hide centralizado em _armHideSuccess e aviso persistente cancela o timer', () => {
+  // showSuccess/showError/CID-ok usam _armHideSuccess (slot único), não setTimeout solto
+  expect(injectionJsSource.includes("setTimeout(() => successMessage.classList.add('hidden'), 3000)")).toBe(false);
+  expect((injectionJsSource.match(/_armHideSuccess\(\)/g) || []).length >= 3).toBe(true);
+  // _surfaceFailedCids cancela o hide pendente (senão não seria persistente)
+  const idx = injectionJsSource.indexOf('function _surfaceFailedCids');
+  expect(injectionJsSource.slice(idx, idx + 500).includes('clearTimeout(successMessage._hideTimer)')).toBe(true);
+});
+
+// ──────────────────────────────────────────────────────────────────────────────
 // 2026-07-08 — Desfazer dilatação: reprocessar consulta como completa
 // ──────────────────────────────────────────────────────────────────────────────
 
@@ -1489,9 +1839,9 @@ test('[REPROC-3] handler de undo reprocessa com forceComplete e reinjeta com for
       .includes('detectaDilatacaoNaFala')).toBe(false);
 });
 
-test('[REPROC-4] visibilidade do botão dirigida por storage.onChanged (uma fonte)', () => {
-  expect(audioJsSource.includes('function refreshUndoVisibility')).toBe(true);
-  expect(initJsSource.includes('storage.onChanged') && initJsSource.includes('refreshUndoVisibility')).toBe(true);
+test('[REPROC-4] sala de espera dirigida por storage.onChanged (uma fonte)', () => {
+  expect(audioJsSource.includes('function renderDilatacaoPausas')).toBe(true);
+  expect(initJsSource.includes('storage.onChanged') && initJsSource.includes('renderDilatacaoPausas')).toBe(true);
 });
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -1523,22 +1873,170 @@ for (const [label, anchor] of SKILL_PROMPT_ANCHORS) {
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
+// 2026-07-20 — FILA DE PAUSAS DE DILATAÇÃO (sala de espera multi-paciente)
+// A rotina real intercala consultas enquanto pacientes dilatam. Dois defeitos
+// do modelo de chave única (_shospDilatacaoPhase1) são cobertos por regressão:
+//   1. injeção de paciente intercalado APAGAVA a pausa de quem esperava;
+//   2. segunda dilatação SOBRESCREVIA a fase 1 da primeira.
+// ──────────────────────────────────────────────────────────────────────────────
+
+// Fonte: consumo do slot só com retomada armada E injeção de áudio; nada de
+// remove incondicional da chave antiga no ramo de sucesso.
+test('[DILQ-SRC-1] injectAll não remove pausas de outros pacientes (fix do wipe intercalado)', () => {
+  expect(injectionJsSource).not.toContain("chrome.storage.local.remove('_shospDilatacaoPhase1')");
+  expect(injectionJsSource).toContain('_phase1Data && combinedData.audio');
+  expect(injectionJsSource).toContain('DilatacaoPausas.remover(_phase1Data.id)');
+});
+
+test('[DILQ-SRC-2] pausas nascem pela fila (criar/atualizar), nunca por chave única', () => {
+  expect(audioJsSource).toContain('DilatacaoPausas.criar');
+  expect(audioJsSource).toContain('DilatacaoPausas.atualizar');
+  expect(audioJsSource).not.toContain("chrome.storage.local.set({ _shospDilatacaoPhase1");
+  expect(audioJsSource).not.toContain("chrome.storage.local.set({\n            _shospDilatacaoPhase1");
+});
+
+test('[DILQ-SRC-3] Limpar manual DESARMA retomadas sem apagar pausas alheias', () => {
+  const clearAllBlock = injectionJsSource.split('function clearAll')[1] || '';
+  expect(clearAllBlock).toContain('desmarcarRetomadas');
+  expect(clearAllBlock).not.toContain("remove('_shospDilatacaoPhase1')");
+});
+
+// Comportamentais: exercitam o módulo DilatacaoPausas com storage mockado.
+function _mockChrome(initialMem = {}) {
+  const mem = JSON.parse(JSON.stringify(initialMem));
+  return {
+    _mem: mem,
+    tabs: { query: (_q, cb) => { const r = []; return cb ? cb(r) : Promise.resolve(r); } },
+    storage: {
+      local: {
+        get: (keys, cb) => {
+          const list = Array.isArray(keys) ? keys : [keys];
+          const out = {};
+          list.forEach(k => { if (k in mem) out[k] = JSON.parse(JSON.stringify(mem[k])); });
+          cb(out);
+        },
+        set: (obj, cb) => { Object.assign(mem, JSON.parse(JSON.stringify(obj))); if (cb) cb(); },
+        remove: (keys, cb) => {
+          (Array.isArray(keys) ? keys : [keys]).forEach(k => { delete mem[k]; });
+          if (cb) cb();
+        },
+      },
+    },
+  };
+}
+
+async function testAsync(name, fn) {
+  try {
+    await fn();
+    results.push({ status: 'PASS', name });
+    passCount++;
+  } catch (e) {
+    results.push({ status: 'FAIL', name, error: e.message });
+    failCount++;
+  }
+}
+
+async function _dilatacaoQueueTests() {
+  const DilatacaoPausas = require('../scripts/dilatacao-pausas.js');
+  const QK = DilatacaoPausas.STORAGE_KEY;
+  const LK = DilatacaoPausas.LEGACY_KEY;
+
+  await testAsync('[DILQ-1] segunda dilatação NÃO sobrescreve a primeira — as duas coexistem na fila', async () => {
+    global.chrome = _mockChrome();
+    const idA = await DilatacaoPausas.criar({ transcript: 'paciente A vai dilatar', motivo: 'dilatacao' });
+    const idB = await DilatacaoPausas.criar({ transcript: 'paciente B vai dilatar', motivo: 'dilatacao' });
+    const pausas = await DilatacaoPausas.listar();
+    expect(pausas.length).toBe(2);
+    expect(pausas.map(p => p.id).includes(idA)).toBe(true);
+    expect(pausas.map(p => p.id).includes(idB)).toBe(true);
+  });
+
+  await testAsync('[DILQ-2] marcarRetomada é exclusiva — armar B desarma A', async () => {
+    global.chrome = _mockChrome();
+    const idA = await DilatacaoPausas.criar({ transcript: 'A', motivo: 'dilatacao' });
+    const idB = await DilatacaoPausas.criar({ transcript: 'B', motivo: 'dilatacao' });
+    await DilatacaoPausas.marcarRetomada(idA);
+    await DilatacaoPausas.marcarRetomada(idB);
+    const armado = await DilatacaoPausas.obterRetomada();
+    expect(armado.id).toBe(idB);
+    const pausas = await DilatacaoPausas.listar();
+    expect(pausas.filter(p => p.retomar).length).toBe(1);
+  });
+
+  await testAsync('[DILQ-3] remover(id) tira SÓ o slot alvo — o outro paciente segue esperando', async () => {
+    global.chrome = _mockChrome();
+    const idA = await DilatacaoPausas.criar({ transcript: 'A', motivo: 'dilatacao' });
+    const idB = await DilatacaoPausas.criar({ transcript: 'B', motivo: 'dilatacao' });
+    await DilatacaoPausas.remover(idA);
+    const pausas = await DilatacaoPausas.listar();
+    expect(pausas.length).toBe(1);
+    expect(pausas[0].id).toBe(idB);
+  });
+
+  await testAsync('[DILQ-4] chave legada _shospDilatacaoPhase1 migra para slot e é removida', async () => {
+    global.chrome = _mockChrome({ [LK]: { transcript: 'legado', ts: Date.now(), motivo: 'dilatacao', retomar: true, audio: { hda: 'x' } } });
+    const pausas = await DilatacaoPausas.listar();
+    expect(pausas.length).toBe(1);
+    expect(pausas[0].transcript).toBe('legado');
+    expect(pausas[0].retomar).toBe(true);
+    expect(global.chrome._mem[LK] === undefined).toBe(true);
+  });
+
+  await testAsync('[DILQ-5] slot expirado (TTL 6h) é podado na leitura', async () => {
+    global.chrome = _mockChrome({ [QK]: [
+      { id: 'velho', ts: Date.now() - 7 * 60 * 60 * 1000, transcript: 'x', motivo: 'dilatacao', retomar: false },
+      { id: 'novo', ts: Date.now(), transcript: 'y', motivo: 'dilatacao', retomar: false },
+    ] });
+    const pausas = await DilatacaoPausas.listar();
+    expect(pausas.length).toBe(1);
+    expect(pausas[0].id).toBe('novo');
+  });
+
+  await testAsync('[DILQ-6] desmarcarRetomadas desarma sem apagar nenhuma pausa', async () => {
+    global.chrome = _mockChrome();
+    const idA = await DilatacaoPausas.criar({ transcript: 'A', motivo: 'dilatacao' });
+    await DilatacaoPausas.criar({ transcript: 'B', motivo: 'dilatacao' });
+    await DilatacaoPausas.marcarRetomada(idA);
+    await DilatacaoPausas.desmarcarRetomadas();
+    const pausas = await DilatacaoPausas.listar();
+    expect(pausas.length).toBe(2);
+    expect(pausas.filter(p => p.retomar).length).toBe(0);
+    expect((await DilatacaoPausas.obterRetomada()) === null).toBe(true);
+  });
+
+  await testAsync('[DILQ-7] pausa de exame nasce ARMADA (mesmo paciente continua na sala)', async () => {
+    global.chrome = _mockChrome();
+    await DilatacaoPausas.criar({ transcript: 'meio do exame', motivo: 'exame', retomar: true });
+    const armado = await DilatacaoPausas.obterRetomada();
+    expect(armado !== null).toBe(true);
+    expect(armado.motivo).toBe('exame');
+  });
+
+  delete global.chrome;
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
 // RELATÓRIO FINAL
 // ──────────────────────────────────────────────────────────────────────────────
 
-console.log('\n');
-console.log('═══════════════════════════════════════════════════');
-console.log('  SHOSP EXTENSION v5 — RELATÓRIO DE INTEGRAÇÃO');
-console.log('═══════════════════════════════════════════════════');
+(async () => {
+  await _dilatacaoQueueTests();
+  await _axisTiebreakTests();
 
-for (const r of results) {
-  const icon = r.status === 'PASS' ? '✅' : '❌';
-  console.log(`${icon}  ${r.name}`);
-  if (r.error) console.log(`      └─ ${r.error}`);
-}
+  console.log('\n');
+  console.log('═══════════════════════════════════════════════════');
+  console.log('  SHOSP EXTENSION v5 — RELATÓRIO DE INTEGRAÇÃO');
+  console.log('═══════════════════════════════════════════════════');
 
-console.log('───────────────────────────────────────────────────');
-console.log(`  Total: ${results.length}  |  ✅ ${passCount} passaram  |  ❌ ${failCount} falharam`);
-console.log('═══════════════════════════════════════════════════\n');
+  for (const r of results) {
+    const icon = r.status === 'PASS' ? '✅' : '❌';
+    console.log(`${icon}  ${r.name}`);
+    if (r.error) console.log(`      └─ ${r.error}`);
+  }
 
-process.exit(failCount > 0 ? 1 : 0);
+  console.log('───────────────────────────────────────────────────');
+  console.log(`  Total: ${results.length}  |  ✅ ${passCount} passaram  |  ❌ ${failCount} falharam`);
+  console.log('═══════════════════════════════════════════════════\n');
+
+  process.exit(failCount > 0 ? 1 : 0);
+})();

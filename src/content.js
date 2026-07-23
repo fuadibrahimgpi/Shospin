@@ -1193,17 +1193,50 @@ if (!window.__shospInjectedCids || window.__shospInjectedCidsUrl !== location.hr
   window.__shospInjectedCidsUrl = location.href;
 }
 
+// Retificação cross-injeção de H52.9: o transtorno de refração NÃO especificado
+// é redundante quando um CID refrativo específico (H52.0–H52.4) já foi injetado
+// neste paciente. `_dropUnspecifiedRefraction` (sidepanel) só enxerga um campo
+// por vez; quando os específicos vêm do OCR numa rodada e o H52.9 vem do áudio
+// noutra, ele não os vê. O Set `__shospInjectedCids` é a única visão cumulativa
+// cross-round (per-URL, sobrevive à re-injeção). Cobre a ordem OCR→áudio.
+// Autocontida (só args + literal) para ser exercitada por _extractFn nos testes.
+function _isRedundantUnspecifiedRefraction(normCode, injectedSet) {
+  if (normCode !== 'H529' || !injectedSet) return false;
+  return ['H520', 'H521', 'H522', 'H523', 'H524'].some(c => injectedSet.has(c));
+}
+
+// prontuarioOpen: a ficha está aberta quando um marcador ESTRUTURAL da ficha
+// existe no DOM. Antes checava só `td[id^="tdCadastro-"]` — seletor que exige um
+// elemento <td> com esse prefixo; quando o SHOSP troca a tag/id, ele falha e a
+// ficha ABERTA é lida como fechada (8/8 injeções caíram no fallback: ~5s de
+// latência morta por retries+reinjeção e escolha cega de aba, log 2026-07-21).
+// Os dois primeiros marcadores são os ALVOS REAIS da injeção (campos-fonte e
+// containers de aba): "presente" ⇒ "injeção é possível", exatamente a semântica
+// deste flag. O terceiro alinha com _detectDynamicTabs. É um SUPERSET do seletor
+// antigo → não pode criar falso-negativo; o único risco é falso-positivo (aba
+// não-prontuário casando), relevante só com 2+ abas SHOSP. `tdCadastro` é o
+// marcador a vigiar: se vazar na agenda, removê-lo e manter os dois primeiros.
+// Recebe `doc` por injeção para ser exercitada nos testes (via _extractFn).
+function _isProntuarioOpen(doc) {
+  if (!doc) return false;
+  const markers = [
+    '[id*="prontuario_resp"]',           // campos-fonte input/textarea (alvo da injeção)
+    '[id*="divTextoProntuarioServico"]', // containers de conteúdo por aba
+    '[id*="tdCadastro"]'                 // headers/abas da ficha (idem _detectDynamicTabs)
+  ];
+  return markers.some(sel => doc.querySelector(sel) !== null);
+}
+
 window.__shospMessageListener = (message, _sender, sendResponse) => {
   contentLogger.info('Mensagem recebida:', message.action);
 
   switch (message.action) {
     case 'checkPage': {
       // prontuarioOpen: discrimina a aba do prontuário (onde a injeção é possível)
-      // de outras páginas do SHOSP (agenda, login, mensagens). A presença de
-      // td[id^="tdCadastro-"] é o mesmo sinal usado por _detectDynamicTabs para
-      // saber se o prontuário está aberto. Sem isto, com 2+ abas SHOSP, a seleção
-      // de aba escolhe cega tabs[0] e a injeção pode mirar a aba errada.
-      const prontuarioOpen = document.querySelectorAll('td[id^="tdCadastro-"]').length > 0;
+      // de outras páginas do SHOSP (agenda, login, mensagens). Sem isto, com 2+
+      // abas SHOSP a seleção escolhe cega tabs[0]; e mesmo com 1 aba, o flag falso
+      // custa retries+reinjeção. Ver _isProntuarioOpen para os marcadores.
+      const prontuarioOpen = _isProntuarioOpen(document);
       contentLogger.info(`checkPage recebido — content script ativo (prontuarioOpen=${prontuarioOpen}):`, window.location.href.slice(0, 60));
       sendResponse({ isShospPage: true, prontuarioOpen });
       return false;
@@ -1500,6 +1533,14 @@ window.__shospMessageListener = (message, _sender, sendResponse) => {
           const cidSet = window.__shospInjectedCids;
           if (normCode && cidSet && cidSet.has(normCode)) {
             contentLogger.warn('[searchCid] CID já injetado neste paciente — ignorado:', normCode, term);
+            sendResponse({ success: true, skipped: true });
+            return;
+          }
+          // Retificação cross-injeção: pula H52.9 quando um específico H52.0–H52.4
+          // já foi injetado neste paciente (ver _isRedundantUnspecifiedRefraction
+          // e nota de bug "H52.9 duplicado" 2026-07-21). Cobre a ordem OCR→áudio.
+          if (_isRedundantUnspecifiedRefraction(normCode, cidSet)) {
+            contentLogger.warn('[searchCid] H52.9 ignorado — CID refrativo específico já injetado neste paciente:', [...cidSet]);
             sendResponse({ success: true, skipped: true });
             return;
           }

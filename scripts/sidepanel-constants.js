@@ -78,13 +78,13 @@ let captureTimeout = null;
 //     resetSession. Usada para suprimir a dilatação depois que o médico já
 //     sinalizou fim de consulta (evita hijack de consulta encerrada quando o
 //     "vamos dilatar" se refere a outra pessoa).
-//   fase2DilatacaoAtiva — havia uma pausa de dilatação persistida
-//     (_shospDilatacaoPhase1) quando esta gravação começou — ou seja, esta
-//     sessão é o RETORNO do paciente. Suprime o hook de dilatação por voz:
-//     frases retrospectivas inevitáveis no retorno ("já dilatou", "pinguei o
-//     colírio para dilatar a pupila") re-disparavam a pausa e a consulta nunca
-//     fechava. Setada em startRecording() a partir do storage (exceto
-//     motivo='exame'); os fallbacks pós-parada varrem só a cauda nesta fase.
+//   fase2DilatacaoAtiva — havia um slot ARMADO (retomar=true) na fila de
+//     pausas de dilatação (_shospDilatacaoPausas) quando esta gravação começou
+//     — ou seja, esta sessão é o RETORNO do paciente. Suprime o hook de
+//     dilatação por voz: frases retrospectivas inevitáveis no retorno ("já
+//     dilatou", "pinguei o colírio para dilatar a pupila") re-disparavam a
+//     pausa e a consulta nunca fechava. Setada em startRecording() a partir da
+//     fila (exceto motivo='exame'); os fallbacks pós-parada varrem só a cauda.
 const SESSION_FLAG_DEFAULTS = Object.freeze({
   examesNormaisInjetados: false,
   blefariteInjetada: false,
@@ -106,6 +106,12 @@ const SESSION_FLAG_DEFAULTS = Object.freeze({
 // Todo acesso é explícito: SessionFlags.<flag> nos módulos, ou via
 // StateManager.set/getHookFlag e HOOK_STATE (hooks).
 const SessionFlags = Object.seal({ ...SESSION_FLAG_DEFAULTS });
+
+// Id do slot da fila de dilatação criado/consumido pela sessão atual.
+// Setado por processAudioInBackground quando uma pausa nasce (ou quando uma
+// retomada é consumida) e usado por injectAll para gravar o payload de áudio
+// da fase 1 no slot CERTO — nunca no de outro paciente da fila.
+let dilatacaoPausaAtualId = null;
 
 // Cooldown unificado e debounce de parada
 let lastTriggerTime = 0;
@@ -367,7 +373,7 @@ const actionButtons = document.getElementById('actionButtons');
 const injectAllBtn = document.getElementById('injectAllBtn');
 const clearBtn = document.getElementById('clearBtn');
 const cancelDilatacaoBtn = document.getElementById('cancelDilatacaoBtn');
-const retomarDilatacaoBtn = document.getElementById('retomarDilatacaoBtn');
+const dilatacaoPausasContainer = document.getElementById('dilatacaoPausasContainer');
 const successMessage = document.getElementById('successMessage');
 const btnSearchCid = document.getElementById('btnSearchCid');
 const btnSearchCidRetorno = document.getElementById('btnSearchCidRetorno');

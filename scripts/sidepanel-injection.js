@@ -48,11 +48,12 @@ function hideResults() {
 // INJEÇÃO PRINCIPAL — ORQUESTRAÇÃO
 // ============================================================================
 
+// Início de cadeia manual: zera o acumulador de CIDs recusados (não é recursão).
 if (btnSearchCid) {
-  btnSearchCid.addEventListener('click', () => handleSearchCid(diagnosticoField));
+  btnSearchCid.addEventListener('click', () => { handleSearchCid._failed = []; handleSearchCid(diagnosticoField); });
 }
 if (btnSearchCidRetorno) {
-  btnSearchCidRetorno.addEventListener('click', () => handleSearchCid(diagnosticoRetornoField));
+  btnSearchCidRetorno.addEventListener('click', () => { handleSearchCid._failed = []; handleSearchCid(diagnosticoRetornoField); });
 }
 
 // Remove CIDs duplicados pelo código (ex: H010 = H01.0) antes de iniciar a cadeia.
@@ -209,7 +210,7 @@ async function handleSearchCid(field) {
       successMessage.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg><span>C.I.D. lançado: ${termToSearch}</span>`;
       successMessage.style.background = '#dcfce7';
       successMessage.style.color = '#166534';
-      setTimeout(() => successMessage.classList.add('hidden'), 3000);
+      _armHideSuccess();
       // Auto-encadear próximo termo após delay.
       // O lock é mantido logicamente: liberamos e re-adquirimos dentro do callback
       // do setTimeout (JS é single-threaded — nenhum outro código corre entre as duas linhas).
@@ -224,11 +225,14 @@ async function handleSearchCid(field) {
         if (!anyPending) {
           audioFieldsContainer.classList.add('hidden');
         }
+        _surfaceFailedCids(); // fim de cadeia — mostra CIDs recusados, se houver
       }
     } else {
       // S2: pular termo com falha e continuar a cadeia (não interromper por um CID inválido)
       const errMsg = resp?.error || 'Aba C.I.D. não encontrada na página';
       console.warn(`[CID] Falha ao buscar "${rawTerm}": ${errMsg}`);
+      // Acumula para o aviso persistente de fim de cadeia (o toast some em 3s).
+      (handleSearchCid._failed || (handleSearchCid._failed = [])).push(rawTerm);
       showError(`CID não encontrado: ${rawTerm}`);
       field.value = terms.slice(1).join('\n');
       const stillHasCid = field.value.trim();
@@ -237,6 +241,7 @@ async function handleSearchCid(field) {
         return;
       } else {
         handleSearchCid._running = false;
+        _surfaceFailedCids(); // fim de cadeia — mostra CIDs recusados, se houver
       }
     }
   } catch (err) {
@@ -246,6 +251,7 @@ async function handleSearchCid(field) {
   }
 }
 handleSearchCid._running = false;
+handleSearchCid._failed = []; // CIDs recusados pelo SHOSP na cadeia atual
 
 function _setRunningState(running) {
   injectAll._running = running;
@@ -450,23 +456,24 @@ async function injectAll(force = false) {
   }
   console.log('[InjectAll] Aba de injeção selecionada:', tab.id, tab.url?.slice(0, 60));
 
-  // Carregar dados persistidos da fase 1 SOMENTE quando o médico confirmou o
-  // retorno do MESMO paciente (retomar). Sem confirmação, os campos da fase 1
-  // não são mesclados na injeção atual — evita levar a entrevista de um paciente
-  // ao prontuário de outro atendido durante a espera (caso 2026-07-17). O store
-  // expirado é descartado; o não-confirmado é apenas ignorado (o médico ainda
-  // pode confirmar pelo botão numa gravação seguinte).
+  // Carregar dados persistidos da fase 1 SOMENTE do slot ARMADO da fila de
+  // pausas (retomar=true — o médico confirmou o retorno DESTE paciente). Sem
+  // slot armado, nenhum campo de fase 1 é mesclado na injeção atual — evita
+  // levar a entrevista de um paciente ao prontuário de outro atendido durante
+  // a espera (caso 2026-07-17). Slots expirados são podados na leitura; os
+  // não-armados são apenas ignorados (seguem aguardando na sala de espera).
   let _phase1Data = null;
   try {
-    const _raw = await new Promise(resolve =>
-      chrome.storage.local.get('_shospDilatacaoPhase1', d => resolve(d._shospDilatacaoPhase1 || null))
-    );
-    if (_raw && Date.now() - (_raw.ts || 0) > 6 * 60 * 60 * 1000) {
-      chrome.storage.local.remove('_shospDilatacaoPhase1');
-    } else if (_raw && _raw.retomar === true) {
-      _phase1Data = _raw;
-    }
+    _phase1Data = await DilatacaoPausas.obterRetomada();
   } catch (_e) { _phase1Data = null; }
+
+  // Sanidade anti-contaminação: se a pausa armada nasceu em OUTRO prontuário
+  // (URL diferente da aba de injeção), avisar — o médico pode ter armado a
+  // retomada errada ou trocado de paciente sem desarmar.
+  if (_phase1Data?.tabUrl && tab?.url && _phase1Data.tabUrl !== tab.url) {
+    console.warn('[InjectAll] ⚠️ Prontuário aberto difere do prontuário da pausa armada:',
+      { pausa: _phase1Data.tabUrl.slice(0, 80), atual: tab.url.slice(0, 80) });
+  }
 
   // 5. Preparar dados combinados
   const combinedData = { audio: null, exames: null, examesNormais: null };
@@ -676,19 +683,40 @@ async function injectAll(force = false) {
     }
     // Persistir dados de áudio quando a dilatação foi detectada, para que a fase 2
     // possa re-injetá-los caso o SHOSP descarte campos não salvos durante o período.
-    // Em injeções normais (sem dilatação), limpar o dado persistido se existir.
+    // O payload vai para o slot DESTA sessão na fila (criado por
+    // processAudioInBackground) — junto com a identidade do prontuário da
+    // injeção, usada como rótulo e sanidade na retomada. Slots de OUTROS
+    // pacientes em espera nunca são tocados aqui: era exatamente o remove
+    // incondicional do modelo antigo que apagava a pausa de quem dilatava
+    // quando um paciente intercalado era injetado.
     if (combinedData.audio && audioData?.dilatacaoDetectada) {
-      // Preservar a transcrição da fase 1 já persistida pelo sidepanel-audio
-      // (acumula fases anteriores); fallback para o texto da sessão atual.
-      chrome.storage.local.set({ _shospDilatacaoPhase1: {
+      const _slotId = dilatacaoPausaAtualId || _phase1Data?.id || null;
+      const _patch = {
         audio: combinedData.audio,
-        transcript: _phase1Data?.transcript || recognizedText || '',
         ts: Date.now(),
         motivo: 'dilatacao',
-      } });
-      console.log('[InjectAll] Dados da fase 1 (dilatação) salvos para re-injeção pós-dilatação.');
-    } else {
-      chrome.storage.local.remove('_shospDilatacaoPhase1');
+        retomar: false,
+        tabUrl: tab?.url || null,
+        tabTitle: tab?.title || null,
+      };
+      try {
+        const _atualizado = _slotId ? await DilatacaoPausas.atualizar(_slotId, _patch) : null;
+        if (!_atualizado) {
+          // Slot não localizado (sessão fora de ordem) — criar para não perder a fase 1
+          await DilatacaoPausas.criar({
+            ..._patch,
+            transcript: _phase1Data?.transcript || recognizedText || '',
+          });
+        }
+        console.log('[InjectAll] Dados da fase 1 (dilatação) salvos no slot da fila para re-injeção pós-dilatação.');
+      } catch (_e) { console.warn('[InjectAll] Falha ao persistir slot de dilatação (não-fatal):', _e?.message); }
+    } else if (_phase1Data && combinedData.audio) {
+      // Fase 2 concluída (injeção de ÁUDIO sem dilatação): consumir SOMENTE o
+      // slot retomado deste paciente. Injeção só de câmera (OCR capturado no
+      // meio da fase 2) NÃO consome — a transcrição da fase 1 ainda será
+      // anexada quando a gravação da fase 2 terminar.
+      try { await DilatacaoPausas.remover(_phase1Data.id); } catch (_e) { /* não-fatal */ }
+      console.log('[InjectAll] Fase 2 concluída — pausa retomada removida da fila.');
     }
 
     showSuccess();
@@ -750,6 +778,7 @@ async function injectAll(force = false) {
       const activeField = (cidField?.value?.trim() ? cidField : null)
         || (novosCids.length && cidTarget?.value?.trim() ? cidTarget : null);
       if (activeField) {
+        handleSearchCid._failed = []; // início de cadeia — zera CIDs recusados
         setTimeout(() => handleSearchCid(activeField), 800);
       }
     }, 1500);
@@ -919,11 +948,12 @@ function clearAll(options = { clearAudio: true, clearCamera: true }) {
       chrome.storage.local.remove(['lastGeminiReasoning', 'lastGeminiDate']);
     }
 
-    // Limpeza manual (novo paciente): descartar fase 1 de dilatação persistida,
-    // para que a entrevista de um paciente não contamine a análise do próximo.
-    // O clearAll automático pós-injeção NÃO passa esta opção — preserva a fase 1.
+    // Limpeza manual (novo paciente): DESARMAR qualquer retomada pendente —
+    // a próxima gravação volta a ser paciente novo. As pausas em si ficam na
+    // fila (outros pacientes seguem dilatando); descarte individual é pelo ✕
+    // da sala de espera. O clearAll automático pós-injeção não passa a opção.
     if (options.discardDilatacao === true) {
-      chrome.storage.local.remove('_shospDilatacaoPhase1');
+      try { DilatacaoPausas.desmarcarRetomadas(); } catch (_e) { /* não-fatal */ }
     }
 
     console.log('[ClearAll] Limpeza concluída', options);
@@ -937,12 +967,26 @@ function clearAll(options = { clearAudio: true, clearCamera: true }) {
 // FEEDBACK VISUAL
 // ============================================================================
 
+// successMessage é um elemento COMPARTILHADO (sucesso, erro, "buscando", e o
+// aviso persistente de CIDs recusados). Cada feedback transitório armava seu
+// próprio setTimeout de hide sem cancelar os anteriores — então um toast antigo
+// podia esconder um aviso posterior. Centralizar num único slot (clear-antes-de-
+// set) garante que só há um timer pendente e que o aviso persistente possa
+// cancelá-lo. Passar delay=0 (ou omitir o arm) deixa a mensagem fixa.
+function _armHideSuccess(delay = 3000) {
+  if (successMessage._hideTimer) clearTimeout(successMessage._hideTimer);
+  successMessage._hideTimer = setTimeout(() => {
+    successMessage.classList.add('hidden');
+    successMessage._hideTimer = null;
+  }, delay);
+}
+
 function showSuccess() {
   successMessage.classList.remove('hidden');
   successMessage.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg><span>Dados injetados com sucesso!</span>';
   successMessage.style.background = '#dcfce7';
   successMessage.style.color = '#166534';
-  setTimeout(() => successMessage.classList.add('hidden'), 3000);
+  _armHideSuccess();
   // Nota: chrome.notifications não funciona em sidepanels, apenas feedback visual acima
 }
 
@@ -951,7 +995,31 @@ function showError(message) {
   successMessage.innerHTML = '<span>' + message + '</span>';
   successMessage.style.background = '#fee2e2';
   successMessage.style.color = '#991b1b';
-  setTimeout(() => successMessage.classList.add('hidden'), 3000);
+  _armHideSuccess();
+}
+
+// Monta a mensagem PERSISTENTE de CIDs recusados pelo SHOSP. Pura (testável):
+// retorna null quando não há falhas. Ver _surfaceFailedCids para a exibição.
+function _formatFailedCidsMessage(failed) {
+  if (!failed || !failed.length) return null;
+  const lista = failed.map(c => String(c).trim()).filter(Boolean);
+  if (!lista.length) return null;
+  const s = lista.length > 1 ? 's' : '';
+  return `⚠️ ${lista.length} CID${s} não aceito${s} pelo SHOSP — adicione manualmente: ${lista.join(', ')}`;
+}
+
+// Exibe (sem auto-hide) os CIDs que o SHOSP recusou durante a cadeia e consome
+// o acumulador. Cancela qualquer hide pendente para o aviso não sumir em 3s.
+function _surfaceFailedCids() {
+  const msg = _formatFailedCidsMessage(handleSearchCid._failed);
+  handleSearchCid._failed = [];
+  if (!msg) return;
+  if (successMessage._hideTimer) { clearTimeout(successMessage._hideTimer); successMessage._hideTimer = null; }
+  successMessage.classList.remove('hidden');
+  successMessage.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg><span>' + msg + '</span>';
+  successMessage.style.background = '#fef3c7';
+  successMessage.style.color = '#92400e';
+  // Sem _armHideSuccess: persistente até a próxima ação de feedback.
 }
 
 // ============================================================================

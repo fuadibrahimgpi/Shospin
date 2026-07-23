@@ -48,6 +48,9 @@ const StateManager = {
     // Confirmação de refração pendente
     pendingRefractionConfirmation = false;
 
+    // Slot da fila de dilatação vinculado à sessão anterior
+    dilatacaoPausaAtualId = null;
+
     // Cooldown e debounce de parada
     lastTriggerTime = 0;
     if (stopCommandTimeout) { clearTimeout(stopCommandTimeout); stopCommandTimeout = null; }

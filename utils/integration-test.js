@@ -1742,6 +1742,69 @@ test('[AXIS-7] caller despacha _tiebreakAxis e FORÇA bloqueio (hard) quando nã
   expect(examJsSource.slice(idx, idx + 900).includes("mismatch.severity = 'hard'")).toBe(true);
 });
 
+// ──────────────────────────────────────────────────────────────────────────────
+// 2026-07-24 — Sinal de esfera nunca é auto-liberado por voto 2-de-3.
+// Flip puro de sinal (+5.25 ↔ -5.25) inverte miopia↔hipermetropia, CID e lente.
+// As 3 leituras compartilham o mesmo modo de falha físico (traço vertical do "+"
+// some na impressão térmica), então "confirmou a 1ª" pode ser a mesma alucinação
+// vista 2×. Caso real: OD lido +5.25 num paciente cuja captura pós-dilatação leu
+// esfera negativa. Correção: qualquer discordância de sinal força recaptura.
+// ──────────────────────────────────────────────────────────────────────────────
+
+test('[SIGN-1] flip puro de sinal da esfera é marcado signFlip + severidade hard', () => {
+  const processed = { od: { esf: '+5.25', cil: -3.00, eixo: 174, se: '+3.75' }, oe: null };
+  const verify    = { od: { s: '-5.25', c: -3.00, a: 174, se: '-6.75' }, oe: null };
+  const m = _examAgent._compareRefractionAgainstVerify(processed, verify);
+  expect(m !== null).toBe(true);
+  expect(m.signFlip).toBe(true);
+  expect(m.severity).toBe('hard');
+});
+
+test('[SIGN-2] caller NUNCA auto-libera flip de sinal (sem mismatch=null no ramo signFlip)', () => {
+  const start = examJsSource.indexOf("mismatch.severity === 'hard' && mismatch.signFlip");
+  const end = examJsSource.indexOf('Desempate de Cilindro');
+  expect(start !== -1 && end !== -1 && end > start).toBe(true);
+  const branch = examJsSource.slice(start, end);
+  // regressão: o ramo signFlip não pode zerar o mismatch (era o que injetava +5.25)
+  expect(branch.includes('mismatch = null')).toBe(false);
+  // a 3ª chamada ainda roda, mas só para enriquecer a mensagem ao médico
+  expect(branch.includes('_tiebreakSphereSign(mismatch, imageParts, apiService)')).toBe(true);
+});
+
+// ──────────────────────────────────────────────────────────────────────────────
+// 2026-07-24 — Piso clínico da esfera no CID determinístico do OCR.
+// ±0.25D está na faixa emétrope; codificar H52.0/H52.1 aí é ruído. Caso real:
+// OD +0.25 / OE -0.25 gerou Hipermetropia + Miopia. Piso: |esf| ≥ 0.50D.
+// ──────────────────────────────────────────────────────────────────────────────
+
+test('[REFRAC-FLOOR-1] esfera ±0.25 NÃO gera H52.0/H52.1 (ruído emétrope)', () => {
+  const cids = _examAgent._inferCidRefracao({
+    od: { esf: '+0.25', cil: null, eixo: null, se: '+0.25' },
+    oe: { esf: '-0.25', cil: null, eixo: null, se: '-0.25' },
+  });
+  expect(cids.some(c => c.includes('H52.0'))).toBe(false);
+  expect(cids.some(c => c.includes('H52.1'))).toBe(false);
+});
+
+test('[REFRAC-FLOOR-2] esfera |≥0.50| ainda codifica (miopia -0.50 preservada)', () => {
+  const cids = _examAgent._inferCidRefracao({
+    od: { esf: '-0.50', cil: -0.50, eixo: 175, se: '-0.75' },
+    oe: { esf: '+0.50', cil: null, eixo: null, se: '+0.50' },
+  });
+  expect(cids.some(c => c.includes('H52.1'))).toBe(true); // miopia OD -0.50
+  expect(cids.some(c => c.includes('H52.0'))).toBe(true); // hipermetropia OE +0.50
+  expect(cids.some(c => c.includes('H52.2'))).toBe(true); // astigmatismo OD -0.50
+});
+
+test('[REFRAC-FLOOR-3] astigmatismo (cil ≥0.25) codifica mesmo com esfera ±0.25', () => {
+  const cids = _examAgent._inferCidRefracao({
+    od: { esf: '+0.25', cil: -0.75, eixo: 90, se: '-0.12' },
+    oe: null,
+  });
+  expect(cids.some(c => c.includes('H52.2'))).toBe(true);  // astigmatismo mantido
+  expect(cids.some(c => c.includes('H52.0'))).toBe(false); // esfera +0.25 suprimida
+});
+
 // Grupo async: voto do desempate de eixo (apiService e _parseGeminiJSON fakes).
 async function _axisTiebreakTests() {
   const mk = (jsonText) => ({ callGeminiAPI: async () => ({ text: jsonText }) });

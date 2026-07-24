@@ -1,5 +1,22 @@
 /**
- * GEMINI SERVICE v5.3.5 — Agente de Exames (OCR) + Agente de Entrevista
+ * GEMINI SERVICE v5.3.6 — Agente de Exames (OCR) + Agente de Entrevista
+ *
+ * v5.3.6 (FIX: sinal de esfera invertido injetado por voto 2-de-3):
+ *   - Flip puro de sinal da esfera (+5.25 ↔ -5.25) inverte miopia↔hipermetropia,
+ *     o CID (H52.1 vs H52.0) e o sinal da lente — é o erro de OCR de maior
+ *     consequência. O desempate 2-de-3 (v5.3.4) tratava as 3 leituras como
+ *     independentes, mas elas compartilham o mesmo modo de falha físico (traço
+ *     vertical do "+" some na impressão térmica), então "confirmou a 1ª" pode ser
+ *     a mesma alucinação vista 2×. Agora QUALQUER discordância de sinal força
+ *     recaptura (mismatch 'hard' nunca é auto-liberado), como o eixo já faz; a 3ª
+ *     chamada roda só para enriquecer a mensagem ao médico. Caso real: 2026-07-24,
+ *     OD lido +5.25 por 2-de-3 num paciente cuja captura pós-dilatação leu esfera
+ *     negativa — o sistema não tinha como decidir e não deveria ter injetado.
+ *   - Piso clínico da esfera no CID determinístico (_inferCidRefracao): só
+ *     codifica H52.0/H52.1 a partir de |0.50D|. ±0.25D é ruído emétrope (caso
+ *     2026-07-24: OD +0.25 / OE -0.25 gerava Hipermetropia + Miopia). Testes
+ *     REFRAC-FLOOR-1..3. Astigmatismo (cil ≥0.25) e o caminho de entrevista
+ *     (ciente de sintomas) permanecem inalterados.
  *
  * v5.3.5 (FIX: eixo não conferido injetado — desempate de eixo por 3ª chamada):
  *   - Discordância de eixo entre 1ª e 2ª leituras (>8°, circular) era 'soft' e
@@ -243,24 +260,28 @@ class GeminiExamAgent {
 
         let mismatch = this._compareRefractionAgainstVerify(processed.refracao, verify);
 
-        // ── Desempate de sinal de esfera (3ª chamada focada) ──────────────
-        // Modo de falha recorrente (2026-06-12): a 2ª chamada lê o sinal da
-        // esfera invertido (+1.00 → -1.00) e fabrica um "se" calculado de
-        // s+c/2 coerente com o próprio erro. Quando a discordância é flip
-        // puro de sinal (mesma magnitude), uma 3ª chamada que olha APENAS o
-        // caractere de sinal desempata: 2-de-3 vence. Isso não viola a lição
-        // "alucinação math-consistent em esfera" — o desempate é evidência
-        // EXTERNA nova (3ª leitura), não auto-coerência da 1ª.
+        // ── Sinal de esfera discordante → NUNCA auto-liberar (fail-safe) ──
+        // Flip puro de sinal (+5.25 ↔ -5.25) é o erro de OCR de MAIOR
+        // consequência clínica: inverte miopia↔hipermetropia, o CID (H52.1 vs
+        // H52.0) e o sinal da lente. As três leituras compartilham o mesmo modo
+        // de falha físico — em impressão térmica o traço vertical do "+" sai
+        // fraco e é lido como "−" — então um voto 2-de-3 é ERRO CORRELACIONADO,
+        // não confirmação independente. Por isso o desempate 2-de-3 (usado para
+        // eixo/cilindro) não é confiável aqui: um "confirmou a 1ª" pode ser a
+        // mesma alucinação vista 2×. Política: qualquer discordância de sinal
+        // força recaptura, como o eixo já faz — "não consigo confirmar o sinal"
+        // ⇒ "não injeta". A 3ª chamada roda apenas para enriquecer a mensagem
+        // ao médico (nunca para liberar). Caso real: 2026-07-24, OD lido +5.25
+        // por 2-de-3 num paciente cuja captura pós-dilatação leu esfera
+        // negativa — o sistema não tinha como decidir e não deveria ter injetado.
         if (mismatch && mismatch.severity === 'hard' && mismatch.signFlip) {
           const veredito = await this._tiebreakSphereSign(mismatch, imageParts, apiService);
-          if (veredito === 'primeira') {
-            processed._avisos = processed._avisos || [];
-            processed._avisos.push(`${mismatch.eye.toUpperCase()}: 2ª chamada leu o sinal da esfera invertido (1ª="${mismatch.pEsfStr}" vs 2ª="${mismatch.vEsfStr}"); desempate por 3ª leitura confirmou a 1ª (2-de-3). Confira manualmente.`);
-            mismatch = null;
-          } else if (veredito === 'segunda') {
-            mismatch.message = `${mismatch.eye.toUpperCase()}: sinal da esfera da 1ª leitura provavelmente invertido — desempate (3ª leitura) concordou com a 2ª ("${mismatch.vEsfStr}"). Refaça a captura.`;
-          }
-          // veredito null (3ª ilegível/divergente) → mantém o bloqueio original
+          mismatch.message = veredito === 'segunda'
+            ? `${mismatch.eye.toUpperCase()}: sinal da esfera da 1ª leitura provavelmente invertido — 3ª leitura concordou com a 2ª ("${mismatch.vEsfStr}"). Refaça a captura.`
+            : veredito === 'primeira'
+            ? `${mismatch.eye.toUpperCase()}: sinal da esfera discordante (1ª="${mismatch.pEsfStr}" vs 2ª="${mismatch.vEsfStr}"); a 3ª leitura concordou com a 1ª, mas flip de sinal nunca é liberado por voto (erro térmico do "+" é correlacionado entre leituras). Refaça a captura para confirmar.`
+            : `${mismatch.eye.toUpperCase()}: sinal da esfera discordante entre leituras (1ª="${mismatch.pEsfStr}" vs 2ª="${mismatch.vEsfStr}") e a 3ª leitura não desempatou. Refaça a captura.`;
+          // mismatch permanece 'hard' e não-nulo → _captureFailed bloqueia a injeção.
         }
 
         // ── Desempate de Cilindro (3ª chamada focada) ──────────────
@@ -1359,8 +1380,14 @@ Responda APENAS com o JSON. Sem texto antes, sem texto depois, sem markdown.
       const esfN = parseEsf(eye.esf);
       if (esfN == null) continue;
 
-      if (esfN > 0)      codes.add('H520');
-      else if (esfN < 0) codes.add('H521');
+      // Piso clínico: só codifica ametropia esférica a partir de |0.50D|. Uma
+      // esfera de ±0.25D está dentro da faixa emétrope — codificar H52.0/H52.1
+      // aí gera diagnóstico de ruído (caso 2026-07-24: OD +0.25 / OE -0.25
+      // gerou Hipermetropia + Miopia). O caminho determinístico do OCR não tem
+      // contexto de sintomas; o de entrevista (ciente da queixa) ainda pode
+      // codificar ±0.25 se o médico tratar disso.
+      if (esfN >= 0.50)       codes.add('H520'); // hipermetropia
+      else if (esfN <= -0.50) codes.add('H521'); // miopia
 
       const cilN = (eye.cil != null) ? parseFloat(eye.cil) : 0;
       if (!isNaN(cilN) && Math.abs(cilN) >= 0.25) codes.add('H522');

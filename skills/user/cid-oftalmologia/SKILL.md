@@ -21,6 +21,12 @@ description: >
 5. Clicar no item correto (ex: `H010 - BLEFARITE`)
 6. SHOSP exibe toast **"Registro adicionado com sucesso."** no canto superior direito
 
+> ⚠️ **O passo 4 é a armadilha central desta integração.** O painel de resultados
+> mostra o histórico de CIDs recentes da clínica junto (ou antes) dos resultados
+> da busca. Ler o painel sem checar se ele contém o código PEDIDO faz a extensão
+> tratar o histórico como resultado. Foi a causa raiz da instabilidade de
+> 2026-07-30 — ver "Instabilidade 2026-07-30" no fim deste documento.
+
 ---
 
 ## Como o cadastro é acionado pela extensão
@@ -34,64 +40,91 @@ description: >
 - Envia `{ action: 'searchCid', term }` para o content script via `sendToTab` com apenas o código
 - Após sucesso, atualiza o campo com os termos restantes (joined por `\n`) e **auto-encadeia** o próximo termo com delay de 1800ms — sem necessidade de clique manual
 
-**Arquivo:** `dist/content.js` → `case 'searchCid':`
+**Arquivo:** `src/content.js` → `case 'searchCid':` (não existe `dist/` — o
+`manifest.json` carrega `src/content.js` direto)
 
 ---
 
 ## Implementação técnica — handler `searchCid`
 
-### Passo 1 — Navegar até a aba C.I.D.
-
-Busca por texto exato `"C.I.D."` ou `"CID"` nos elementos navegáveis do menu:
-```
-querySelectorAll('a, td, li, span.itemMenu, div.itemMenu, ul.nav a, .menu-item')
-```
-Fallback: `td[id*="CID"], a[href*="cid"], [data-section*="cid"]`
-
-Aguarda **700ms** para a seção renderizar.
-
-### Passo 2 — Localizar o campo de busca
-
-Ordem de prioridade:
-1. `document.getElementById('nomeCid')`
-2. `input[placeholder*="Digite o código ou nome do CID"]`
-3. `input[placeholder*="CID"]` / `input[name*="nomeCid"]`
-4. `waitForElement('#nomeCid', 3000)` → `waitForElement('input[placeholder*="Digite o código"]', 2000)`
-
-### Passo 3 — Preencher o campo e disparar autocomplete
-
-- Limpa o valor anterior via `nativeSetter` (compatível com React/Angular) + dispara `input`
-- Aguarda **100ms**, define o novo valor e dispara: `input`, `change`, `keyup`
-- Aguarda **400ms** e chama `window.buscaCidProntuario()` se disponível
-- Aguarda **1500ms** para o dropdown/resultados aparecerem
-
-### Passo 4 — Localizar o item correto
-
-**Prioridade A — dropdown autocomplete visível:**
-```
-ul.autocomplete, ul.dropdown-menu, ul[class*="suggest"],
-div[class*="autocomplete"], div[class*="dropdown"]
-```
-Filtra apenas elementos com `offsetParent !== null` (visíveis).
-
-**Prioridade B — tabela de resultados padrão SHOSP:**
-```
-#divResultadoBuscaPadraoCid
-[id*="ResultadoBuscaCid"], [id*="resultadoCid"]
-```
-
-**Correspondência dentro do container:**
-- Candidatos: `a, li, tr, div[onclick]`
-- Exata: 1ª coluna (`td`) ou texto do elemento === `term.toUpperCase()`
-- Parcial: texto começa com ou contém o termo
-
-### Passo 5 — Clicar no item e responder
+### Passo 1 — Localizar o campo de busca
 
 ```js
-targetEl.click();
-await new Promise(r => setTimeout(r, 600));
-sendResponse({ success: true });
+document.querySelector('#formCadProntuario #nomeCid') || document.getElementById('nomeCid')
 ```
+Sem o campo, responde `success: false` imediatamente. (Não há navegação de aba
+aqui: quando este handler roda, a seção C.I.D. já está montada.)
+
+### Passo 2 — Construir as variantes de BUSCA
+
+As variantes ampliam a consulta — o SHOSP indexa o código ora com ponto, ora sem:
+
+| Termo pedido | Variantes buscadas |
+|---|---|
+| `H52.0` | `H520`, `H52.0`, `H52` |
+| `H010` | `H010`, `H01.0`, `H01` |
+| `blefarite` | `blefarite` |
+
+Se o termo vier com descrição, as palavras com >3 letras entram como variantes finais.
+
+> **Variante ≠ critério de aceitação.** Buscar por `H52` é legítimo; aceitar
+> `H52.4` quando o pedido era `H52.0` não é. Ver Passo 4.
+
+### Passo 3 — Preencher e disparar a busca (`fillAndSearch`)
+
+- Limpa `innerHTML` dos contêineres de resultado
+- Aguarda **150ms**, `focus()`, define o valor via `nativeSetter` (React/Angular)
+  e dispara `input` + `change`
+- Aguarda **200ms** e limpa os contêineres de novo (derruba o histórico que
+  aparece ao focar)
+- Clica no botão: `#btnBuscaCidProntuario` → `#btn_buscaCidProntuario` →
+  `a|button[onclick*='buscaCidProntuario']` → botão vizinho ao campo.
+  Sem botão, dispara `Enter` (`keydown`+`keyup`) no campo.
+
+A limpeza é **melhor-esforço**, não garantia: o SHOSP re-renderiza o histórico
+de forma assíncrona. A correção real está no Passo 4.
+
+### Passo 4 — Esperar a linha PEDIDA (`waitForCidRow` + `_pickCidRow`)
+
+`collectRows()` junta as linhas `tr[onclick]` de **todos** os contêineres
+(`[id*="ResultadoBuscaCid"], [id*="resultadoCid"], #divResultadoBuscaPadraoCid`)
+— não só do primeiro não-vazio.
+
+`waitForCidRow` faz *poll* a cada 300ms até **4s** e só retorna quando
+`_pickCidRow` acha a linha do código pedido. Um render que não contém o código
+não encerra a espera — é provavelmente o histórico enquanto o AJAX está em voo.
+Saída antecipada por **estabilidade**: conteúdo idêntico por 3 ciclos *e* já
+passados **2s** ⇒ é a resposta final do SHOSP (código ausente do subset), sai sem
+queimar o timeout inteiro.
+
+> O piso de 2s é conservador, **não medido**: as linhas `[SearchCid]` do console
+> não têm timestamp, então a latência real do AJAX não é extraível do log. Custo
+> de um código ausente: ~2,4s por variante (~7s nas 3) — o mesmo já observado
+> para o H04.1 em 2026-07-30, então a margem não deixou a falha mais lenta.
+
+`_pickCidRow(rows, term)` — **matcher estrito**, sobre `onclick` + texto,
+normalizados (maiúsculas, sem ponto):
+
+1. Código **igual** ao pedido, com bordas não-alfanuméricas
+   (`(?<![A-Z0-9])H400(?![A-Z0-9])` — impede que `H40.0` case `H40.00`)
+2. **Só se o pedido for uma categoria de 3 chars** (`H46` Neurite óptica, `H55`
+   Nistagmo — códigos que só existem nessa forma): aceita a subcategoria `H46\d`
+3. Termo **sem código** (texto livre): casa a linha que contém **todas** as
+   palavras >3 letras
+
+Sem match ⇒ **falha explícita**. Não existe fallback que aceite outro código.
+
+### Passo 5 — Verificar, clicar e responder
+
+- Extrai `normCode` do `onclick` da linha; se divergir do pedido, **aborta antes
+  do clique** (linha divergente envenenaria o Set de dedup)
+- Guards de dedup: `__shospInjectedCids` (por paciente) e
+  `_isRedundantUnspecifiedRefraction` (pula `H52.9` se já há `H52.0–H52.4`)
+- `targetRow.click()` → 500ms → procura o código **fora** dos painéis de busca
+  (`_findCidOutsideSearchPanels`) e responde `{ success: true, _landed }`
+
+> `success: true` significa "cliquei na linha certa". `_landed` vazio no log ⇒ o
+> SHOSP pode ter recusado o registro; é o sinal a investigar.
 
 ---
 
@@ -99,10 +132,75 @@ sendResponse({ success: true });
 
 | Sintoma | Causa provável | O que verificar |
 |---|---|---|
-| "Campo de busca CID não encontrado" | `#nomeCid` e placeholder mudaram no SHOSP | Inspecionar o input no DevTools, atualizar seletor |
-| "Nenhum resultado para o CID" | Dropdown não abriu ou seletores do dropdown mudaram | Ver quais `ul`/`div` ficam visíveis após digitar |
-| CID errado selecionado | Correspondência parcial pegou item incorreto | Usar código exato (ex: `H010`) ao invés de nome |
-| Aba C.I.D. não encontrada | Texto do menu mudou no SHOSP | Inspecionar o `textContent` do item de menu |
+| "Campo #nomeCid não encontrado" | Seletor mudou no SHOSP | Inspecionar o input no DevTools |
+| "Nenhum resultado no SHOSP para o CID: X" | Código ausente do subset da clínica (ex: H04.1, H16.2) | Esperado — entrada manual. **Não** remover o código do prompt |
+| "SHOSP retornou resultados mas nenhum correspondeu. Descartadas: ..." | Se as descartadas forem sempre as mesmas 6 linhas ⇒ é o **histórico**, não resultado | Ler o `_dump` da resposta: qual contêiner tem os resultados de verdade |
+| CID errado lançado | Fallback permissivo (corrigido em 2026-07-30) | Rodar `CIDPICK-2`/`CIDPICK-3`; conferir se algum fallback voltou |
+| `_landed: []` no log | Clique não aterrissou na ficha | Ver se o SHOSP exibiu o toast de erro |
+
+---
+
+## Instabilidade 2026-07-30 — causa raiz e correção
+
+**Sintoma:** injeção de CID intermitente — "às vezes dá certo, às vezes injeta
+alguns códigos e não todos".
+
+**Prova no log:** as duas falhas do dia (`H04.1` às 12:03 e `T15.0` às 12:24,
+20 minutos de intervalo) descartaram a **mesma lista de 6 linhas**:
+`H010 BLEFARITE | H524 PRESBIOPIA | H522 ASTIGMATISMO | H521 MIOPIA |
+H251 CATARATA SENIL NUCLEAR | H110 PTERIGIO`. Duas buscas diferentes não
+retornam resultados idênticos — aquilo eram os **"Últimos CIDs selecionados"**
+(passo 4 do fluxo de usuário, documentado desde sempre nesta skill).
+
+**Duas falhas somadas:**
+
+1. `waitForRows` devolvia as linhas do **primeiro contêiner não-vazio** e parava.
+   Sem checar se o código pedido estava ali, o histórico virava "resultado".
+2. `pickRow`/`tryPickFromRows` tinham **4 caminhos** que aceitavam código
+   diferente do pedido: prefixo no `onclick`, prefixo no texto, qualquer linha da
+   mesma categoria de 3 chars, e `rows.length === 1`.
+
+**Como isso produzia os três sintomas:**
+
+| Código pedido | O que acontecia com o histórico na tela |
+|---|---|
+| Está no histórico (H01.0, H52.2, H52.4) | Acertava **por sorte** |
+| Mesma categoria de um do histórico (H52.0, H52.9) | Clicava **em outro código** (H52.4 Presbiopia) e respondia `success` |
+| Categoria ausente (H04.1, T15.0, H35.0) | Falhava |
+
+O caso do meio é o mais grave: CID errado no prontuário, sem aviso. E ele
+envenenava o Set `__shospInjectedCids` — registrado `H524`, um H52.4 legítimo
+depois seria pulado como "já injetado", e `_isRedundantUnspecifiedRefraction`
+descartaria o H52.9 em seguida.
+
+**Correção:** matcher estrito (`_pickCidRow`) + espera pela linha pedida
+(`waitForCidRow`) + varredura de todos os contêineres + abort em divergência +
+dumps de diagnóstico. Testes `CIDPICK-1..10` em `utils/integration-test.js`.
+
+**Princípio:** num prontuário, **CID faltando é melhor que CID errado**. A falha
+vira aviso persistente via `_surfaceFailedCids()` e o médico lança à mão.
+
+### Efeito colateral esperado da correção
+
+Códigos que só "funcionavam" porque caíam num vizinho do histórico passam a
+**falhar visivelmente**. Isso é a correção operando, não uma regressão nova — o
+CID já não estava sendo lançado corretamente antes.
+
+### ⚠️ PENDENTE — `H52.9` provavelmente não existe
+
+`src/gemini-interview-agent.js:552` instrui a IA a emitir `H529 = Refração NE`,
+mas a tabela CID-10 desta skill lista **`H52.7`** como "Transtorno da refração,
+não especificado" — não há `H52.9` na CID-10 (H52 vai de `.0` a `.7`).
+
+Suspeita: `H52.9` nunca foi aceito pelo SHOSP; ele "funcionava" caindo no
+fallback de categoria e clicando um `H52.x` do histórico. Isso explicaria o bug
+"H52.9 duplicado" de 2026-07-21 como sintoma da **mesma** causa raiz.
+
+**Verificação:** a busca por `H52.9` às 13:06 do log 2026-07-30 respondeu
+`success` — abrir aquele prontuário e conferir se o que entrou foi *Presbiopia*.
+Se foi, trocar `H529` → `H527` em `gemini-interview-agent.js:552,565,571` e nos
+guards `_dropUnspecifiedRefraction` / `_isRedundantUnspecifiedRefraction`.
+Decisão clínica — não alterar sem confirmação.
 
 ---
 

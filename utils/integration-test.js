@@ -2008,6 +2008,127 @@ test('[CIDFAIL-5] wiring: hide centralizado em _armHideSuccess e aviso persisten
 });
 
 // ──────────────────────────────────────────────────────────────────────────────
+// 2026-07-30 — Seleção ESTRITA da linha de CID (content.js, `_pickCidRow`).
+// O dropdown do SHOSP mistura resultados da busca com a seção "Últimos CIDs
+// selecionados". O matcher antigo tinha 4 caminhos que aceitavam código DIFERENTE
+// do pedido (prefixo no onclick, prefixo no texto, qualquer linha da categoria,
+// `rows.length === 1`) → com o histórico na tela, buscar H52.0 clicava em H52.4
+// Presbiopia e respondia success. Log 2026-07-30: as duas falhas de CID (H04.1 e
+// T15.0, 20 min de intervalo) descartaram a MESMA lista de 6 linhas — o histórico.
+// ──────────────────────────────────────────────────────────────────────────────
+
+const _pickCidRow = new Function(
+  _extractFn(contentJsSource, '_pickCidRow') + '\nreturn _pickCidRow;'
+)();
+
+// Linha de resultado falsa no formato do SHOSP: código sem ponto no onclick.
+const _row = (code, desc) => ({
+  getAttribute: (a) => (a === 'onclick' ? `selecionaCid('${code}', '${desc}')` : null),
+  textContent: `${code}${desc}`,
+});
+// A lista real de "Últimos CIDs selecionados" do log 2026-07-30.
+const _historico = [
+  _row('H010', 'BLEFARITE'), _row('H524', 'PRESBIOPIA'), _row('H522', 'ASTIGMATISMO'),
+  _row('H521', 'MIOPIA'), _row('H251', 'CATARATA SENIL NUCLEAR'), _row('H110', 'PTERIGIO'),
+];
+
+test('[CIDPICK-1] casa o código pedido, com e sem ponto', () => {
+  expect(_pickCidRow(_historico, 'H52.2').textContent).toContain('ASTIGMATISMO');
+  expect(_pickCidRow(_historico, 'H522').textContent).toContain('ASTIGMATISMO');
+  expect(_pickCidRow(_historico, 'H01.0').textContent).toContain('BLEFARITE');
+});
+
+test('[CIDPICK-2] REGRESSÃO: nunca aceita outro código da mesma categoria', () => {
+  // O bug: H52.0 (Hipermetropia) e H52.9 (refração NE) caíam no fallback de
+  // categoria "H52" e clicavam em H52.4 Presbiopia — o 1º H52x do histórico.
+  expect(_pickCidRow(_historico, 'H52.0')).toBe(null);
+  expect(_pickCidRow(_historico, 'H52.9')).toBe(null);
+  expect(_pickCidRow(_historico, 'H25.0')).toBe(null); // histórico tem H251, não H250
+  expect(_pickCidRow(_historico, 'H11.1')).toBe(null); // histórico tem H110
+});
+
+test('[CIDPICK-3] REGRESSÃO: linha única não é aceita por ser única', () => {
+  // Fallback antigo `if (rows.length === 1) return rows[0]` lançava o que viesse.
+  expect(_pickCidRow([_row('H524', 'PRESBIOPIA')], 'H52.0')).toBe(null);
+  expect(_pickCidRow([_row('H524', 'PRESBIOPIA')], 'H52.4').textContent).toContain('PRESBIOPIA');
+});
+
+test('[CIDPICK-4] códigos ausentes do subset SHOSP falham em vez de virar vizinho', () => {
+  // H04.1 e T15.0 do log: o histórico na tela não pode virar match.
+  expect(_pickCidRow(_historico, 'H04.1')).toBe(null);
+  expect(_pickCidRow(_historico, 'T15.0')).toBe(null);
+  // E também não podem casar um vizinho quando o SHOSP responde a categoria.
+  expect(_pickCidRow([_row('H040', 'DACRIOADENITE')], 'H04.1')).toBe(null);
+});
+
+test('[CIDPICK-5] pedido que É uma categoria de 3 chars aceita a subcategoria', () => {
+  // H46 (Neurite óptica) e H55 (Nistagmo) só existem nessa forma na tabela CID;
+  // o SHOSP pode gravá-los como "H460". Sem esta exceção seriam inalcançáveis.
+  expect(_pickCidRow([_row('H460', 'NEURITE OPTICA')], 'H46').textContent).toContain('NEURITE');
+  expect(_pickCidRow([_row('H46', 'NEURITE OPTICA')], 'H46').textContent).toContain('NEURITE');
+  // ...mas um pedido de 4 chars nunca vira categoria (é o caso do H52.0).
+  expect(_pickCidRow([_row('H524', 'PRESBIOPIA')], 'H52.0')).toBe(null);
+  // A exceção NÃO reabre a porta para outra categoria: o histórico continua fora.
+  expect(_pickCidRow(_historico, 'H46')).toBe(null);
+});
+
+test('[CIDPICK-5b] múltiplas subcategorias → primeira em ordem de documento', () => {
+  // Comportamento arbitrário mas fixado: H46/H55 não têm subcategoria na CID-10,
+  // então este caso só ocorre se o SHOSP inventar uma. Se um código de 3 chars
+  // COM subcategorias reais entrar na tabela, este teste é o alarme.
+  const rows = _historico.concat([_row('H461', 'NEURITE B'), _row('H460', 'NEURITE A')]);
+  expect(_pickCidRow(rows, 'H46').textContent).toContain('NEURITE B'); // a 1ª do DOM
+  // Código exato continua tendo precedência sobre a regra de categoria.
+  expect(_pickCidRow(rows, 'H460').textContent).toContain('NEURITE A');
+});
+
+test('[CIDPICK-6] borda alfanumérica: H40.0 não casa H40.00', () => {
+  expect(_pickCidRow([_row('H4000', 'GLAUCOMA SUSPEITO SUBCAT')], 'H40.0')).toBe(null);
+  expect(_pickCidRow([_row('H400', 'SUSPEITA DE GLAUCOMA')], 'H40.0').textContent).toContain('SUSPEITA');
+});
+
+test('[CIDPICK-7] termo textual (sem código) exige TODAS as palavras significativas', () => {
+  const rows = [_row('H210', 'CORPO CILIAR TRANSTORNO'), _row('T150', 'CORPO ESTRANHO NA CORNEA')];
+  expect(_pickCidRow(rows, 'corpo estranho').textContent).toContain('ESTRANHO');
+  expect(_pickCidRow(rows, 'corpo inexistente aqui')).toBe(null);
+  expect(_pickCidRow(rows, '')).toBe(null);
+  expect(_pickCidRow([], 'H52.0')).toBe(null);
+});
+
+test('[CIDPICK-8] wiring: os fallbacks permissivos sumiram do handler', () => {
+  // Nenhum dos 4 caminhos que aceitavam código diferente sobreviveu.
+  expect(contentJsSource.includes('if (rows.length === 1) return rows[0]')).toBe(false);
+  expect(contentJsSource.includes('fallback compatível com categoria')).toBe(false);
+  expect(contentJsSource.includes('Usando primeiro resultado da busca por categoria')).toBe(false);
+  expect(contentJsSource.includes('const matchCandidates')).toBe(false);
+  // E o handler passa a usar o matcher estrito.
+  expect(contentJsSource.includes('_pickCidRow(rows, requestedTerm)')).toBe(true);
+});
+
+test('[CIDPICK-9] wiring: waitForCidRow espera a linha PEDIDA, não o 1º render', () => {
+  // waitForRows antigo devolvia o primeiro contêiner não-vazio (podia ser o histórico).
+  expect(contentJsSource.includes('const waitForRows =')).toBe(false);
+  const idx = contentJsSource.indexOf('const waitForCidRow =');
+  expect(idx !== -1).toBe(true);
+  const body = contentJsSource.slice(idx, idx + 1200);
+  expect(body.includes('_pickCidRow(rows, requestedTerm)')).toBe(true); // só sai com match
+  expect(body.includes('sameCount >= stableRounds')).toBe(true);        // saída por estabilidade
+  expect(body.includes('minWaitMs')).toBe(true);                        // piso antes de desistir
+  // collectRows varre TODOS os contêineres, não só o primeiro não-vazio
+  const cIdx = contentJsSource.indexOf('const collectRows =');
+  expect(contentJsSource.slice(cIdx, cIdx + 400).includes('for (const div of divs) rows.push(')).toBe(true);
+});
+
+test('[CIDPICK-10] wiring: divergência entre linha e pedido aborta antes do click', () => {
+  const abortIdx = contentJsSource.indexOf('normCode !== wantNorm');
+  const clickIdx = contentJsSource.indexOf('targetRow.click()');
+  expect(abortIdx !== -1 && abortIdx < clickIdx).toBe(true);
+  // dumps de diagnóstico nas falhas e no pós-clique
+  expect(contentJsSource.includes('dumpCidPanels(`falha')).toBe(true);
+  expect(contentJsSource.includes('_findCidOutsideSearchPanels(normCode)')).toBe(true);
+});
+
+// ──────────────────────────────────────────────────────────────────────────────
 // 2026-07-08 — Desfazer dilatação: reprocessar consulta como completa
 // ──────────────────────────────────────────────────────────────────────────────
 

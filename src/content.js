@@ -1305,6 +1305,84 @@ function _isRedundantUnspecifiedRefraction(normCode, injectedSet) {
   return ['H520', 'H521', 'H522', 'H523', 'H524'].some(c => injectedSet.has(c));
 }
 
+// Seleção da linha de resultado do CID — ESTRITA por decisão clínica.
+//
+// O dropdown do SHOSP mistura, no mesmo painel, os resultados da busca e a seção
+// "Últimos CIDs selecionados" (documentado no passo 4 da skill cid-oftalmologia).
+// A versão anterior aceitava, em 4 caminhos distintos, uma linha com código
+// DIFERENTE do pedido: (1) prefixo no onclick, (2) prefixo no texto, (3) qualquer
+// linha da mesma categoria de 3 chars, (4) `rows.length === 1`. Com o histórico na
+// tela isso lançava o CID ERRADO e respondia success — buscar H52.0 (Hipermetropia)
+// clicava em H52.4 Presbiopia, que estava no histórico (log 2026-07-30).
+//
+// Regra: só casa código IGUAL ao pedido. Sem match ⇒ falha explícita, que o
+// sidepanel acumula em `_surfaceFailedCids()` para entrada manual. Num prontuário,
+// CID errado silencioso é pior que CID faltando.
+//
+// Única exceção: quando o PRÓPRIO pedido é uma categoria de 3 chars (H46 Neurite
+// óptica, H55 Nistagmo — códigos que só existem nessa forma), aceita a subcategoria
+// correspondente (o SHOSP pode gravá-los como "H460"). Não é o caso de "H52.0",
+// cujo pedido tem 4 chars e portanto nunca cai aqui.
+//
+// Onde o código aparece FORA dos painéis de busca — evidência de que o clique
+// aterrissou na ficha. `success` do searchCid sempre significou "cliquei na
+// linha", nunca "o SHOSP aceitou o registro"; sem saber qual contêiner lista os
+// CIDs lançados, esta varredura acha as folhas (tr/li/td) que contêm o código e
+// registra o id do contêiner — é ele que permite escrever a verificação real.
+// Limitada a 8 ocorrências para não pesar. Recebe `doc` por injeção (testes).
+function _findCidOutsideSearchPanels(normCode, doc) {
+  const d = doc || document;
+  const panels = Array.from(d.querySelectorAll('[id*="ResultadoBuscaCid"], [id*="resultadoCid"], #divResultadoBuscaPadraoCid'));
+  const hits = [];
+  for (const el of d.querySelectorAll('tr, li, td')) {
+    if (hits.length >= 8) break;
+    if (panels.some(p => p.contains(el))) continue;
+    if (el.querySelector('tr, li, td')) continue; // só folhas
+    const txt = (el.textContent || '').toUpperCase().replace(/\./g, '');
+    if (!txt.includes(normCode)) continue;
+    hits.push({
+      tag: el.tagName,
+      id: el.id || (el.closest && el.closest('[id]') ? el.closest('[id]').id : ''),
+      texto: (el.textContent || '').trim().slice(0, 60),
+    });
+  }
+  return hits;
+}
+
+// Autocontida (só args) para ser exercitada por _extractFn nos testes.
+function _pickCidRow(rows, requestedTerm) {
+  if (!rows || !rows.length) return null;
+  const norm = (s) => String(s || '').toUpperCase().replace(/\./g, '');
+  const want = norm(requestedTerm).trim();
+  if (!want) return null;
+  // onclick + texto: o SHOSP grava o código no onclick (selecionaCid('H520',...))
+  // e a descrição no texto da linha.
+  const haystack = (r) => norm(((r.getAttribute && r.getAttribute('onclick')) || '') + ' ' + (r.textContent || ''));
+  // Bordas não-alfanuméricas: evita que H400 case em H4000 (H40.00).
+  const bounded = (pat) => new RegExp(`(?<![A-Z0-9])${pat}(?![A-Z0-9])`, 'i');
+
+  if (/^[A-Z]\d{2,4}$/.test(want)) {
+    const exact = rows.find(r => bounded(want).test(haystack(r)));
+    if (exact) return exact;
+    if (/^[A-Z]\d{2}$/.test(want)) {
+      // `find` ⇒ PRIMEIRA subcategoria em ordem de documento. Escolha arbitrária
+      // mas deliberada: os únicos pedidos que chegam aqui são H46 e H55, que na
+      // CID-10 não têm subcategoria — se o SHOSP devolver várias, qualquer uma
+      // é um chute. Se um dia um código de 3 chars COM subcategorias reais entrar
+      // na tabela, este ramo precisa falhar em vez de escolher.
+      const sub = rows.find(r => bounded(want + '\\d').test(haystack(r)));
+      if (sub) return sub;
+    }
+    return null;
+  }
+
+  // Termo sem código (a IA emitiu texto livre): casa pela descrição, exigindo
+  // TODAS as palavras significativas — "corpo estranho" não pode casar "corpo ciliar".
+  const words = want.split(/\s+/).filter(w => w.length > 3);
+  if (!words.length) return null;
+  return rows.find(r => { const h = haystack(r); return words.every(w => h.includes(w)); }) || null;
+}
+
 // prontuarioOpen: a ficha está aberta quando um marcador ESTRUTURAL da ficha
 // existe no DOM. Antes checava só `td[id^="tdCadastro-"]` — seletor que exige um
 // elemento <td> com esse prefixo; quando o SHOSP troca a tag/id, ele falha e a
@@ -1515,61 +1593,74 @@ window.__shospMessageListener = (message, _sender, sendResponse) => {
             return true;
           };
 
-          // ── Helper: aguardar linhas em qualquer contêiner de resultados visível ──
-          const waitForRows = async (timeoutMs = 5000) => {
-            const deadline = Date.now() + timeoutMs;
+          // ── Helper: coletar linhas de TODOS os contêineres de resultado ──
+          // Antes retornava as linhas do PRIMEIRO contêiner não-vazio: com o
+          // histórico ("Últimos CIDs selecionados") e os resultados em painéis
+          // distintos, era sorteio qual dos dois era lido.
+          const collectRows = () => {
+            const divs = document.querySelectorAll('[id*="ResultadoBuscaCid"], [id*="resultadoCid"], #divResultadoBuscaPadraoCid');
+            const rows = [];
+            for (const div of divs) rows.push(...div.querySelectorAll('tr[onclick]'));
+            return rows;
+          };
+
+          // ── Helper: dump do DOM dos painéis de CID (diagnóstico) ──
+          // Mesmo padrão do auto-dump da refração estática: sem acesso à página
+          // real, é o dump que torna a estrutura "resultados vs histórico"
+          // CONHECÍVEL na próxima sessão em vez de adivinhada.
+          const dumpCidPanels = (label) => {
+            const divs = document.querySelectorAll('[id*="ResultadoBuscaCid"], [id*="resultadoCid"], #divResultadoBuscaPadraoCid');
+            const dump = Array.from(divs).map(d => ({
+              id: d.id || '(sem id)',
+              visivel: d.offsetParent !== null,
+              linhas: Array.from(d.querySelectorAll('tr[onclick]')).map(r => (r.textContent || '').trim().slice(0, 50)),
+            }));
+            contentLogger.info(`[searchCid] DUMP ${label}:`, JSON.stringify(dump));
+            return dump;
+          };
+
+          // ── Helper: aguardar a linha do CID PEDIDO aparecer ──
+          // O painel pode conter os "Últimos CIDs selecionados" enquanto o AJAX da
+          // busca ainda está em voo: aceitar o primeiro render não-vazio lia o
+          // histórico como se fosse resultado. Aqui seguimos aguardando até que a
+          // linha do código pedido apareça.
+          //
+          // Saída antecipada por ESTABILIDADE: se o conteúdo não muda por
+          // `stableRounds` ciclos e já passou `minWaitMs`, o painel é a resposta
+          // final do SHOSP — sair sem queimar o timeout inteiro. Sem isso, cada
+          // código ausente do subset (ex: H04.1) custaria timeout × nº de variantes.
+          //
+          // `minWaitMs` é o que segura a saída quando o SHOSP re-renderiza o
+          // histórico logo após a limpeza: nesse caso `stableRounds` fecha em
+          // ~600ms e só o piso impede ler o painel errado. NÃO é um número medido
+          // — as linhas [SearchCid] do log não têm timestamp, então não dá para
+          // extrair a latência real do AJAX. Escolhido conservador: com piso de 2s
+          // e teto de 4s, um código ausente custa ~2,4s por variante (~7s nas 3),
+          // que é o mesmo custo já observado no log 2026-07-30 para o H04.1 — ou
+          // seja, margem comprada sem tornar a falha mais lenta do que já era.
+          // Se algum dia as linhas ganharem timestamp, medir e apertar o piso.
+          const waitForCidRow = async (requestedTerm, { timeoutMs = 4000, minWaitMs = 2000, stableRounds = 3 } = {}) => {
+            const started = Date.now();
+            const deadline = started + timeoutMs;
+            let lastSig = null, sameCount = 0, lastRows = [];
             while (Date.now() < deadline) {
-              const divs = document.querySelectorAll('[id*="ResultadoBuscaCid"], [id*="resultadoCid"], #divResultadoBuscaPadraoCid');
-              for (const div of divs) {
-                const rows = div.querySelectorAll('tr[onclick]');
-                if (rows.length > 0) return Array.from(rows);
+              const rows = collectRows();
+              if (rows.length) {
+                lastRows = rows;
+                const picked = _pickCidRow(rows, requestedTerm);
+                if (picked) return { picked, rows };
+                const sig = rows.map(r => (r.textContent || '').trim()).join('|');
+                if (sig === lastSig) sameCount++;
+                else { lastSig = sig; sameCount = 1; }
+                if (sameCount >= stableRounds && Date.now() - started >= minWaitMs) break;
               }
               await new Promise(r => setTimeout(r, 300));
             }
-            return [];
+            return { picked: null, rows: lastRows };
           };
 
           const categoryMatch = term.match(/^([A-Z]\d{2})/i);
           const category = categoryMatch ? categoryMatch[1].toUpperCase() : null;
-
-          // ── Helper: selecionar melhor linha ──
-          const pickRow = (rows, searchTerm) => {
-            const up = searchTerm.toUpperCase();
-            // Versão normalizada sem ponto: "H11.1" → "H111"
-            // SHOSP armazena códigos sem ponto nos atributos onclick (ex: 'H111')
-            const upNorm = up.replace(/\./g, '');
-            // Exact match: código não precedido nem seguido por outro dígito/letra
-            // Evita que H400 (H40.0) faça prefix-match em H4000 (H40.00)
-            const isExact = (s) => {
-              const regex = new RegExp(`(?<![A-Z0-9])${upNorm}(?![A-Z0-9])`, 'i');
-              return regex.test(s);
-            };
-            // 1. Match exato no onclick
-            let row = rows.find(r => isExact((r.getAttribute('onclick') || '').toUpperCase().replace(/\./g, '')));
-            // 2. Match exato no texto da linha
-            if (!row) row = rows.find(r => isExact((r.textContent || '').toUpperCase().replace(/\./g, '')));
-            // 3. Fallback prefix — onclick (comportamento anterior, para códigos sem subcategorias)
-            if (!row) row = rows.find(r => (r.getAttribute('onclick') || '').toUpperCase().replace(/\./g, '').includes(upNorm));
-            // 4. Fallback prefix — texto
-            if (!row) row = rows.find(r => (r.textContent || '').toUpperCase().replace(/\./g, '').includes(upNorm));
-            
-            // Se encontramos correspondência pelo código do CID, retornamos
-            if (row) return row;
-
-            // Se for busca genérica de categoria (como "H25"), retorna a primeira linha pertencente a essa categoria
-            if (category) {
-              const catRow = rows.find(r => {
-                const onClickText = (r.getAttribute('onclick') || '').toUpperCase().replace(/\./g, '');
-                const text = (r.textContent || '').toUpperCase().replace(/\./g, '');
-                return onClickText.includes(category) || text.includes(category);
-              });
-              if (catRow) return catRow;
-            }
-
-            // 5. único resultado disponível
-            if (rows.length === 1) return rows[0];
-            return null;
-          };
 
           // ── 1. Campo disponível? ──
           const input = document.querySelector('#formCadProntuario #nomeCid')
@@ -1608,9 +1699,10 @@ window.__shospMessageListener = (message, _sender, sendResponse) => {
           }
 
           // ── Busca + seleção integradas ──
-          // Se uma variante retorna resultados mas nenhuma linha corresponde ao
-          // CID desejado (ex: resultados residuais de busca anterior), continua
-          // tentando as variantes restantes em vez de falhar prematuramente.
+          // As variantes servem para AMPLIAR a consulta (o SHOSP indexa o código
+          // ora com ponto, ora sem, e às vezes só a categoria retorna linhas). O
+          // que elas NÃO fazem é afrouxar o casamento: qualquer que seja a variante
+          // buscada, só é aceita a linha cujo código é o `term` pedido.
           let rows = [];
           let usedVariant = '';
           let targetRow = null;
@@ -1621,43 +1713,10 @@ window.__shospMessageListener = (message, _sender, sendResponse) => {
           let sawAnyRows = false;
           let rejectedRows = [];
 
-          const matchCandidates = [term];
-          if (term.includes('.')) matchCandidates.push(term.replace(/\./g, ''));
-          if (category) matchCandidates.push(category);
-          for (const word of words) {
-            matchCandidates.push(word);
-          }
-
-          // Helper: tenta selecionar uma linha compatível nos resultados
-          const tryPickFromRows = (currentRows, variant) => {
-            // 1. Tentar match por cada candidato (termo original, sem ponto, categoria, palavras)
-            for (const candidate of matchCandidates) {
-              const row = pickRow(currentRows, candidate);
-              if (row) return row;
-            }
-            // 2. Fallback de categoria: aceita qualquer linha da mesma categoria
-            if (category) {
-              const catRow = currentRows.find(r => {
-                const combined = ((r.textContent || '') + ' ' + (r.getAttribute('onclick') || '')).toUpperCase().replace(/\./g, '');
-                return combined.includes(category);
-              });
-              if (catRow) {
-                contentLogger.info('[searchCid] Usando resultado como fallback compatível com categoria:', category);
-                return catRow;
-              }
-            }
-            // 3. Se buscou pela categoria e retornou resultados, aceita o primeiro
-            if (variant === category && currentRows.length > 0) {
-              contentLogger.info('[searchCid] Usando primeiro resultado da busca por categoria:', category);
-              return currentRows[0];
-            }
-            return null;
-          };
-
           for (const variant of searchVariants) {
             contentLogger.info('[searchCid] Tentando busca com variante:', variant);
             await fillAndSearch(variant);
-            const currentRows = await waitForRows(3000);
+            const { picked, rows: currentRows } = await waitForCidRow(term);
             if (currentRows.length === 0) continue;
 
             sawAnyRows = true;
@@ -1665,7 +1724,6 @@ window.__shospMessageListener = (message, _sender, sendResponse) => {
             contentLogger.info(`[searchCid] Encontrados ${currentRows.length} resultado(s) para "${variant}"`);
             contentLogger.debug('[searchCid] Resultados:', currentRows.map(r => (r.textContent || '').trim().slice(0, 60)).join(' | '));
 
-            const picked = tryPickFromRows(currentRows, variant);
             if (picked) {
               targetRow = picked;
               rows = currentRows;
@@ -1673,23 +1731,26 @@ window.__shospMessageListener = (message, _sender, sendResponse) => {
               break;
             }
 
-            // Resultados existem mas nenhum corresponde ao CID desejado —
-            // provavelmente resultados residuais de busca anterior. Tentar próxima variante.
+            // Linhas na tela, nenhuma com o código pedido — pode ser o histórico
+            // "Últimos CIDs selecionados" ou resultado de outra categoria.
+            // Tentar a próxima variante em vez de aceitar um código diferente.
             contentLogger.info(`[searchCid] ${currentRows.length} resultado(s) para "${variant}" mas nenhum corresponde a ${term} — tentando próxima variante`);
           }
 
           if (!targetRow) {
             // Nenhuma variante funcionou. Distinguir os dois cenários é crucial
             // para depurar: "SHOSP não indexa este código" exige entrada manual,
-            // enquanto "retornou linhas mas nenhuma casou" é bug de matching.
+            // enquanto "retornou linhas mas nenhuma casou" pode ser bug de matching
+            // OU o painel do histórico ocupando a tela — por isso o dump.
+            const _dump = dumpCidPanels(`falha "${term}"`);
             if (sawAnyRows) {
               const descartadas = rejectedRows.map(r => (r.textContent || '').trim().slice(0, 60)).join(' | ');
               contentLogger.error(`[searchCid] SHOSP retornou linhas para "${term}" mas nenhuma casou (variantes: ${searchVariants.join(', ')})`);
               contentLogger.error('[searchCid] Linhas descartadas:', descartadas);
-              sendResponse({ success: false, error: `CID ${term}: SHOSP retornou resultados mas nenhum correspondeu — verifique matching. Descartadas: ${descartadas}` });
+              sendResponse({ success: false, error: `CID ${term}: SHOSP retornou resultados mas nenhum correspondeu — verifique matching. Descartadas: ${descartadas}`, _dump });
             } else {
               contentLogger.warn(`[searchCid] Nenhuma variante retornou resultados para "${term}" (tentadas: ${searchVariants.join(', ')}) — provável ausência no subset SHOSP`);
-              sendResponse({ success: false, error: `Nenhum resultado no SHOSP para o CID: ${term} (variantes tentadas: ${searchVariants.join(', ')})` });
+              sendResponse({ success: false, error: `Nenhum resultado no SHOSP para o CID: ${term} (variantes tentadas: ${searchVariants.join(', ')})`, _dump });
             }
             return;
           }
@@ -1713,12 +1774,35 @@ window.__shospMessageListener = (message, _sender, sendResponse) => {
             sendResponse({ success: true, skipped: true });
             return;
           }
+          // Sanidade final: a linha escolhida tem mesmo o código pedido? `pickRow`
+          // já garante isso, mas o normCode vem do onclick e é ele que alimenta o
+          // Set de dedup — um desencontro aqui envenenaria o Set (um CID legítimo
+          // depois seria pulado como "já injetado").
+          const wantNorm = term.toUpperCase().replace(/\./g, '');
+          if (normCode && normCode !== wantNorm && !/^[A-Z]\d{2}$/.test(wantNorm)) {
+            contentLogger.error(`[searchCid] ABORTADO: linha escolhida é ${normCode}, mas o pedido era ${wantNorm}`);
+            sendResponse({ success: false, error: `CID ${term}: linha divergente (${normCode}) — não injetado`, _dump: dumpCidPanels(`divergência ${term}`) });
+            return;
+          }
+
           targetRow.click();
           if (normCode && cidSet) cidSet.add(normCode);
           contentLogger.success('[searchCid] CID selecionado:', targetRow.textContent?.trim().slice(0, 80));
 
           await new Promise(r => setTimeout(r, 500));
-          sendResponse({ success: true });
+          // `success` até aqui significa "cliquei na linha", não "o código está na
+          // ficha" — o SHOSP ainda precisa aceitar o registro (toast "Registro
+          // adicionado com sucesso", passo 6 da skill cid-oftalmologia). Qual
+          // contêiner lista os CIDs já lançados é desconhecido daqui, então
+          // procuramos o código FORA dos painéis de busca: se ele aparece numa
+          // folha (tr/li/td) que não é resultado, aterrissou — e o id do contêiner
+          // que sai no log é o que falta para escrever a verificação de verdade.
+          const _landed = normCode ? _findCidOutsideSearchPanels(normCode) : [];
+          contentLogger.info(`[searchCid] Pós-clique ${normCode || term} — ocorrências fora da busca:`, JSON.stringify(_landed));
+          if (normCode && _landed.length === 0) {
+            contentLogger.warn(`[searchCid] ${normCode} clicado mas NÃO encontrado fora do painel de busca — o SHOSP pode ter recusado o registro`);
+          }
+          sendResponse({ success: true, _landed });
 
         } catch (err) {
           contentLogger.error('[searchCid] Erro:', err.message);

@@ -2176,9 +2176,14 @@ test('[CIDCLS-3] variante do CÓDIGO EXATO trouxe linhas sem casar → matching'
 });
 
 test('[CIDCLS-4] pedido que É categoria (H46) conta como exato, não como ampliador', () => {
-  // H46/H55 só existem em 3 chars: a "variante de categoria" é o próprio pedido.
-  const r = _classifyCidFailure('H46', [_att('H46', true, 3, 'H100CONJUNTIVITE | H101 | H102')]);
+  // H46/H55 só existem em 3 chars: para eles a "variante de categoria" É o pedido,
+  // então linhas devolvidas por ela apontam matching (cenário do CIDPICK-5: o SHOSP
+  // grava H46 como H460 e o matcher tem de alcançá-lo).
+  const r = _classifyCidFailure('H46', [_att('H46', true, 2, 'H460NEURITE OPTICA | H461NEURITE B')]);
   expect(r.motivo).toBe('matching');
+  // Contraprova: a MESMA lista vinda de um ampliador não vira suspeita de matching.
+  expect(_classifyCidFailure('H46', [_att('H46', false, 2, 'H460NEURITE OPTICA')]).motivo)
+    .toBe('ausente-no-subset');
 });
 
 test('[CIDCLS-5] wiring: searchCid usa o classificador e não o sawAnyRows antigo', () => {

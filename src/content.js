@@ -1891,7 +1891,9 @@ window.__shospMessageListener = (message, _sender, sendResponse) => {
           }
           // Fallback de categoria de 3 caracteres (ex: "H25" para Catarata).
           // Só é ampliador quando o pedido tem 4 chars; se o PRÓPRIO pedido é a
-          // categoria (H46, H55), a variante é o código exato.
+          // categoria (H46, H55) esta chamada já é no-op — a variante entrou acima
+          // marcada como exata. O segundo argumento é redundante nesse caso e está
+          // aqui para a regra não depender da ordem das inserções.
           if (category) addVariant(category, category === term.replace(/\./g, ''));
           // Fallback por palavras-chave (se o termo tem descrição longa)
           const words = term.split(/\s+/).filter(w => w.length > 3 && !/^[A-Z]\d{2,3}$/i.test(w))

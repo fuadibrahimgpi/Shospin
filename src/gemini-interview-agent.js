@@ -549,7 +549,7 @@ CAMPOS:
   Glaucoma:          H400=Suspeita de glaucoma  H401=GPAA  H402=Glaucoma ângulo fechado  H409=Glaucoma NE
   Retina/vítreo:     H330=Descolamento retina  H340=Oclusão arterial retina  H350=Retinopatia  H360=Retinopatia diabética  H430=Hemorragia vítrea
   Nervo óptico:      H460=Neurite óptica  H470=Transtorno nervo óptico
-  Refração:          H520=Hipermetropia  H521=Miopia  H522=Astigmatismo  H524=Presbiopia  H525=Transtorno acomodação  H529=Refração NE
+  Refração:          H520=Hipermetropia  H521=Miopia  H522=Astigmatismo  H524=Presbiopia  H525=Transtorno acomodação  H527=Refração NE
   Outros:            H530=Ambliopia  H570=Anomalias pupilares  H591=Transtornos pós-procedimento  Z010=Exame olhos e visão
 
   ⚠️ REGRA — PRESBIOPIA (H52.4):
@@ -562,13 +562,16 @@ CAMPOS:
     - Menção isolada à dificuldade de leitura sem referência a óculos de perto
     - Idade do paciente isoladamente
 
-  ⚠️ REGRA — REFRAÇÃO ESPECÍFICA (preferir CID específico a H52.9):
+  ⚠️ REGRA — REFRAÇÃO ESPECÍFICA (preferir CID específico a H52.7):
   Quando houver refração mensurada (autorrefrator ou refração subjetiva), usar o CID mais específico:
     H52.0 — Hipermetropia (esférico positivo predominante)
     H52.1 — Miopia (esférico negativo predominante)
     H52.2 — Astigmatismo (cilindro presente, qualquer valor diferente de zero)
     H52.3 — Anisometropia (diferença ≥ 1.00 D entre os olhos)
-  Usar H52.9 APENAS quando não houver refração disponível ou os dados forem inconclusivos.
+  Usar H52.7 APENAS quando não houver refração disponível ou os dados forem inconclusivos.
+  NUNCA emitir H52.9: esse código não existe na CID-10 (H52 vai de .0 a .7) nem no
+  cadastro do SHOSP — verificado na plataforma em 2026-07-30, a busca por H529
+  retorna zero linhas. O não especificado é H52.7 ("TRANSTORNO NAO ESPECIFICADO").
 
 - conduta: decisões clínicas e pedidos de exame
   ✅ Retorno com prazo:                "Retorno X meses/ano"

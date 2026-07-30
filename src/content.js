@@ -48,17 +48,33 @@ const FALLBACK_IDS = {
   'refracao.oe.cil': 'prontuario_resp_78074_259527',
   'refracao.oe.eixo': 'prontuario_resp_78074_259528',
   // ── Refração ESTÁTICA (pós-dilatação) — mesma aba tdCadastro-78074 ──
-  // Alvo preenchido em runtime por detecção dinâmica (bloco cujo rótulo casa
-  // "estática"; ver _refractionBlockOf). Estes fallbacks só entram em cena se a
-  // detecção falhar. Cole aqui os 6 IDs reais do bloco estática (dump do console
-  // na aba Refração) e descomente — um ID errado injetaria no campo errado, por
-  // isso ficam comentados até serem confirmados na página:
-  // 'refracaoEstatica.od.esf':  'prontuario_resp_78074_XXXXXX',
-  // 'refracaoEstatica.od.cil':  'prontuario_resp_78074_XXXXXX',
-  // 'refracaoEstatica.od.eixo': 'prontuario_resp_78074_XXXXXX',
-  // 'refracaoEstatica.oe.esf':  'prontuario_resp_78074_XXXXXX',
-  // 'refracaoEstatica.oe.cil':  'prontuario_resp_78074_XXXXXX',
-  // 'refracaoEstatica.oe.eixo': 'prontuario_resp_78074_XXXXXX',
+  // IDs LIDOS DA PÁGINA em 2026-07-30 (inspeção direta do DOM com o prontuário
+  // aberto na aba Refração), não inferidos. Ordem no documento dentro de
+  // #divCategoriaProntuarioAtendimento-78074:
+  //   REFRACAO ESTATICA → OD [ESF 259536 | CIL 259542 | EIXO 259540 | AV 259533]
+  //                     → OE [ESF 259544 | CIL 259543 | EIXO 259534 | AV 259535]
+  // Os números NÃO são sequenciais e não seguem a ordem visual — extrapolar a
+  // partir da dinâmica (259522-528) teria acertado os campos de AV. Os 6 abaixo
+  // foram conferidos um a um: existem, são input[type=text], visíveis, e o texto
+  // imediatamente anterior a cada um é ESF/CIL/EIXO do olho correspondente.
+  // Os campos AV ficam de fora de propósito: fillRefractionFields só escreve
+  // esf/cil/eixo.
+  //
+  // SE A CLÍNICA RECRIAR O FORMULÁRIO e estes IDs mudarem: os cabeçalhos de bloco
+  // são inputs OCULTOS cujo `value` é o próprio rótulo — 259538="REFRACAO ESTATICA",
+  // 259539="OD", 259541="OE". Achar o input oculto de valor "REFRACAO ESTATICA" e
+  // pegar os inputs seguintes em ordem de documento (ESF, CIL, EIXO, AV por olho)
+  // recupera o mapeamento. Não é heurística de rótulo: é a estrutura declarada pelo
+  // próprio SHOSP. Os rótulos VISÍVEIS são nós de texto soltos em <div>, o que é o
+  // motivo de _refractionBlockOf (que busca legend/caption/th/h3…) nunca ter tido
+  // chance, e de _detectDynamicFields não classificar nada aqui: o container destes
+  // inputs não tem texto nenhum.
+  'refracaoEstatica.od.esf':  'prontuario_resp_78074_259536',
+  'refracaoEstatica.od.cil':  'prontuario_resp_78074_259542',
+  'refracaoEstatica.od.eixo': 'prontuario_resp_78074_259540',
+  'refracaoEstatica.oe.esf':  'prontuario_resp_78074_259544',
+  'refracaoEstatica.oe.cil':  'prontuario_resp_78074_259543',
+  'refracaoEstatica.oe.eixo': 'prontuario_resp_78074_259534',
   'receitaOculos.od.esf': 'od_esferico',
   'receitaOculos.od.cil': 'od_cilindrico',
   'receitaOculos.od.eixo': 'od_eixo',
@@ -74,6 +90,19 @@ const FALLBACK_IDS = {
 const DYNAMIC_REFRACTION_IDS = new Set([
   FALLBACK_IDS['refracao.od.esf'], FALLBACK_IDS['refracao.od.cil'], FALLBACK_IDS['refracao.od.eixo'],
   FALLBACK_IDS['refracao.oe.esf'], FALLBACK_IDS['refracao.oe.cil'], FALLBACK_IDS['refracao.oe.eixo'],
+].filter(Boolean));
+
+// Guarda simétrica. No DOM real (verificado 2026-07-30) o bloco ESTÁTICA vem
+// DEPOIS do dinâmico, e _detectDynamicFields faz cache.set em ordem de documento:
+// se um campo da estática fosse classificado como 'refracao', ele sobrescreveria
+// o mapeamento dinâmico e o OCR normal (pré-dilatação) passaria a gravar no bloco
+// estática. Hoje isso não acontece porque o container desses inputs não tem texto
+// algum (o gate `text.includes('esf')` nunca passa), mas essa é uma propriedade da
+// marcação do SHOSP, não uma decisão nossa — se ela mudar, a falha seria silenciosa
+// e clinicamente grave. O ID conhecido manda em qualquer heurística.
+const STATIC_REFRACTION_IDS = new Set([
+  FALLBACK_IDS['refracaoEstatica.od.esf'], FALLBACK_IDS['refracaoEstatica.od.cil'], FALLBACK_IDS['refracaoEstatica.od.eixo'],
+  FALLBACK_IDS['refracaoEstatica.oe.esf'], FALLBACK_IDS['refracaoEstatica.oe.cil'], FALLBACK_IDS['refracaoEstatica.oe.eixo'],
 ].filter(Boolean));
 
 const TAB_IDS = {
@@ -243,6 +272,11 @@ class ShospFieldDetector {
             if (prefix === 'refracaoEstatica' && DYNAMIC_REFRACTION_IDS.has(id)) {
               prefix = 'refracao';
             }
+            // Simétrica: ID sabidamente da estática jamais é remapeado como dinâmica
+            // (senão o OCR pré-dilatação escreveria no bloco pós-dilatação).
+            if (prefix === 'refracao' && STATIC_REFRACTION_IDS.has(id)) {
+              prefix = 'refracaoEstatica';
+            }
             this.cache.set(`${prefix}.${eye}.${fieldType}`, id);
           }
         }
@@ -285,35 +319,116 @@ class ShospFieldDetector {
   }
 
   /**
-   * Dump ESTRUTURAL dos campos de refração no DOM: id, name, placeholder, o bloco
-   * que _refractionBlockOf atribui a cada um e os rótulos curtos dos 7 ancestrais
-   * mais próximos. NUNCA lê .value — nenhum dado de paciente sai da página.
+   * Dump ESTRUTURAL dos campos de refração no DOM: id, o bloco que
+   * _refractionBlockOf atribui a cada um, e o contexto estrutural de cada campo
+   * (rótulos ancestrais, linha/coluna da tabela, texto do container).
+   * NUNCA lê o que está digitado no campo — nenhum dado de paciente sai da página.
    *
    * Existe porque `refracaoEstatica.*` é o único grupo sem IDs em FALLBACK_IDS e
    * depende inteiramente da heurística de rótulo contra um DOM nunca inspecionado.
-   * Quando a injeção estática não preenche nada, este dump é a resposta: mostra se
-   * existe um segundo bloco de esf/cil/eixo, quais são seus IDs e se algum rótulo
-   * ancestral contém "estát" (isto é, se a heurística tinha chance de acertar).
-   * @returns {Array<{id:string,name:string|null,ph:string|null,bloco:string,labels:string[]}>}
+   *
+   * O painel imprime UMA LINHA POR CAMPO. O formato anterior era um único
+   * JSON.stringify(..., null, 1) de ~20 campos × 28 linhas: o console do Chrome
+   * cortou a string e o log de 2026-07-30 chegou truncado em `"id": "prontuario_res`,
+   * justamente antes dos IDs do bloco ESTÁTICA — o dump existia e mesmo assim não
+   * entregou o que precisava entregar.
+   *
+   * Os três campos que decidem o diagnóstico:
+   *  - `ctx`: texto do MESMO container que _detectDynamicFields inspeciona
+   *    (`closest('.form-group, td, tr')`). Se vier vazio, o teste
+   *    `text.includes('esf'|'cil'|'eixo')` nunca passa, o campo jamais entra no
+   *    cache e a heurística de rótulo sequer chega a ser consultada — a causa
+   *    seria a porta de entrada, não a classificação do bloco.
+   *  - `narrow`: primeiro rótulo visível ao seletor ESTREITO de
+   *    _refractionBlockOf. `null` com `labs` preenchido = o rótulo do bloco existe
+   *    mas está num elemento que o seletor não alcança (b/strong/label).
+   *  - `vis`: campo renderizado. Se os campos da estática não estiverem visíveis,
+   *    não há ID a fixar — a seção nem está montada no DOM.
+   * @returns {Array<{i:number,id:string,bloco:string,vis:boolean,ctx:string|null,linha:string|null,col:number|null,head:string|null,narrow:string|null,labs:string[]}>}
    */
   dumpRefractionCandidates() {
+    // NARROW = exatamente o seletor de _refractionBlockOf (o que a detecção vê).
+    // WIDE = superconjunto (o que existe na página).
+    const NARROW = 'legend, caption, th, h3, h4, h5, .titulo, .title, [class*="titulo" i]';
+    const WIDE = NARROW + ', label, b, strong';
+    // Rótulo de bloco é curto; texto acima de 60 chars é blob de container e é
+    // ignorado — mesmo critério de _refractionBlockOf, para o dump reproduzir
+    // fielmente o que a heurística enxerga.
+    const rotulo = (el, max) => {
+      const t = String(el.textContent || '').replace(/\s+/g, ' ').trim();
+      return !t || t.length > 60 ? '' : t.slice(0, max);
+    };
+    const tagOf = (el) => {
+      const cls = typeof el.className === 'string' && el.className.trim()
+        ? '.' + el.className.trim().split(/\s+/)[0]
+        : '';
+      return el.tagName + cls;
+    };
+
     const inputs = document.querySelectorAll('input[id*="prontuario_resp" i], input[id*="esferico" i], input[id*="cilindrico" i], input[id*="eixo" i]');
-    return Array.from(inputs).map(input => {
-      const labels = [];
+    return Array.from(inputs).map((input, i) => {
+      // Rótulos mais próximos, subindo a árvore. Sem dedupe global e sem o corte
+      // em 8 da versão anterior: era esse corte que impedia saber se rótulos de
+      // coluna ("Esférico") existiam na ancestralidade dos campos prontuario_resp.
+      const labs = [];
+      let narrow = null;
       let node = input;
-      for (let i = 0; i < 7 && node; i++, node = node.parentElement) {
+      for (let lvl = 0; lvl < 7 && node; lvl++, node = node.parentElement) {
         if (!node.querySelectorAll) continue;
-        for (const h of node.querySelectorAll('legend, caption, th, h3, h4, h5, label, .titulo, .title, b, strong')) {
-          const t = (h.textContent || '').trim();
-          if (t && t.length <= 60) labels.push(t);
+        if (labs.length < 4) {
+          for (const el of node.querySelectorAll(WIDE)) {
+            const t = rotulo(el, 40);
+            if (!t) continue;
+            const entry = tagOf(el) + ':' + t;
+            if (!labs.includes(entry)) labs.push(entry);
+            if (labs.length >= 4) break;
+          }
+        }
+        if (!narrow) {
+          for (const el of node.querySelectorAll(NARROW)) {
+            const t = rotulo(el, 40);
+            if (!t) continue;
+            narrow = tagOf(el) + ':' + t;
+            break;
+          }
+        }
+        if (labs.length >= 4 && narrow) break;
+      }
+
+      // Posição na tabela: linha (rótulo O.D./O.E.) e coluna (esf/cil/eixo).
+      // É o que permite atribuir os 6 IDs do bloco estática sem adivinhar ordem.
+      const cell = input.closest('td, th');
+      const row = input.closest('tr');
+      let linha = null, col = null, head = null;
+      if (row && row.cells && cell) {
+        const idx = Array.prototype.indexOf.call(row.cells, cell);
+        col = idx >= 0 ? idx : null;
+        for (const c of row.cells) {
+          const t = String(c.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 30);
+          if (t) { linha = t; break; }
+        }
+        // Cabeçalho da coluna: primeira linha ACIMA com texto na mesma coluna.
+        let prev = col !== null ? row.previousElementSibling : null;
+        for (let k = 0; k < 6 && prev && !head; k++, prev = prev.previousElementSibling) {
+          const hc = prev.cells && prev.cells[col];
+          const t = hc ? String(hc.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 30) : '';
+          if (t) head = t;
         }
       }
+
+      const container = input.closest('.form-group, td, tr') || input.parentElement;
+
       return {
+        i,
         id: input.id,
-        name: input.name || null,
-        ph: input.placeholder || null,
         bloco: this._refractionBlockOf(input),
-        labels: Array.from(new Set(labels)).slice(0, 8)
+        vis: input.offsetParent !== null,
+        ctx: container ? String(container.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 40) : null,
+        linha,
+        col,
+        head,
+        narrow,
+        labs
       };
     });
   }
@@ -1301,7 +1416,11 @@ if (!window.__shospInjectedCids || window.__shospInjectedCidsUrl !== location.hr
 // cross-round (per-URL, sobrevive à re-injeção). Cobre a ordem OCR→áudio.
 // Autocontida (só args + literal) para ser exercitada por _extractFn nos testes.
 function _isRedundantUnspecifiedRefraction(normCode, injectedSet) {
-  if (normCode !== 'H529' || !injectedSet) return false;
+  // H527 é o "não especificado" real (H529 não existe na CID-10 nem no SHOSP —
+  // busca verificada em 2026-07-30 retorna zero linhas). H529 segue aceito aqui
+  // porque saída antiga da IA ainda pode trazê-lo, e nesse caso ele é igualmente
+  // redundante: descartar é sempre a decisão certa.
+  if ((normCode !== 'H527' && normCode !== 'H529') || !injectedSet) return false;
   return ['H520', 'H521', 'H522', 'H523', 'H524'].some(c => injectedSet.has(c));
 }
 
@@ -1662,16 +1781,49 @@ window.__shospMessageListener = (message, _sender, sendResponse) => {
           const categoryMatch = term.match(/^([A-Z]\d{2})/i);
           const category = categoryMatch ? categoryMatch[1].toUpperCase() : null;
 
-          // ── 1. Campo disponível? ──
-          const input = document.querySelector('#formCadProntuario #nomeCid')
+          // ── 1. Campo disponível E VISÍVEL? ──
+          // MEDIDO na plataforma em 2026-07-30: `buscaCidProntuario()` só executa a
+          // consulta quando a seção C.I.D. está VISÍVEL. Com ela oculta, a chamada
+          // retorna sem buscar e o painel `divResultadoBuscaPadraoCid` continua
+          // exibindo "Últimos CIDs selecionados" — que era lido como se fosse o
+          // resultado da busca. Consequência: só entravam os códigos que já estavam
+          // no histórico recente; qualquer outro falhava com "SHOSP retornou
+          // resultados mas nenhum correspondeu" listando as mesmas 6 linhas.
+          // Foi o que aconteceu com H52.9 e com o H16.2 do log 2026-07-21 — e
+          // H162 (CERATOCONJUNTIVITE) EXISTE no subset, confirmado na página.
+          // "Montada no DOM" não é o mesmo que "visível": a premissa anterior
+          // ("quando este handler roda, a seção C.I.D. já está montada") era
+          // verdadeira e ainda assim insuficiente.
+          let input = document.querySelector('#formCadProntuario #nomeCid')
             || document.getElementById('nomeCid');
+          if (input && input.offsetParent === null) {
+            const abaCid = document.getElementById('tdCadastro-cid');
+            if (abaCid) {
+              contentLogger.info('[searchCid] Seção C.I.D. oculta — ativando a aba antes de buscar');
+              abaCid.click();
+              await new Promise(r => setTimeout(r, TAB_LOAD_DELAY));
+              input = document.querySelector('#formCadProntuario #nomeCid')
+                || document.getElementById('nomeCid');
+            }
+          }
           if (!input) {
             contentLogger.error('[searchCid] Campo #nomeCid não encontrado');
             sendResponse({ success: false, error: 'Campo #nomeCid não encontrado na página' });
             return;
           }
+          if (input.offsetParent === null) {
+            // Sem visibilidade a busca não roda: falhar explicitamente é melhor que
+            // ler o histórico e lançar o CID errado (ou reportar sucesso falso).
+            contentLogger.error('[searchCid] Seção C.I.D. permanece oculta — busca não roda');
+            sendResponse({ success: false, error: `CID ${term}: seção C.I.D. não ficou visível — a busca do SHOSP não executa oculta` });
+            return;
+          }
 
           // ── 2. Construir variantes de busca resilientes ──
+          // ⚠️ O formato da plataforma é SEM PONTO — confirmado pelo médico e visível
+          // nas linhas de resultado ("H522ASTIGMATISMO."). A variante sem ponto vem
+          // SEMPRE primeiro; a com ponto é só rede de segurança e roda apenas depois
+          // que a sem ponto não retornou nada. Nunca reordenar isso.
           const searchVariants = [];
           // Se o termo tem ponto (ex: "H25.0"), tenta primeiro sem ponto ("H250")
           // pois o SHOSP armazena códigos majoritariamente sem ponto no banco

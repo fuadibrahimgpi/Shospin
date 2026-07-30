@@ -1378,11 +1378,16 @@ Responda APENAS com o JSON. Sem texto antes, sem texto depois, sem markdown.
   _inferCidRefracao(refracao) {
     if (!refracao) return [];
 
+    // Código SEM ponto: é o formato da plataforma (o SHOSP grava "H522ASTIGMATISMO")
+    // e o mesmo que o agente de entrevista emite ("H521 - Miopia AO"). Com ponto, o
+    // texto do diagnóstico saía em dois formatos na mesma consulta conforme a origem
+    // (OCR vs entrevista). A dedup é insensível a ponto (_cidKeyFromText), então a
+    // troca não altera o casamento entre as duas origens.
     const CIDS = {
-      H520: 'H52.0 - Hipermetropia',
-      H521: 'H52.1 - Miopia',
-      H522: 'H52.2 - Astigmatismo',
-      H523: 'H52.3 - Anisometropia',
+      H520: 'H520 - Hipermetropia',
+      H521: 'H521 - Miopia',
+      H522: 'H522 - Astigmatismo',
+      H523: 'H523 - Anisometropia',
     };
 
     function parseEsf(esf) {

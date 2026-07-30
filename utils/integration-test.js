@@ -1909,13 +1909,18 @@ test('[SIGN-2] caller NUNCA auto-libera flip de sinal (sem mismatch=null no ramo
 // OD +0.25 / OE -0.25 gerou Hipermetropia + Miopia. Piso: |esf| ≥ 0.50D.
 // ──────────────────────────────────────────────────────────────────────────────
 
+// Estes testes são sobre O PISO CLÍNICO (qual esfera vira CID), não sobre o
+// formato do código. Normalizar o ponto aqui evita que uma mudança de formatação
+// os derrube — o formato tem dono próprio em [CIDDOT-3].
+const _temCid = (cids, code) => cids.some(c => c.replace(/\./g, '').includes(code));
+
 test('[REFRAC-FLOOR-1] esfera ±0.25 NÃO gera H52.0/H52.1 (ruído emétrope)', () => {
   const cids = _examAgent._inferCidRefracao({
     od: { esf: '+0.25', cil: null, eixo: null, se: '+0.25' },
     oe: { esf: '-0.25', cil: null, eixo: null, se: '-0.25' },
   });
-  expect(cids.some(c => c.includes('H52.0'))).toBe(false);
-  expect(cids.some(c => c.includes('H52.1'))).toBe(false);
+  expect(_temCid(cids, 'H520')).toBe(false);
+  expect(_temCid(cids, 'H521')).toBe(false);
 });
 
 test('[REFRAC-FLOOR-2] esfera |≥0.50| ainda codifica (miopia -0.50 preservada)', () => {
@@ -1923,9 +1928,9 @@ test('[REFRAC-FLOOR-2] esfera |≥0.50| ainda codifica (miopia -0.50 preservada)
     od: { esf: '-0.50', cil: -0.50, eixo: 175, se: '-0.75' },
     oe: { esf: '+0.50', cil: null, eixo: null, se: '+0.50' },
   });
-  expect(cids.some(c => c.includes('H52.1'))).toBe(true); // miopia OD -0.50
-  expect(cids.some(c => c.includes('H52.0'))).toBe(true); // hipermetropia OE +0.50
-  expect(cids.some(c => c.includes('H52.2'))).toBe(true); // astigmatismo OD -0.50
+  expect(_temCid(cids, 'H521')).toBe(true); // miopia OD -0.50
+  expect(_temCid(cids, 'H520')).toBe(true); // hipermetropia OE +0.50
+  expect(_temCid(cids, 'H522')).toBe(true); // astigmatismo OD -0.50
 });
 
 test('[REFRAC-FLOOR-3] astigmatismo (cil ≥0.25) codifica mesmo com esfera ±0.25', () => {
@@ -1933,8 +1938,8 @@ test('[REFRAC-FLOOR-3] astigmatismo (cil ≥0.25) codifica mesmo com esfera ±0.
     od: { esf: '+0.25', cil: -0.75, eixo: 90, se: '-0.12' },
     oe: null,
   });
-  expect(cids.some(c => c.includes('H52.2'))).toBe(true);  // astigmatismo mantido
-  expect(cids.some(c => c.includes('H52.0'))).toBe(false); // esfera +0.25 suprimida
+  expect(_temCid(cids, 'H522')).toBe(true);  // astigmatismo mantido
+  expect(_temCid(cids, 'H520')).toBe(false); // esfera +0.25 suprimida
 });
 
 // Grupo async: voto do desempate de eixo (apiService e _parseGeminiJSON fakes).
@@ -2085,6 +2090,112 @@ test('[CIDPICK-5b] múltiplas subcategorias → primeira em ordem de documento',
 test('[CIDPICK-6] borda alfanumérica: H40.0 não casa H40.00', () => {
   expect(_pickCidRow([_row('H4000', 'GLAUCOMA SUSPEITO SUBCAT')], 'H40.0')).toBe(null);
   expect(_pickCidRow([_row('H400', 'SUSPEITA DE GLAUCOMA')], 'H40.0').textContent).toContain('SUSPEITA');
+});
+
+// ──────────────────────────────────────────────────────────────────────────────
+// 2026-07-30 — o SHOSP não usa ponto em CID (informado pelo médico)
+// ──────────────────────────────────────────────────────────────────────────────
+//
+// As linhas de resultado do SHOSP vêm como "H522ASTIGMATISMO.", "H010BLEFARITE."
+// O painel fazia o INVERSO do formato da plataforma: convertia "H400" → "H40.0"
+// antes de buscar, "para compatibilidade com o autocomplete". Só não quebrava
+// porque o content script tentava a variante sem ponto primeiro — o ponto era
+// posto no painel e tirado no content script, e o log mentia sobre o que foi
+// buscado. Agora a normalização é sem ponto, na origem.
+
+// ──────────────────────────────────────────────────────────────────────────────
+// 2026-07-30 — verificado NA PLATAFORMA (busca real, sem clicar em linha alguma)
+// ──────────────────────────────────────────────────────────────────────────────
+//
+//   H520 → "H520 HIPERMETROPIA"            existe
+//   H527 → "H527 TRANSTORNO NAO ESPECIF."  existe  ← é este o "não especificado"
+//   H529 → zero linhas                     NÃO existe (nem na CID-10: H52 vai .0-.7)
+//   H162 → "H162 CERATOCONJUNTIVITE"       existe  ← o "rejeitado" de 21/07 estava lá
+//
+// E a descoberta que explica todas as falhas de CID: `buscaCidProntuario()` só
+// executa a consulta com a seção C.I.D. VISÍVEL. Oculta, o painel segue exibindo
+// "Últimos CIDs selecionados" e essas 6 linhas eram lidas como resultado — por isso
+// só entravam códigos já no histórico recente.
+
+test('[CIDVIS-1] searchCid ativa a aba C.I.D. quando a seção está oculta', () => {
+  expect(contentJsSource).toContain("input.offsetParent === null");
+  expect(contentJsSource).toContain("document.getElementById('tdCadastro-cid')");
+  expect(contentJsSource).toContain('Seção C.I.D. oculta — ativando a aba antes de buscar');
+});
+
+test('[CIDVIS-2] se a seção não ficar visível, falha explícita (não lê o histórico)', () => {
+  // CID errado silencioso é pior que CID faltando — mesma regra do _pickCidRow.
+  expect(contentJsSource).toContain('a busca do SHOSP não executa oculta');
+});
+
+test('[CIDNE-1] o inespecífico é H52.7; H52.9 nunca é emitido', () => {
+  expect(geminiSrcFull).toContain('H527=Refração NE');
+  expect(geminiSrcFull).not.toContain('H529=Refração NE');
+  expect(geminiSrcFull).toContain('NUNCA emitir H52.9');
+});
+
+test('[CIDNE-2] a retificação de redundância cobre H527 E o legado H529', () => {
+  // Saída antiga da IA ainda pode trazer H529: descartar segue sendo o certo.
+  expect(_isRedundantUnspecifiedRefraction('H527', new Set(['H521']))).toBe(true);
+  expect(_isRedundantUnspecifiedRefraction('H529', new Set(['H521']))).toBe(true);
+  expect(_isRedundantUnspecifiedRefraction('H527', new Set())).toBe(false);
+  // Um específico jamais é descartado como se fosse o vago.
+  expect(_isRedundantUnspecifiedRefraction('H521', new Set(['H522']))).toBe(false);
+});
+
+test('[CIDNE-3] _dropUnspecifiedRefraction remove H52.7 e H52.9 diante de específico', () => {
+  expect(_dropUnspecifiedRefraction('H527 - Refração NE\nH521 - Miopia')).toBe('H521 - Miopia');
+  expect(_dropUnspecifiedRefraction('H529 - Refração NE\nH521 - Miopia')).toBe('H521 - Miopia');
+  // Sozinho (sem específico) o inespecífico PERMANECE — é o diagnóstico do médico.
+  expect(_dropUnspecifiedRefraction('H527 - Refração NE')).toBe('H527 - Refração NE');
+});
+
+test('[CIDDOT-1] o painel busca SEM ponto — nunca adiciona ponto ao código', () => {
+  expect(injectionJsSource).toContain("termToSearch = termToSearch.replace(/\\./g, '')");
+  // A conversão inversa (H400 → H40.0) não pode voltar.
+  expect(injectionJsSource).not.toContain("termToSearch.slice(0, 3) + '.' + termToSearch.slice(3)");
+});
+
+// Modelo fiel da normalização do termo em handleSearchCid.
+function _termToSearchModel(rawTerm) {
+  const codeMatch = rawTerm.match(/^([A-Z]\d+(?:\.\d+)?)\s*[-–]/);
+  let t = codeMatch ? codeMatch[1] : rawTerm;
+  return t.replace(/\./g, '');
+}
+
+test('[CIDDOT-2] as duas origens (entrevista e OCR) convergem no mesmo termo', () => {
+  // Entrevista emite sem ponto, OCR emitia com ponto — o SHOSP recebe o mesmo.
+  expect(_termToSearchModel('H521 - Miopia AO')).toBe('H521');
+  expect(_termToSearchModel('H52.1 - Miopia')).toBe('H521');
+  expect(_termToSearchModel('H01.0 - Blefarite bilateral')).toBe('H010');
+  expect(_termToSearchModel('H40.00 - Glaucoma subcat')).toBe('H4000');
+});
+
+test('[CIDDOT-3] o OCR emite o código sem ponto, como a entrevista', () => {
+  expect(examJsSource).toContain("H520: 'H520 - Hipermetropia'");
+  expect(examJsSource).toContain("H521: 'H521 - Miopia'");
+  expect(examJsSource).toContain("H522: 'H522 - Astigmatismo'");
+  expect(examJsSource).toContain("H523: 'H523 - Anisometropia'");
+  expect(examJsSource).not.toContain("'H52.0 - Hipermetropia'");
+});
+
+test('[CIDDOT-4] matching segue insensível a ponto — a rede de segurança fica', () => {
+  // O código pedido sem ponto tem que casar a linha do SHOSP (também sem ponto)
+  // E uma eventual linha com ponto: _pickCidRow normaliza os dois lados.
+  expect(_pickCidRow([_row('H522', 'ASTIGMATISMO')], 'H522').textContent).toContain('ASTIGMATISMO');
+  expect(_pickCidRow([_row('H52.2', 'ASTIGMATISMO')], 'H522').textContent).toContain('ASTIGMATISMO');
+  // E não afrouxa: H524 no histórico não pode ser aceito no lugar de H522.
+  expect(_pickCidRow([_row('H524', 'PRESBIOPIA')], 'H522')).toBe(null);
+});
+
+test('[CIDDOT-5] a variante SEM ponto é sempre a primeira tentada', () => {
+  const idx = contentJsSource.indexOf('const searchVariants = [];');
+  const bloco = contentJsSource.slice(idx, idx + 500);
+  // Termo com ponto: push do replace(/\./g,'') vem antes do push do termo cru.
+  const semPonto = bloco.indexOf("searchVariants.push(term.replace(/\\./g, ''))");
+  const comPonto = bloco.indexOf('searchVariants.push(term);');
+  expect(semPonto > -1 && comPonto > -1).toBe(true);
+  expect(semPonto < comPonto).toBe(true);
 });
 
 test('[CIDPICK-7] termo textual (sem código) exige TODAS as palavras significativas', () => {
@@ -2652,7 +2763,157 @@ test('[EST-DIAG-4] o painel loga o dump como JSON, não como "Object"', () => {
   // O console imprime objeto como "Object" e o log copiado pelo médico perde o
   // conteúdo — foi por isso que "[InjectAll] check: Object" nunca ajudou.
   expect(injectionJsSource).toContain("JSON.stringify(diag.resolvidos)");
-  expect(injectionJsSource).toContain('JSON.stringify(diag.candidatos, null, 1)');
+  expect(injectionJsSource).toContain('_printRefracaoDump(diag.candidatos)');
+});
+
+// ──────────────────────────────────────────────────────────────────────────────
+// 2026-07-30 — o dump existia e mesmo assim não entregou os IDs
+// ──────────────────────────────────────────────────────────────────────────────
+//
+// Log 2026-07-30 13:57: a estática falhou, o dump FOI impresso e o log chegou
+// cortado em `"id": "prontuario_res` — o Chrome trunca string longa, e um único
+// JSON.stringify(candidatos, null, 1) de ~20 campos × 28 linhas estourava o
+// limite justamente antes do bloco ESTÁTICA. O diagnóstico só serve se couber
+// no console.
+
+// ──────────────────────────────────────────────────────────────────────────────
+// 2026-07-30 — IDs do bloco ESTÁTICA lidos da página (fim de 4 sessões travadas)
+// ──────────────────────────────────────────────────────────────────────────────
+//
+// Inspeção direta do DOM com o prontuário aberto na aba Refração. Ordem no
+// documento dentro de #divCategoriaProntuarioAtendimento-78074:
+//   REFRACAO ESTATICA → OD [ESF 259536 | CIL 259542 | EIXO 259540 | AV 259533]
+//                     → OE [ESF 259544 | CIL 259543 | EIXO 259534 | AV 259535]
+
+test('[EST-ID-1] os 6 IDs da estática estão fixados em FALLBACK_IDS', () => {
+  const esperado = {
+    'refracaoEstatica.od.esf': 'prontuario_resp_78074_259536',
+    'refracaoEstatica.od.cil': 'prontuario_resp_78074_259542',
+    'refracaoEstatica.od.eixo': 'prontuario_resp_78074_259540',
+    'refracaoEstatica.oe.esf': 'prontuario_resp_78074_259544',
+    'refracaoEstatica.oe.cil': 'prontuario_resp_78074_259543',
+    'refracaoEstatica.oe.eixo': 'prontuario_resp_78074_259534',
+  };
+  for (const [k, v] of Object.entries(esperado)) {
+    // Regex: o alinhamento das chaves varia (1 ou 2 espaços após os dois-pontos).
+    expect(new RegExp(`'${k.replace(/\./g, '\\.')}':\\s*'${v}'`).test(contentJsSource)).toBe(true);
+  }
+});
+
+test('[EST-ID-2] nenhum ID da estática colide com a dinâmica ou com AV', () => {
+  const estatica = ['259536', '259542', '259540', '259544', '259543', '259534'];
+  const dinamica = ['259522', '259523', '259524', '259526', '259527', '259528'];
+  const av = ['259530', '259531', '259533', '259535']; // AV: nunca recebem grau
+  for (const e of estatica) {
+    expect(dinamica.includes(e)).toBe(false);
+    expect(av.includes(e)).toBe(false);
+  }
+  expect(new Set(estatica).size).toBe(6); // sem repetição entre os 6 caminhos
+});
+
+test('[EST-ID-3] guarda simétrica: ID da estática nunca vira dinâmica', () => {
+  // O bloco estática vem DEPOIS no DOM e cache.set sobrescreve em ordem: sem esta
+  // guarda, o OCR pré-dilatação passaria a gravar no bloco pós-dilatação.
+  expect(contentJsSource).toContain('const STATIC_REFRACTION_IDS = new Set([');
+  expect(contentJsSource).toContain("if (prefix === 'refracao' && STATIC_REFRACTION_IDS.has(id))");
+  expect(contentJsSource).toContain("prefix = 'refracaoEstatica';");
+});
+
+test('[EST-DUMP-1] o dump sai UMA LINHA POR CAMPO — string única é truncada', () => {
+  const idx = injectionJsSource.indexOf('function _printRefracaoDump(');
+  expect(idx > -1).toBe(true);
+  const fn = injectionJsSource.slice(idx, injectionJsSource.indexOf('function _formatRefracaoDumpLine('));
+  // console.log dentro de laço sobre a lista: cada campo em sua própria linha.
+  expect(fn).toContain('for (const c of lista) console.log(_formatRefracaoDumpLine(c))');
+  // O formato antigo (uma string com tudo) não pode voltar.
+  expect(injectionJsSource).not.toContain('JSON.stringify(diag.candidatos, null, 1)');
+  expect(injectionJsSource).not.toContain('JSON.stringify(response.candidatos, null, 1)');
+});
+
+test('[EST-DUMP-2] cabeçalho e marca FIM permitem detectar log cortado', () => {
+  const idx = injectionJsSource.indexOf('function _printRefracaoDump(');
+  const fn = injectionJsSource.slice(idx, injectionJsSource.indexOf('function _formatRefracaoDumpLine('));
+  expect(fn).toContain('${lista.length} campos de refração no DOM');
+  expect(fn).toContain('FIM');
+  expect(fn).toContain('o console cortou o log');
+});
+
+test('[EST-DUMP-3] o dump traz o texto do MESMO container que a detecção lê', () => {
+  // _detectDynamicFields exige que esse texto contenha 'esf'/'cil'/'eixo' para
+  // sequer classificar o campo. Se vier vazio, a estática morre na porta de
+  // entrada e a heurística de rótulo nunca chega a ser consultada — sem `ctx` no
+  // dump não há como distinguir as duas causas.
+  const dump = contentJsSource.slice(
+    contentJsSource.indexOf('dumpRefractionCandidates() {'),
+    contentJsSource.indexOf('getTabId(tabName) {')
+  );
+  expect(dump).toContain("closest('.form-group, td, tr')");
+  expect(dump).toContain('ctx:');
+});
+
+test('[EST-DUMP-4] o dump separa "rótulo não existe" de "seletor não alcança"', () => {
+  const dump = contentJsSource.slice(
+    contentJsSource.indexOf('dumpRefractionCandidates() {'),
+    contentJsSource.indexOf('getTabId(tabName) {')
+  );
+  // NARROW = o seletor de _refractionBlockOf; WIDE acrescenta label/b/strong.
+  expect(dump).toContain('const NARROW =');
+  expect(dump).toContain("const WIDE = NARROW + ', label, b, strong'");
+  expect(dump).toContain('narrow');
+});
+
+test('[EST-DUMP-5] o dump reporta visibilidade — seção não montada não tem ID a fixar', () => {
+  const dump = contentJsSource.slice(
+    contentJsSource.indexOf('dumpRefractionCandidates() {'),
+    contentJsSource.indexOf('getTabId(tabName) {')
+  );
+  expect(dump).toContain('offsetParent !== null');
+});
+
+test('[EST-DUMP-6] o dump reporta linha/coluna — é o que atribui os 6 IDs sem adivinhar', () => {
+  const dump = contentJsSource.slice(
+    contentJsSource.indexOf('dumpRefractionCandidates() {'),
+    contentJsSource.indexOf('getTabId(tabName) {')
+  );
+  expect(dump).toContain('row.cells');
+  expect(dump).toContain('linha');
+  expect(dump).toContain('head');
+});
+
+test('[EST-DUMP-8] dump no formato antigo é denunciado como content script stale', () => {
+  // Recarregar a extensão não re-injeta content.js numa aba já aberta (só
+  // selectShospTab faz executeScript, e dumpRefracaoBlocks não passa por ele).
+  // Sem este aviso, "vis=0 ctx=- narrow=-" em todo campo passaria por achado.
+  const idx = injectionJsSource.indexOf('function _printRefracaoDump(');
+  const fn = injectionJsSource.slice(idx, injectionJsSource.indexOf('function _formatRefracaoDumpLine('));
+  expect(fn).toContain("!('ctx' in lista[0])");
+  expect(fn).toContain('content script ANTIGO');
+  expect(fn).toContain('F5');
+});
+
+// Modelo fiel de _formatRefracaoDumpLine: uma linha, sem quebra, com o id.
+function _formatRefracaoDumpLineModel(c) {
+  const q = (v) => (v == null || v === '' ? '-' : `"${v}"`);
+  return `[DumpRefracao] #${String(c.i ?? 0).padStart(2, '0')} ${c.id}` +
+    ` | bloco=${c.bloco} vis=${c.vis ? 1 : 0}` +
+    ` | linha=${q(c.linha)} col=${c.col ?? '-'} head=${q(c.head)}` +
+    ` | ctx=${q(c.ctx)} | narrow=${q(c.narrow)}` +
+    ` | labs=${(c.labs || []).join(' > ') || '-'}`;
+}
+
+test('[EST-DUMP-7] cada campo cabe em uma linha só, com id e contexto', () => {
+  const linha = _formatRefracaoDumpLineModel({
+    i: 20, id: 'prontuario_resp_78074_259530', bloco: 'refracao', vis: true,
+    linha: 'O.D.', col: 2, head: 'Esférico', ctx: '', narrow: null,
+    labs: ['B:REFRACAO ESTATICA'],
+  });
+  expect(linha.includes('\n')).toBe(false);
+  expect(linha).toContain('#20 prontuario_resp_78074_259530');
+  expect(linha).toContain('vis=1');
+  // ctx vazio e narrow ausente têm que aparecer como "-", não sumir da linha.
+  expect(linha).toContain('ctx=-');
+  expect(linha).toContain('narrow=-');
+  expect(linha).toContain('labs=B:REFRACAO ESTATICA');
 });
 
 test('[EST-DIAG-5] escape hatch sob demanda, sem refazer captura', () => {

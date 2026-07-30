@@ -57,11 +57,25 @@ aqui: quando este handler roda, a seção C.I.D. já está montada.)
 
 ### Passo 2 — Construir as variantes de BUSCA
 
-As variantes ampliam a consulta — o SHOSP indexa o código ora com ponto, ora sem:
+> ⚠️ **O formato da plataforma é SEM PONTO.** Confirmado pelo médico em
+> 2026-07-30 e visível nas próprias linhas de resultado do SHOSP
+> (`H522ASTIGMATISMO.`, `H010BLEFARITE.`). Vale para **todos** os CIDs.
+>
+> Até essa data o painel fazia o inverso: `handleSearchCid` convertia `H400` em
+> `H40.0` antes de buscar, "para compatibilidade com o autocomplete". Não
+> quebrava porque o content script tentava a variante sem ponto primeiro — o
+> ponto era posto no painel e tirado no content script — mas o log mentia sobre
+> o que fora buscado (`[SearchCid] termo="H52.1"` para um campo que dizia
+> `H521`). Hoje o painel normaliza para sem ponto na origem
+> (`termToSearch.replace(/\./g, '')`) e o OCR emite `H521 - Miopia`, igual ao
+> agente de entrevista. Testes `[CIDDOT-1..5]`.
+
+As variantes ampliam a consulta. A **sem ponto vem sempre primeiro**; a com ponto
+é rede de segurança e só roda depois que a primeira não retornou nada:
 
 | Termo pedido | Variantes buscadas |
 |---|---|
-| `H52.0` | `H520`, `H52.0`, `H52` |
+| `H520` | `H520`, `H52.0`, `H52` |
 | `H010` | `H010`, `H01.0`, `H01` |
 | `blefarite` | `blefarite` |
 
@@ -186,7 +200,29 @@ Códigos que só "funcionavam" porque caíam num vizinho do histórico passam a
 **falhar visivelmente**. Isso é a correção operando, não uma regressão nova — o
 CID já não estava sendo lançado corretamente antes.
 
-### ⚠️ PENDENTE — `H52.9` provavelmente não existe
+### ✅ RESOLVIDO 2026-07-30 — `H52.9` não existe; o inespecífico é `H52.7`
+
+Verificado na própria plataforma (busca real, sem clicar em nenhuma linha):
+
+| Busca | Resultado |
+|---|---|
+| `H520` | `H520 HIPERMETROPIA` ✅ |
+| `H527` | `H527 TRANSTORNO NAO ESPECIFICADO` ✅ |
+| `H529` | **zero linhas** ❌ |
+| `H162` | `H162 CERATOCONJUNTIVITE` ✅ (o "rejeitado" de 21/07 sempre esteve lá) |
+
+Trocado para `H527` em `gemini-interview-agent.js`, `_isRedundantUnspecifiedRefraction`
+e `_dropUnspecifiedRefraction` — o `H529` legado continua sendo descartado, porque
+saída antiga da IA ainda pode trazê-lo. Testes `[CIDNE-1..3]`.
+
+**A causa raiz das falhas de CID era outra e maior:** a busca do SHOSP só executa
+com a seção C.I.D. **visível**. Oculta, `buscaCidProntuario()` retorna sem buscar e
+o painel segue mostrando "Últimos CIDs selecionados" — as 6 linhas do histórico,
+que eram lidas como resultado. Por isso só entravam códigos já usados
+recentemente. `searchCid` agora ativa `#tdCadastro-cid` antes de buscar e falha
+explicitamente se a seção não ficar visível. Testes `[CIDVIS-1..2]`.
+
+### Registro histórico — a suspeita original
 
 `src/gemini-interview-agent.js:552` instrui a IA a emitir `H529 = Refração NE`,
 mas a tabela CID-10 desta skill lista **`H52.7`** como "Transtorno da refração,

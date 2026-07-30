@@ -78,7 +78,10 @@ function _dropUnspecifiedRefraction(fieldValue) {
   });
   const hasSpecific = codes.some(c => c && /^H52[0-4]$/.test(c));
   if (!hasSpecific) return fieldValue;
-  return lines.filter((_, i) => codes[i] !== 'H529').join('\n');
+  // H527 = "transtorno da refração, não especificado" (o código real; H529 não
+  // existe na CID-10 nem no cadastro do SHOSP — verificado em 2026-07-30). H529
+  // continua sendo removido porque saída antiga da IA pode trazê-lo.
+  return lines.filter((_, i) => codes[i] !== 'H527' && codes[i] !== 'H529').join('\n');
 }
 
 const _CLINICAL_TERM_TO_CID = [
@@ -170,10 +173,15 @@ async function handleSearchCid(field) {
   const codeMatch = rawTerm.match(CID_CODE_PATTERN);
   let termToSearch = codeMatch ? codeMatch[1] : rawTerm;
 
-  // Normalizar códigos de 4 caracteres sem ponto (ex: H400 -> H40.0) para compatibilidade com o autocomplete do SHOSP
-  if (/^[A-Z]\d{3}$/.test(termToSearch)) {
-    termToSearch = termToSearch.slice(0, 3) + '.' + termToSearch.slice(3);
-  }
+  // O SHOSP grava os códigos SEM ponto — as linhas do resultado vêm como
+  // "H522ASTIGMATISMO.", "H010BLEFARITE." (log 2026-07-30). A versão anterior
+  // fazia o INVERSO: convertia "H400" em "H40.0" antes de buscar, "para
+  // compatibilidade com o autocomplete". Só não quebrava porque o content script
+  // tenta a variante sem ponto primeiro — ou seja, o ponto era adicionado aqui e
+  // removido lá. Normalizar na origem alinha o formato à plataforma e faz o log
+  // dizer a verdade sobre o que foi buscado ([SearchCid] termo="H522").
+  // Cobre também o caminho do OCR, que emite o código com ponto.
+  termToSearch = termToSearch.replace(/\./g, '');
 
   // Feedback visual imediato
   successMessage.classList.remove('hidden');
@@ -1223,20 +1231,59 @@ async function injectRefracaoEstaticaDirect(refracao) {
   const diag = response.diag;
   if (diag) {
     console.log('[RefracaoEstatica] IDs resolvidos:', JSON.stringify(diag.resolvidos), '| aba clicada:', diag.tabClicked);
-    if (diag.candidatos) {
-      console.log('[RefracaoEstatica] campos de refração no DOM (estrutura, sem valores):');
-      console.log(JSON.stringify(diag.candidatos, null, 1));
-    }
+    if (diag.candidatos) _printRefracaoDump(diag.candidatos);
   }
   if (!response.success) {
     if (diag && diag.tabClicked === false) {
       console.warn('[RefracaoEstatica] A aba Refração não foi aberta — o mapeamento nem chegou a ser testado. Abra o prontuário na aba Refração e refaça.');
     } else {
       console.warn('[RefracaoEstatica] Nada injetado — bloco ESTÁTICA não mapeado. ' +
-        'Cole o dump acima para fixar os 6 IDs em FALLBACK_IDS (src/content.js:56-61).');
+        'Cole as linhas [DumpRefracao] acima (da #00 até a marca FIM) para fixar os 6 IDs em FALLBACK_IDS (src/content.js:56-61).');
     }
   }
   return !!response.success;
+}
+
+/**
+ * Imprime o dump estrutural UMA LINHA POR CAMPO.
+ *
+ * Um único console.log com todos os campos é justamente o que falhou: o log de
+ * 2026-07-30 saiu cortado em `"id": "prontuario_res` — o Chrome trunca strings
+ * longas, e os IDs do bloco ESTÁTICA estavam depois do corte. Cada campo em seu
+ * próprio console.log não tem esse limite, e o cabeçalho/rodapé com a contagem
+ * deixa evidente se o que foi colado veio inteiro.
+ * @param {Array<object>} candidatos
+ */
+function _printRefracaoDump(candidatos) {
+  const lista = Array.isArray(candidatos) ? candidatos : [];
+  // Recarregar a extensão NÃO re-injeta o content script numa aba já aberta: o
+  // dump volta no formato antigo (labels/ph, sem ctx/narrow/vis) e o formatter
+  // imprime "vis=0 ctx=- narrow=-" em TODOS os campos — indistinguível de
+  // "a seção estática não está montada". Dizer isso aqui evita perseguir um
+  // fantasma que só se resolve com F5.
+  if (lista.length && !('ctx' in lista[0])) {
+    console.warn('[DumpRefracao] A aba do SHOSP ainda roda o content script ANTIGO (dump sem ctx/narrow/vis). Dê F5 na aba do SHOSP e repita — este dump não serve.');
+  }
+  console.log(`[DumpRefracao] ${lista.length} campos de refração no DOM (estrutura, sem valores):`);
+  for (const c of lista) console.log(_formatRefracaoDumpLine(c));
+  console.log(`[DumpRefracao] FIM — ${lista.length} campos. Se a última linha não for #${String(Math.max(lista.length - 1, 0)).padStart(2, '0')}, o console cortou o log.`);
+}
+
+/**
+ * Uma linha compacta por campo. `ctx` é o texto do mesmo container que a detecção
+ * inspeciona e `narrow` é o rótulo que o seletor de _refractionBlockOf enxerga —
+ * juntos dizem se a estática falha na porta de entrada (ctx vazio ⇒ o campo nunca
+ * entra no cache) ou na classificação do bloco (ctx ok, narrow sem "ESTATICA").
+ * @param {object} c
+ * @returns {string}
+ */
+function _formatRefracaoDumpLine(c) {
+  const q = (v) => (v == null || v === '' ? '-' : `"${v}"`);
+  return `[DumpRefracao] #${String(c.i ?? 0).padStart(2, '0')} ${c.id}` +
+    ` | bloco=${c.bloco} vis=${c.vis ? 1 : 0}` +
+    ` | linha=${q(c.linha)} col=${c.col ?? '-'} head=${q(c.head)}` +
+    ` | ctx=${q(c.ctx)} | narrow=${q(c.narrow)}` +
+    ` | labs=${(c.labs || []).join(' > ') || '-'}`;
 }
 
 /**
@@ -1258,8 +1305,7 @@ async function dumpRefracaoBlocks() {
     console.warn('[DumpRefracao] Falhou:', (response && response.error) || 'sem resposta do content script');
     return false;
   }
-  console.log('[DumpRefracao] campos de refração no DOM (estrutura, sem valores):');
-  console.log(JSON.stringify(response.candidatos, null, 1));
+  _printRefracaoDump(response.candidatos);
   return true;
 }
 

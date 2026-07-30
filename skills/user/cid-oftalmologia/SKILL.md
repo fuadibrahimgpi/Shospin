@@ -147,8 +147,9 @@ Sem match ⇒ **falha explícita**. Não existe fallback que aceite outro códig
 | Sintoma | Causa provável | O que verificar |
 |---|---|---|
 | "Campo #nomeCid não encontrado" | Seletor mudou no SHOSP | Inspecionar o input no DevTools |
-| "Nenhum resultado no SHOSP para o CID: X" | Código ausente do subset da clínica (ex: H04.1, H16.2) | Esperado — entrada manual. **Não** remover o código do prompt |
-| "SHOSP retornou resultados mas nenhum correspondeu. Descartadas: ..." | Se as descartadas forem sempre as mesmas 6 linhas ⇒ é o **histórico**, não resultado | Ler o `_dump` da resposta: qual contêiner tem os resultados de verdade |
+| `motivo: 'sem-resultado'` — "Nenhum resultado no SHOSP para o CID: X" | Nenhuma variante devolveu linha alguma | Esperado — entrada manual. **Não** remover o código do prompt |
+| `motivo: 'ausente-no-subset'` — "a variante ampla "H25" devolveu só outros códigos" | A busca do código deu zero e só a **categoria** respondeu, com os irmãos | Ausência do subset da clínica. Entrada manual, **sem** mexer no prompt |
+| `motivo: 'matching'` — "SHOSP retornou resultados **para o próprio código**" | Só aqui há bug a caçar. Se as descartadas forem sempre as mesmas 6 linhas ⇒ é o **histórico**, não resultado | Ler o `_dump` e `_attempts` da resposta: qual contêiner tem os resultados de verdade |
 | CID errado lançado | Fallback permissivo (corrigido em 2026-07-30) | Rodar `CIDPICK-2`/`CIDPICK-3`; conferir se algum fallback voltou |
 | `_landed: []` no log | Clique não aterrissou na ficha | Ver se o SHOSP exibiu o toast de erro |
 
@@ -221,6 +222,24 @@ o painel segue mostrando "Últimos CIDs selecionados" — as 6 linhas do histór
 que eram lidas como resultado. Por isso só entravam códigos já usados
 recentemente. `searchCid` agora ativa `#tdCadastro-cid` antes de buscar e falha
 explicitamente se a seção não ficar visível. Testes `[CIDVIS-1..2]`.
+
+### Correção 2026-07-30 (tarde) — o discriminador da falha existia só no nome
+
+Caso: `H250 - Catarata senil incipiente AO` recusado. As variantes de `H250` são
+`["H250", "H25.0", "H25"]` — as duas primeiras são o **código pedido**, a terceira
+apenas **amplia** a consulta. Quando um código não está no subset, as exatas dão
+zero e a categoria devolve os **irmãos** (`H251`, `H259`…). O `sawAnyRows` era
+marcado por qualquer variante ⇒ toda ausência do subset saía como "SHOSP retornou
+resultados mas nenhum correspondeu — **verifique matching**", que é exatamente o
+outro diagnóstico. O sinal criado pela correção da manhã mandava caçar bug de
+matching justamente no caso em que não há nada a corrigir no código.
+
+`_classifyCidFailure(term, attempts)` separa os três motivos (`sem-resultado`,
+`ausente-no-subset`, `matching`) usando a marca `exato` de cada variante, e a
+resposta passa a levar `motivo` e `_attempts`. Testes `[CIDCLS-1..5]`.
+
+> Isso é diagnóstico, não injeção: nenhum CID passa a entrar por causa dele. O que
+> muda é que a mensagem para de apontar para o lugar errado.
 
 ### Registro histórico — a suspeita original
 

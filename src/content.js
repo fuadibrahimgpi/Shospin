@@ -1502,6 +1502,51 @@ function _pickCidRow(rows, requestedTerm) {
   return rows.find(r => { const h = haystack(r); return words.every(w => h.includes(w)); }) || null;
 }
 
+// Classifica a falha do searchCid a partir das variantes tentadas. Autocontida
+// (só args) para ser exercitada por _extractFn nos testes.
+//
+// `attempts`: [{ variant, exato, linhas, descartadas }] na ordem em que rodaram.
+// `exato` marca as variantes que SÃO o código pedido ("H250", "H25.0"); as demais
+// (categoria "H25", palavras da descrição) apenas AMPLIAM a consulta.
+//
+// Por que a distinção importa: a versão anterior usava um único `sawAnyRows`,
+// marcado por QUALQUER variante. Como a categoria de um código ausente devolve os
+// IRMÃOS dele (pedir H250 → o SHOSP responde H251, H259...), toda ausência do
+// subset era reportada como "SHOSP retornou resultados mas nenhum correspondeu —
+// verifique matching", que é exatamente o OUTRO diagnóstico. O discriminador que
+// a correção de 2026-07-30 pretendia criar existia só no nome: mandava procurar
+// bug de matching em cima do caso em que não há nada a corrigir no código.
+//
+// Regra: só é suspeita de matching quando uma variante de CÓDIGO EXATO trouxe
+// linhas — aí o SHOSP consultou o código pedido e devolveu algo que não casou
+// (histórico na tela ou bug de casamento). Se apenas os ampliadores trouxeram
+// linhas, a consulta ampla rodou e o código não estava nela ⇒ ausência do subset,
+// que se resolve com entrada manual e NÃO justifica mexer no prompt.
+function _classifyCidFailure(term, attempts) {
+  const tentadas = (attempts || []).map(a => a.variant).join(', ');
+  const comLinhas = (attempts || []).filter(a => a.linhas > 0);
+  const exatasComLinhas = comLinhas.filter(a => a.exato);
+
+  if (exatasComLinhas.length) {
+    const descartadas = exatasComLinhas.map(a => a.descartadas).join(' | ');
+    return {
+      motivo: 'matching',
+      error: `CID ${term}: SHOSP retornou resultados para o próprio código mas nenhum correspondeu — verifique matching. Descartadas: ${descartadas}`,
+    };
+  }
+  if (comLinhas.length) {
+    const a = comLinhas[0];
+    return {
+      motivo: 'ausente-no-subset',
+      error: `CID ${term} ausente do subset SHOSP: a busca do código não retornou nada e a variante ampla "${a.variant}" devolveu só outros códigos (${a.descartadas}). Lançar manualmente.`,
+    };
+  }
+  return {
+    motivo: 'sem-resultado',
+    error: `Nenhum resultado no SHOSP para o CID: ${term} (variantes tentadas: ${tentadas})`,
+  };
+}
+
 // prontuarioOpen: a ficha está aberta quando um marcador ESTRUTURAL da ficha
 // existe no DOM. Antes checava só `td[id^="tdCadastro-"]` — seletor que exige um
 // elemento <td> com esse prefixo; quando o SHOSP troca a tag/id, ele falha e a
@@ -1824,31 +1869,35 @@ window.__shospMessageListener = (message, _sender, sendResponse) => {
           // nas linhas de resultado ("H522ASTIGMATISMO."). A variante sem ponto vem
           // SEMPRE primeiro; a com ponto é só rede de segurança e roda apenas depois
           // que a sem ponto não retornou nada. Nunca reordenar isso.
+          // Cada variante carrega se ela É o código pedido (`exato`) ou se apenas
+          // AMPLIA a consulta (categoria, palavra-chave). Essa marca é o que
+          // permite, na falha, separar "o SHOSP não tem o código" de "o painel
+          // devolveu linhas erradas" — ver _classifyCidFailure.
           const searchVariants = [];
+          const addVariant = (v, exato) => {
+            if (v && !searchVariants.some(x => x.v === v)) searchVariants.push({ v, exato });
+          };
           // Se o termo tem ponto (ex: "H25.0"), tenta primeiro sem ponto ("H250")
           // pois o SHOSP armazena códigos majoritariamente sem ponto no banco
           if (term.includes('.')) {
-            searchVariants.push(term.replace(/\./g, ''));
-            searchVariants.push(term);
+            addVariant(term.replace(/\./g, ''), true);
+            addVariant(term, true);
           } else {
-            searchVariants.push(term);
+            addVariant(term, true);
             if (/^[A-Z]\d{3}$/.test(term)) {
               // Se tem 4 caracteres sem ponto (ex: "H250"), tenta com ponto ("H25.0")
-              searchVariants.push(term.slice(0, 3) + '.' + term.slice(3));
+              addVariant(term.slice(0, 3) + '.' + term.slice(3), true);
             }
           }
-          // Fallback de categoria de 3 caracteres (ex: "H25" para Catarata)
-          if (category && !searchVariants.includes(category)) {
-            searchVariants.push(category);
-          }
+          // Fallback de categoria de 3 caracteres (ex: "H25" para Catarata).
+          // Só é ampliador quando o pedido tem 4 chars; se o PRÓPRIO pedido é a
+          // categoria (H46, H55), a variante é o código exato.
+          if (category) addVariant(category, category === term.replace(/\./g, ''));
           // Fallback por palavras-chave (se o termo tem descrição longa)
           const words = term.split(/\s+/).filter(w => w.length > 3 && !/^[A-Z]\d{2,3}$/i.test(w))
             .sort((a, b) => b.length - a.length);
-          for (const word of words) {
-            if (!searchVariants.includes(word)) {
-              searchVariants.push(word);
-            }
-          }
+          for (const word of words) addVariant(word, false);
+          const variantNames = searchVariants.map(x => x.v);
 
           // ── Busca + seleção integradas ──
           // As variantes servem para AMPLIAR a consulta (o SHOSP indexa o código
@@ -1858,23 +1907,21 @@ window.__shospMessageListener = (message, _sender, sendResponse) => {
           let rows = [];
           let usedVariant = '';
           let targetRow = null;
-          // Rastreia se ALGUMA variante retornou linhas, independente de terem
-          // sido aceitas. `rows` só é preenchido quando há match (segue com break),
-          // então não serve para distinguir "SHOSP não tem o código" de
-          // "SHOSP retornou linhas mas nenhuma casou" no ramo de falha abaixo.
-          let sawAnyRows = false;
-          let rejectedRows = [];
+          // Uma entrada por variante tentada, com quantas linhas ela devolveu e o
+          // texto das descartadas. `rows` só é preenchido quando há match (segue
+          // com break), então não serve para diagnosticar o ramo de falha.
+          const attempts = [];
 
-          for (const variant of searchVariants) {
+          for (const { v: variant, exato } of searchVariants) {
             contentLogger.info('[searchCid] Tentando busca com variante:', variant);
             await fillAndSearch(variant);
             const { picked, rows: currentRows } = await waitForCidRow(term);
+            const descartadas = currentRows.map(r => (r.textContent || '').trim().slice(0, 60)).join(' | ');
+            attempts.push({ variant, exato, linhas: currentRows.length, descartadas });
             if (currentRows.length === 0) continue;
 
-            sawAnyRows = true;
-            rejectedRows = currentRows; // guardado p/ diagnóstico se nenhuma casar
             contentLogger.info(`[searchCid] Encontrados ${currentRows.length} resultado(s) para "${variant}"`);
-            contentLogger.debug('[searchCid] Resultados:', currentRows.map(r => (r.textContent || '').trim().slice(0, 60)).join(' | '));
+            contentLogger.debug('[searchCid] Resultados:', descartadas);
 
             if (picked) {
               targetRow = picked;
@@ -1890,20 +1937,18 @@ window.__shospMessageListener = (message, _sender, sendResponse) => {
           }
 
           if (!targetRow) {
-            // Nenhuma variante funcionou. Distinguir os dois cenários é crucial
-            // para depurar: "SHOSP não indexa este código" exige entrada manual,
+            // Nenhuma variante funcionou. Distinguir os cenários é crucial para
+            // depurar: "SHOSP não indexa este código" exige entrada manual,
             // enquanto "retornou linhas mas nenhuma casou" pode ser bug de matching
             // OU o painel do histórico ocupando a tela — por isso o dump.
             const _dump = dumpCidPanels(`falha "${term}"`);
-            if (sawAnyRows) {
-              const descartadas = rejectedRows.map(r => (r.textContent || '').trim().slice(0, 60)).join(' | ');
-              contentLogger.error(`[searchCid] SHOSP retornou linhas para "${term}" mas nenhuma casou (variantes: ${searchVariants.join(', ')})`);
-              contentLogger.error('[searchCid] Linhas descartadas:', descartadas);
-              sendResponse({ success: false, error: `CID ${term}: SHOSP retornou resultados mas nenhum correspondeu — verifique matching. Descartadas: ${descartadas}`, _dump });
-            } else {
-              contentLogger.warn(`[searchCid] Nenhuma variante retornou resultados para "${term}" (tentadas: ${searchVariants.join(', ')}) — provável ausência no subset SHOSP`);
-              sendResponse({ success: false, error: `Nenhum resultado no SHOSP para o CID: ${term} (variantes tentadas: ${searchVariants.join(', ')})`, _dump });
-            }
+            const { motivo, error } = _classifyCidFailure(term, attempts);
+            const log = motivo === 'matching' ? contentLogger.error : contentLogger.warn;
+            log(`[searchCid] falha (${motivo}) em "${term}" — variantes: ${variantNames.join(', ')}`);
+            log('[searchCid] Tentativas:', JSON.stringify(attempts.map(a => ({ v: a.variant, exato: a.exato, linhas: a.linhas }))));
+            const comLinhas = attempts.filter(a => a.linhas > 0);
+            if (comLinhas.length) contentLogger.error('[searchCid] Linhas descartadas:', comLinhas.map(a => `[${a.variant}] ${a.descartadas}`).join('  ||  '));
+            sendResponse({ success: false, error, motivo, _dump, _attempts: attempts });
             return;
           }
 

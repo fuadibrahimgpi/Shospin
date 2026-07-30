@@ -2128,6 +2128,69 @@ test('[CIDVIS-2] se a seção não ficar visível, falha explícita (não lê o 
   expect(contentJsSource).toContain('a busca do SHOSP não executa oculta');
 });
 
+// ──────────────────────────────────────────────────────────────────────────────
+// 2026-07-30 (tarde) — falha de CID: "ausente do subset" ≠ "bug de matching"
+// ──────────────────────────────────────────────────────────────────────────────
+//
+// Caso real: "1 CID não aceito pelo SHOSP — adicione manualmente: H250 - Catarata
+// senil incipiente AO". As variantes de H250 são ["H250", "H25.0", "H25"]. Quando
+// o código não está no subset, as duas primeiras devolvem zero linhas e a TERCEIRA
+// (categoria, um mero ampliador) devolve os irmãos — H251, H259... O `sawAnyRows`
+// anterior era marcado por qualquer variante, então essa ausência era reportada
+// como "SHOSP retornou resultados mas nenhum correspondeu — verifique matching":
+// exatamente o outro diagnóstico, mandando caçar bug onde não há.
+const _classifyCidFailure = new Function(
+  _extractFn(contentJsSource, '_classifyCidFailure') + '\nreturn _classifyCidFailure;'
+)();
+
+const _att = (variant, exato, linhas, descartadas = '') => ({ variant, exato, linhas, descartadas });
+
+test('[CIDCLS-1] nenhuma variante com linhas → sem-resultado', () => {
+  const r = _classifyCidFailure('H250', [_att('H250', true, 0), _att('H25.0', true, 0), _att('H25', false, 0)]);
+  expect(r.motivo).toBe('sem-resultado');
+  expect(r.error.includes('Nenhum resultado no SHOSP')).toBe(true);
+  expect(r.error.includes('H250, H25.0, H25')).toBe(true); // lista as variantes tentadas
+});
+
+test('[CIDCLS-2] REGRESSÃO: só a categoria trouxe linhas → ausente do subset, NÃO matching', () => {
+  const r = _classifyCidFailure('H250', [
+    _att('H250', true, 0), _att('H25.0', true, 0),
+    _att('H25', false, 2, 'H251CATARATA SENIL NUCLEAR | H259CATARATA SENIL NE'),
+  ]);
+  expect(r.motivo).toBe('ausente-no-subset');
+  expect(r.error.includes('verifique matching')).toBe(false);
+  expect(r.error.includes('Lançar manualmente')).toBe(true);
+  expect(r.error.includes('H251CATARATA SENIL NUCLEAR')).toBe(true); // prova no próprio aviso
+});
+
+test('[CIDCLS-3] variante do CÓDIGO EXATO trouxe linhas sem casar → matching', () => {
+  // Aqui o SHOSP consultou o código pedido e devolveu algo — histórico na tela ou
+  // bug de casamento. É o único caso que justifica investigar o matcher.
+  const r = _classifyCidFailure('H250', [
+    _att('H250', true, 6, 'H010BLEFARITE | H524PRESBIOPIA | H251CATARATA SENIL NUCLEAR'),
+    _att('H25', false, 0),
+  ]);
+  expect(r.motivo).toBe('matching');
+  expect(r.error.includes('verifique matching')).toBe(true);
+  expect(r.error.includes('H010BLEFARITE')).toBe(true);
+});
+
+test('[CIDCLS-4] pedido que É categoria (H46) conta como exato, não como ampliador', () => {
+  // H46/H55 só existem em 3 chars: a "variante de categoria" é o próprio pedido.
+  const r = _classifyCidFailure('H46', [_att('H46', true, 3, 'H100CONJUNTIVITE | H101 | H102')]);
+  expect(r.motivo).toBe('matching');
+});
+
+test('[CIDCLS-5] wiring: searchCid usa o classificador e não o sawAnyRows antigo', () => {
+  expect(contentJsSource).toContain('_classifyCidFailure(term, attempts)');
+  expect(contentJsSource).not.toContain('let sawAnyRows');
+  // a marca exato/ampliador tem de existir na construção das variantes
+  expect(contentJsSource).toContain('addVariant(term.replace(/\\./g, \'\'), true)');
+  expect(contentJsSource).toContain("addVariant(word, false)");
+  // e o motivo tem de chegar ao painel junto da resposta
+  expect(contentJsSource).toContain('sendResponse({ success: false, error, motivo, _dump, _attempts: attempts })');
+});
+
 test('[CIDNE-1] o inespecífico é H52.7; H52.9 nunca é emitido', () => {
   expect(geminiSrcFull).toContain('H527=Refração NE');
   expect(geminiSrcFull).not.toContain('H529=Refração NE');
@@ -2191,9 +2254,9 @@ test('[CIDDOT-4] matching segue insensível a ponto — a rede de segurança fic
 test('[CIDDOT-5] a variante SEM ponto é sempre a primeira tentada', () => {
   const idx = contentJsSource.indexOf('const searchVariants = [];');
   const bloco = contentJsSource.slice(idx, idx + 500);
-  // Termo com ponto: push do replace(/\./g,'') vem antes do push do termo cru.
-  const semPonto = bloco.indexOf("searchVariants.push(term.replace(/\\./g, ''))");
-  const comPonto = bloco.indexOf('searchVariants.push(term);');
+  // Termo com ponto: a variante do replace(/\./g,'') é adicionada antes do termo cru.
+  const semPonto = bloco.indexOf("addVariant(term.replace(/\\./g, ''), true)");
+  const comPonto = bloco.indexOf('addVariant(term, true);');
   expect(semPonto > -1 && comPonto > -1).toBe(true);
   expect(semPonto < comPonto).toBe(true);
 });

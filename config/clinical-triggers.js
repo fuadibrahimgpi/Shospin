@@ -381,6 +381,16 @@ const DILATACAO_COMMANDS = [
   'enquanto o colirio faz efeito',
   'aguardar o efeito do colirio',
   'esperar o efeito do colirio',
+  // Caso real 2026-07-29: o ASR comeu "colírio" ("vou colocar o colírio" virou
+  // "vou colher"), derrubando o combo ['colirio','dilatar'] — e nada mais casava
+  // "de fazer efeito para dilatar". Estas formas ancoram no par efeito+dilatar,
+  // que só ocorre ao anunciar a dilatação, sem depender da palavra "colírio".
+  // (Não usar combo ['efeito','dilatar']: 'efeito' solto já foi removido dos
+  // combos por falso positivo com "fazer efeito" de qualquer medicamento.)
+  // ("pra" já vira "para" no normalizeText — não duplicar a contração aqui.)
+  // NÃO adicionar 'efeito e dilatar': casa narração retrospectiva afirmativa
+  // ("pinguei, fez efeito e dilatar foi rápido") — testado e rejeitado.
+  'efeito para dilatar',
   'pode ir sentar la fora',
   'pode ir sentar ali fora',
   'pode sentar do lado de fora',
@@ -413,6 +423,23 @@ const DILATACAO_COMMANDS = [
   'aguardem aqui fora',
   'vao la fora esperar',
   'vao la fora aguardar',
+  // Infinitivo pessoal PLURAL ("-arem") — caso real 2026-07-29, criança com
+  // acompanhante: "vocês vão esperarem lá fora um pouquinho". Nenhuma forma
+  // acima casa por substring: 'esperar la fora' exige espaço logo após
+  // "esperar" e 'esperem la fora' é o imperativo. Mesmo cenário do bloco
+  // imperativo acima, só que noutra conjugação — a dilatação passou em branco.
+  'esperarem la fora',
+  'aguardarem la fora',
+  'ficarem la fora',
+  'sentarem la fora',
+  'esperarem ali fora',
+  'aguardarem ali fora',
+  'ficarem ali fora',
+  'sentarem ali fora',
+  'esperarem aqui fora',
+  'aguardarem aqui fora',
+  'ficarem aqui fora',
+  'sentarem aqui fora',
   // Médico instruindo o ACOMPANHANTE a levar a criança para aguardar
   'leva ele la fora',
   'leva ela la fora',

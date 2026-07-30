@@ -67,6 +67,10 @@ function switchMode(mode) {
 
   // Áudio e câmera funcionam independentemente — não parar dispositivos ao trocar de modo
   if (mode === 'camera') {
+    // Entrada normal na câmera: a captura vai para a refração DINÂMICA. O modo
+    // 'estatica' é armado só pelo botão da retomada (startCameraCaptureEstatica),
+    // que não passa por switchMode.
+    _captureMode = 'normal';
     setTimeout(() => {
       if (!cameraStream) startCameraCapture();
     }, 100);

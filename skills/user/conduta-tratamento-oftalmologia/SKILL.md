@@ -104,6 +104,14 @@ Ao registrar um medicamento que o médico **prescreve**, use o nível mais espec
 
 Registrar a classe (`colírio hipotensor`) ou o genérico (`Medicação ocular prescrita`) **não** viola a regra anti-invenção de nomes: essas formas descrevem sem afirmar um princípio ativo que não foi dito.
 
+### Regra anti-invenção de tratamento (crítica)
+
+Um tratamento só existe se o médico o **prescreveu** na fala — nomeando um remédio, indicando uma classe/finalidade, ou dando instrução inequívoca de usar/pingar/aplicar/passar algo. Os 3 níveis de nomeação acima só valem **depois** de confirmado que houve prescrição real.
+
+- ❌ **Nunca infira que existe prescrição a partir do diagnóstico ou do contexto.** O diagnóstico não gera tratamento automático. Ex.: `corpo estranho`/`abrasão` → não assuma pomada ou colírio antibiótico; `conjuntivite` → não assuma antibiótico tópico. Se o médico removeu o corpo estranho e não prescreveu nada, `tratamento_sugerido: null`.
+- ❌ **Nunca invente posologia** (frequência, duração, dose — "4/4h", "por 3 dias", "3x/dia"). Posologia entra só quando pronunciada; houve prescrição sem posologia dita → registre a medicação sem posologia.
+- ❌ **Consulta encerrada (despedida/STOP) sem o médico ditar conduta/tratamento → `tratamento_sugerido: null`.** A ausência de prescrição é um desfecho válido; deixar `null` é sempre preferível a fabricar tratamento para "fechar" o prontuário.
+
 ### Regra anti-associação medicamentosa
 
 Nunca crie associação de medicamentos, colírios ou princípios ativos se a associação não foi explicitamente prescrita pelo médico.

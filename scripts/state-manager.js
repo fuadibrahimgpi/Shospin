@@ -44,6 +44,8 @@ const StateManager = {
     cameraData         = null;
     audioDataInjected  = false;
     cameraDataInjected = false;
+    _pendingOcrRefracaoCids = [];
+    _cidsLancadosNaSessao = new Set();
 
     // Confirmação de refração pendente
     pendingRefractionConfirmation = false;

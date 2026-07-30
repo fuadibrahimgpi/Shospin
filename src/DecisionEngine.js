@@ -103,26 +103,44 @@
     log.push(`Transcrição incoerente: ${totalWords} palavras, ${clinicalMatches} termos clínicos — revisão manual obrigatória`);
   }
 
+  // Anexa um aviso clínico à resposta (exibido ao médico pelo sidepanel).
+  function _pushAviso(cloned, texto) {
+    if (!cloned) return;
+    if (!Array.isArray(cloned.avisos)) cloned.avisos = [];
+    if (!cloned.avisos.includes(texto)) cloned.avisos.push(texto);
+  }
+
   /**
    * Guard 1: blefarite só é válida se há evidência clínica na transcrição.
    * Aceita: (a) palavra literal "blefarite"/"meibomite"; (b) descritores clínicos
    * da pálpebra (inflamacao palpebral, palpebra inflamada, bordo palpebral);
-   * (c) padrão de tratamento inequívoco: compressa morna + higiene palpebral.
+   * (c) compressa + higiene (ou pálpebra); (d) shampoo; (e) descrição LEIGA —
+   * o médico raramente diz "blefarite" ao paciente: fala de cílios, das glândulas
+   * de óleo da pálpebra, de pele oleosa e de pontinhos de inflamação (log
+   * 2026-07-29, em que a exigência literal apagou uma blefarite real).
    * Remove flag E entrada do diagnóstico quando nenhum sinal está presente.
    */
   function _guardBlefariteLiteral(cloned, ctx, log) {
     const rawText = ctx.transcribedText || '';
     const normText = _normalizeForGuard(rawText);
 
+    // (e) conjunção leiga: estrutura palpebral + sinal/manejo de blefarite.
+    // Exige as DUAS pontas — "pálpebra" sozinha ou "higiene" sozinha não bastam.
+    const hasEstruturaPalpebral = /palpebr|cilio|meibom|bordo\s+do\s+olho/.test(normText);
+    const hasSinalBlefarite = /inflama|oleos|oleo\b|lipidic|glandul|higiene|secre|caspa|crosta|descama|vermelhid/.test(normText);
+
     const hasBlefariteKeyword =
       // (a) palavras-diagnóstico explícitas
       /blefarite|meibomite|disfun[çc][ãa]o\s+de\s+meibom/i.test(rawText) ||
       // (b) descritores clínicos da pálpebra (sem acentos, já normalizados)
       /inflamacao\s+(da\s+)?palpebra|palpebra\s+inflamada|inflamacao\s+palpebral|bordo\s+palpebral/.test(normText) ||
-      // (c) padrão de tratamento inequívoco de blefarite
-      (/compressa/.test(normText) && /higiene\s+palpebral/.test(normText)) ||
+      // (c) padrão de tratamento de blefarite. "higiene palpebral" adjacente era
+      // estrito demais — o médico diz "volta só para higiene" falando da pálpebra.
+      (/compressa/.test(normText) && /higiene|palpebr|cilio/.test(normText)) ||
       // (d) shampoo — em oftalmologia indica higiene palpebral (retorno de blefarite sem repetir diagnóstico)
-      /shampoo/.test(normText);
+      /shampoo/.test(normText) ||
+      // (e) descrição leiga
+      (hasEstruturaPalpebral && hasSinalBlefarite);
 
     if (cloned.injectBlefarite === true && !hasBlefariteKeyword) {
       cloned.injectBlefarite = false;
@@ -487,6 +505,39 @@
     return out;
   }
 
+  /**
+   * Rede de segurança pós-reconciliação: BIOMICROSCOPIA ÓRFÃ.
+   *
+   * O prompt manda o LLM devolver biomicroscopia=null quando injectBlefarite=true —
+   * o texto do exame viria do TEMPLATE de blefarite. Se qualquer etapa posterior
+   * (guard 1 por falta de evidência, hook já injetado, exclusão mútua) derrubar a
+   * flag, sobra um estado que o contrato do prompt nunca previu: sem template E
+   * sem texto → o bloco de exame sai silenciosamente EM BRANCO. Foi exatamente o
+   * que aconteceu no log 2026-07-29 (consulta inteira de blefarite, prontuário só
+   * com H52.2).
+   *
+   * Não inventamos achado — sinalizamos ao médico. Duas exceções legítimas, em
+   * que a flag cai mas o campo NÃO fica órfão:
+   *   • dilatação — a descrição dos exames pertence à fase 2, por design;
+   *   • hook de voz já injetou um template AO VIVO (blefarite ou exames normais)
+   *     durante a gravação — o texto já está no prontuário.
+   */
+  function _avisoBiomicroscopiaOrfa(rawAIResponse, cloned, injectFlags, ctx, log) {
+    if (!cloned || !cloned.dados) return;
+    if (injectFlags.dilatacao) return;                        // exame pertence à fase 2
+    const hooks = (ctx && ctx.hookFlags) || {};
+    if (hooks.blefariteInjetada || hooks.examesNormaisInjetados) return; // template já no prontuário
+    if (!(rawAIResponse && rawAIResponse.injectBlefarite === true)) return;
+    if (injectFlags.injectBlefarite || injectFlags.injectExamesNormais) return;
+    if (cloned.dados.biomicroscopia) return;                  // há texto próprio — nada órfão
+
+    _pushAviso(cloned,
+      'Biomicroscopia ficou EM BRANCO: a blefarite sugerida pela IA não foi injetada ' +
+      '(sem evidência na transcrição ou template já aplicado) e nenhum outro achado de ' +
+      'segmento anterior foi descrito. Confira e preencha o exame manualmente.');
+    log.push('Biomicroscopia órfã — injectBlefarite caiu com biomicroscopia=null (aviso emitido ao médico)');
+  }
+
   // ------------------------------------------------------------------
   // API principal
   // ------------------------------------------------------------------
@@ -526,6 +577,7 @@
     }
 
     const injectFlags = _reconcileInjectFlags(cloned || {}, ctx);
+    _avisoBiomicroscopiaOrfa(rawAIResponse, cloned, injectFlags, ctx, guardsApplied);
 
     const requestId = ctx.requestId ||
       (typeof crypto !== 'undefined' && crypto.randomUUID
@@ -543,6 +595,7 @@
       clonedAIResponse: cloned,
       injectFlags,
       guardsApplied,
+      avisos: (cloned && Array.isArray(cloned.avisos)) ? cloned.avisos : [],
       metadata,
     };
   }

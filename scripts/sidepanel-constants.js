@@ -36,9 +36,39 @@ let cameraPermissionChecked = false;
 let audioData = null;
 let cameraData = null;
 
+// CIDs refrativos do OCR (ticket TOPCON) persistidos entre passadas de injeção.
+// A passada de câmera injeta os CIDs específicos (H52.0/H52.2) no diagnosticoField,
+// mas a passada de áudio (entrevista) que vem depois sobrescreve esse campo com o
+// diagnóstico dela — que pode trazer H52.9 inespecífico. Guardar aqui permite
+// re-mesclar os específicos na passada de áudio (o H52.9 redundante é então
+// removido por _dropUnspecifiedRefraction). Zerado em resetSession e após consumo.
+let _pendingOcrRefracaoCids = [];
+
+// Chaves canônicas dos CIDs JÁ LANÇADOS no SHOSP nesta consulta (ex: "H522").
+// handleSearchCid consome o diagnosticoField termo a termo (field.value =
+// terms.slice(1)) — ao fim da cadeia o campo está VAZIO. A passada seguinte
+// (câmera/OCR) montava a base de deduplicação a partir desse campo vazio e
+// relançava um CID que a entrevista já tinha injetado (H52.2 duplicado no log
+// 2026-07-29; mesma classe do H52.9 do log 2026-07-21). Este Set é a memória
+// que sobrevive ao consumo do campo. Zerado em resetSession e na limpeza manual.
+let _cidsLancadosNaSessao = new Set();
+
 // Controle de injeção duplicada
 let audioDataInjected = false;
 let cameraDataInjected = false;
+
+// true enquanto processAudioInBackground está com a análise do Gemini em voo.
+// Sem isso, injectAll não distingue "análise ainda rodando, audioData nem existe"
+// de "dados já injetados" e reporta o segundo — foi o que o painel disse às
+// 20:07 e 20:10 do log 2026-07-29, quando nada havia sido injetado.
+let _analiseEmAndamento = false;
+
+// Modo da PRÓXIMA captura de câmera:
+//   'normal'   → fluxo padrão (injectAll: refração DINÂMICA + tono/paqui/CID/etc.)
+//   'estatica' → captura pós-dilatação: injeta SOMENTE no bloco Refração ESTÁTICA,
+//                sem tocar em nenhum outro campo. Armado pelo botão da retomada
+//                (sala de espera de dilatação) e volta a 'normal' após a captura.
+let _captureMode = 'normal';
 
 // Confirmação pendente para refração suspeita (OD=OE)
 let pendingRefractionConfirmation = false;
@@ -328,6 +358,75 @@ function parseCatarataFromDiagnostico(diagnostico) {
   else if (/avancad[ao]|madura/.test(semHistorico)) grau = 'avançada';
 
   return { detected: true, grau };
+}
+
+/**
+ * Normaliza o diagnóstico mantendo apenas as linhas de achado ATIVO.
+ * Linhas marcadas como resolvidas ("H109 - Conjuntivite NE (resolvida)") não
+ * contradizem um exame normal de hoje — o quadro já passou.
+ * Retorna '' quando não sobra nenhuma linha ativa.
+ *
+ * ⚠️ O filtro é DELIBERADAMENTE estreito: só `resolvid[ao]`, que é o marcador que o
+ * prompt realmente emite. Termos como "cicatrizado"/"prévio" descrevem achados ATIVOS
+ * ("H170 - Leucoma aderente OE (cicatrizado)" — um leucoma É uma cicatriz) e descartar
+ * essas linhas desarmaria o guard justamente no caso que ele existe para pegar. Mesmo
+ * modo de falha que o contexto histórico do parseCatarataFromDiagnostico (Casos 7/7c).
+ */
+function _diagnosticoAtivoNorm(diagnostico) {
+  if (!diagnostico) return '';
+  return String(diagnostico)
+    .toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .split('\n')
+    .filter(l => !/\bresolvid[ao]\b/.test(l))
+    .join('\n');
+}
+
+/**
+ * O diagnóstico afirma um achado ESTRUTURAL de segmento anterior?
+ *
+ * Origem (log 2026-07-29): consulta com `H111 - Pterígio OD` no diagnóstico saiu com
+ * `dados.biomicroscopia: null`; o fallback de despedida injetou BIOMICROSCOPIA_NORMAL e
+ * o prontuário ficou afirmando "AO: olho calmo" logo abaixo do próprio diagnóstico de
+ * pterígio. Nenhum guard cobria o caso: `_temTratamentoAtivo` só olha tratamento e
+ * encaminhamento, e essa consulta não tinha nenhum dos dois (só receita de óculos).
+ *
+ * Casa por TERMO e por FAIXA de CID — o modelo erra o código (emitiu H111 para pterígio,
+ * que na CID-10 é H11.0), então o termo não pode depender do código estar certo.
+ *
+ * Catarata NÃO entra aqui: já é tratada pela lente dinâmica (getBiomicroscopiaComLente),
+ * que produz um texto normal correto para o cristalino — não há contradição a evitar.
+ */
+function temAchadoAnteriorNoDiagnostico(diagnostico) {
+  const norm = _diagnosticoAtivoNorm(diagnostico);
+  if (!norm) return false;
+
+  // Achados estruturais/inflamatórios que contradizem "olho calmo, córnea transparente".
+  const termo = /\b(pterigio|pinguecula|leucoma|ceratocone|ulcera|ceratite|conjuntivite|blefarite|hordeolo|calazio|episclerite|esclerite|uveite|irite|hifema|hemorragia\s+subconjuntival|erosao\s+corneana|abrasao|corpo\s+estranho|distrofia\s+corneana|simblefaro|triquiase|ectropio|entropio)\b/
+    .test(norm);
+
+  // CIDs de segmento anterior: H00–H13 (pálpebra/lacrimal/órbita/conjuntiva),
+  // H15–H22 (esclera/córnea/íris/corpo ciliar). H25/H26 (catarata) ficam de fora.
+  const cid = /\bh(0\d|1[0-3]|1[5-9]|2[0-2])\.?\d?\b/.test(norm);
+
+  return termo || cid;
+}
+
+/**
+ * O diagnóstico afirma um achado de segmento POSTERIOR?
+ * Simétrico ao anterior — evita injetar FUNDOSCOPIA_NORMAL ("retina aplicada, escavação
+ * simétrica e fisiológica") em paciente cujo próprio diagnóstico diz o contrário.
+ */
+function temAchadoPosteriorNoDiagnostico(diagnostico) {
+  const norm = _diagnosticoAtivoNorm(diagnostico);
+  if (!norm) return false;
+
+  const termo = /\b(retinopatia|descolamento\s+de\s+retina|degeneracao\s+macular|dmri|membrana\s+epirretiniana|buraco\s+macular|nevo\s+de\s+coroide|hemorragia\s+vitrea|oclusao\s+(arterial|venosa|de\s+ramo)|edema\s+macular|glaucoma|escavacao\s+aumentada|papiledema|retinose\s+pigmentar|corioretinite)\b/
+    .test(norm);
+
+  // H30–H36 (coroide/retina), H40–H42 (glaucoma), H46–H48 (nervo óptico/vias).
+  const cid = /\bh(3[0-6]|4[0-2]|4[6-8])\.?\d?\b/.test(norm);
+
+  return termo || cid;
 }
 
 // ============================================================================

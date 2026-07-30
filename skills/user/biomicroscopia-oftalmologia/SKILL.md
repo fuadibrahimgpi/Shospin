@@ -77,6 +77,16 @@ Se não houver achado específico de segmento anterior → `dados.biomicroscopia
 - Usar linha única `AO:` — só quando o achado é dos dois olhos e assim descrito (blefarite, conjuntivite bilateral, pterígio nos dois olhos).
 - `AO` **não** é prefixo padrão; nunca é fallback.
 
+## Consistência diagnóstico ↔ exame (regra crítica)
+
+Se o `diagnostico` registra um achado **estrutural de segmento anterior como ATUAL** (pterígio, pinguécula, leucoma, ceratocone, úlcera, ceratite, conjuntivite, hordéolo, calázio, uveíte, hemorragia subconjuntival), então `biomicroscopia` **não pode ser null** e não pode descrever o olho afetado como normal. Um prontuário que diagnostica pterígio OD e descreve `AO: olho calmo` se contradiz.
+
+- Isto **não afrouxa a regra de fonte** acima: relato do paciente e história continuam não virando achado de exame. A regra é *posterior* — depois de decidir que o achado é atual e digno de `diagnostico`, o exame precisa refleti-lo.
+- Achado verbalizado **durante** o exame (médico na lâmpada de fenda: *"encosta o queixo"*, *"olha pra frente"*, *"pisca"*) conta como achado de exame mesmo que o STT embarale quem fala.
+- Achado histórico/resolvido → marque no diagnóstico (`(resolvida)`); aí não exige descrição no exame atual.
+
+> 🛡️ **Rede de segurança no runtime (2026-07-29):** `temAchadoAnteriorNoDiagnostico()` em `scripts/sidepanel-constants.js` bloqueia a injeção do template normal quando o diagnóstico afirma achado anterior — o campo fica **vazio** para o médico redigir, em vez de receber `AO: olho calmo` contradizendo o prontuário. A rede **não compõe** a descrição por olho (isso seria inventar o detalhe); descrever bem continua sendo trabalho desta skill.
+
 ## Lateralidade (regra crítica — nunca bilateralizar unilateral)
 
 A lateralidade sai de **toda a consulta**. Se o paciente disse na história que foi *"o olho direito"* (inseto, poeira, arranhão), a biomicroscopia é `OD:`, mesmo que o médico não repita o lado ao examinar.
@@ -184,6 +194,11 @@ Antes de finalizar a biomicroscopia, confirme:
 ### 2026-06-24 — Fonte errada (paciente pseudofácico)
 - **Erro**: paciente relatou "catarata os dois, as duas cirurgias" na anamnese → modelo escreveu "catarata"/"cristalino transparente" na biomicroscopia como achado atual.
 - **Correção**: pós-facectomia → "catarata" e "cristalino transparente" proibidos; obrigatório `pseudofácico, LIO bem posicionada`. Menção de catarata na transcrição vai para `antecedentes_oftalmologicos`.
+
+### 2026-07-29 — Exame normal afirmado contra o próprio diagnóstico ⭐
+- **Erro**: consulta com `H111 - Pterígio OD` no diagnóstico saiu com `biomicroscopia: null`; o fallback de despedida injetou `AO: olho calmo, córnea transparente...` — o prontuário afirmou exame normal logo abaixo do diagnóstico de pterígio.
+- **Causa (dupla)**: (1) o modelo atribuiu o pterígio à fala do paciente e aplicou a regra de fonte, deixando o campo null — mas aceitou o mesmo achado como `diagnostico`, saída internamente inconsistente; (2) no runtime, o fallback de despedida só era barrado por `_temTratamentoAtivo` (tratamento ou encaminhamento), e essa consulta tinha apenas receita de óculos — passou direto.
+- **Correção**: regra de consistência diagnóstico↔exame no prompt (sem tocar na regra de fonte) + rede determinística `temAchadoAnteriorNoDiagnostico()` aplicada a **todos** os pontos de default do injectAll. Política: campo vazio > texto fabricado. Testes `[DX-EXAME-1..9]` e `[DX-NORMAL-1..4]`.
 
 ### 2026-07-27 — Lateralidade (bilateralização de achado unilateral)
 - **Erro**: abrasão corneana por corpo estranho (só o olho direito na história) injetada como `AO`, descrevendo lesão no olho são; diagnóstico sem lado.

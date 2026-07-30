@@ -149,6 +149,36 @@ function stopCameraCapture() {
   if (isRecording && isSpeechPausedByCamera && typeof resumeSpeechRecognition === 'function') {
     resumeSpeechRecognition();
   }
+
+  // A câmera parou: qualquer modo estática armado expira aqui (a próxima
+  // captura volta a ser normal, a menos que o botão da retomada rearme).
+  _captureMode = 'normal';
+}
+
+// ============================================================================
+// CAPTURA PÓS-DILATAÇÃO (REFRAÇÃO ESTÁTICA)
+// ============================================================================
+//
+// Abre a câmera em modo 'estatica': a PRÓXIMA captura é entendida como o grau
+// dilatado e vai SOMENTE para o bloco Refração estática (sem injectAll, sem
+// tocar dinâmica/receita/tono/paqui/CID). Acionada pelo botão da linha de
+// retomada da sala de espera de dilatação.
+function startCameraCaptureEstatica() {
+  // Revela a seção de câmera sem passar pela auto-inicialização genérica do
+  // switchMode (que zera _captureMode). Depois arma o modo estática.
+  if (typeof currentMode !== 'undefined') currentMode = 'camera';
+  audioModeBtn?.classList.remove('active');
+  cameraModeBtn?.classList.add('active');
+  audioSection?.classList.add('hidden');
+  cameraSection?.classList.remove('hidden');
+
+  if (!cameraStream) startCameraCapture();
+  _captureMode = 'estatica';
+
+  if (cameraStatusText) {
+    cameraStatusText.textContent = 'Pós-dilatação: capture o ticket dilatado → Refração ESTÁTICA';
+    cameraStatusText.style.color = '#7c3aed';
+  }
 }
 
 // ============================================================================
@@ -246,6 +276,9 @@ async function captureAndProcess() {
   // entre o início da função e a remoção da classe 'hidden' do overlay
   if (manualCaptureBtn) manualCaptureBtn.disabled = true;
 
+  // Snapshot do modo ANTES de qualquer stopCameraCapture() (que zera o global).
+  const captureMode = _captureMode;
+
   try {
     processingOverlay.classList.remove('hidden');
     startProcessingTimer();
@@ -313,9 +346,38 @@ async function captureAndProcess() {
 
     // Caminho 1: captura falhou (duplicação detectada, valores absurdos, erro de API)
     //            → mostrar mensagem "Refazer captura" e parar.
+    // IMPORTANTE: stopCameraCapture() acima já zerou _captureMode para 'normal'.
+    // Passamos o modo do snapshot para que o "Refazer captura" REARME a estática —
+    // sem isso, uma captura estática que falha na verificação (rotina: ~1 em 3
+    // neste log) faria a retentativa cair no injectAll normal e empurrar o grau
+    // dilatado para a receita de óculos / refração dinâmica.
     if (validated._captureFailed) {
-      showCaptureFailedMessage(validated._reason || 'Captura inválida. Refaça a foto.');
-      cameraStatusText.textContent = 'Captura falhou — refaça';
+      showCaptureFailedMessage(validated._reason || 'Captura inválida. Refaça a foto.', captureMode);
+      cameraStatusText.textContent = captureMode === 'estatica'
+        ? 'Captura estática falhou — refaça (segue em modo Refração ESTÁTICA)'
+        : 'Captura falhou — refaça';
+      return;
+    }
+
+    // Caminho 2b: captura pós-dilatação → injeta SOMENTE a refração estática.
+    // Não passa por injectAll (nada de dinâmica/receita/tono/paqui/CID) e não
+    // deixa cameraData armado, para que um injectAll posterior não empurre este
+    // grau dilatado para a refração dinâmica.
+    if (captureMode === 'estatica') {
+      displayCameraResults(validated); // mostra os valores capturados p/ conferência
+      document.getElementById('receitaOculosOption')?.classList.add('hidden');
+      const refr = validated.refracao;
+      let ok = false;
+      if (refr && (refr.od || refr.oe)) {
+        try { ok = await injectRefracaoEstaticaDirect(refr); }
+        catch (e) { console.error('[Camera] Erro na injeção da refração estática:', e); }
+      }
+      cameraData = null;
+      cameraDataInjected = false;
+      cameraStatusText.textContent = ok
+        ? 'Refração estática (pós-dilatação) injetada!'
+        : 'Refração estática não injetada — confira os campos e o mapeamento.';
+      cameraStatusText.style.color = ok ? '#16a34a' : '#dc2626';
       return;
     }
 
@@ -419,7 +481,7 @@ function formatCil(value) {
 // detectada), mostramos apenas um aviso claro e um botão "Refazer captura".
 // Sem opções de "swap" ou "limpar OE" — a única ação confiável é nova foto.
 
-function showCaptureFailedMessage(reason) {
+function showCaptureFailedMessage(reason, retryMode = 'normal') {
   const existing = document.getElementById('refractionWarningBanner');
   if (existing) existing.remove();
 
@@ -447,8 +509,13 @@ function showCaptureFailedMessage(reason) {
 
   document.getElementById('retryCaptureBtn').addEventListener('click', () => {
     banner.remove();
-    // Reativar fluxo de câmera para nova captura
-    if (typeof startCameraCapture === 'function') {
+    // Reativar fluxo de câmera para nova captura, PRESERVANDO o modo original.
+    // Se a captura que falhou era estática (pós-dilatação), a retentativa precisa
+    // rearmar a estática — senão volta ao normal e o grau dilatado vaza para a
+    // receita/refração dinâmica via injectAll.
+    if (retryMode === 'estatica' && typeof startCameraCaptureEstatica === 'function') {
+      startCameraCaptureEstatica();
+    } else if (typeof startCameraCapture === 'function') {
       startCameraCapture();
     }
   });

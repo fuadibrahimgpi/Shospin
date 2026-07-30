@@ -80,6 +80,12 @@ async function startRecording() {
     // Resetar todo o estado de sessão via StateManager (flags, transcript, buffers, timers)
     StateManager.resetSession();
 
+    // Nova gravação = novo paciente: o aviso clínico da consulta anterior sai de
+    // cena aqui (o clearAll automático pós-injeção NÃO o remove — lá o médico
+    // ainda precisa lê-lo). Cobre quem nunca aperta "Limpar" entre pacientes.
+    const _warnBanner = document.getElementById('clinicalWarningBanner');
+    if (_warnBanner) _warnBanner.remove();
+
     // Proteção: cancelar stopCommandTimeout residual de sessão anterior
     // (pode sobreviver ao resetSession se foi agendado entre o reset e o start)
     if (stopCommandTimeout) {
@@ -338,8 +344,39 @@ function _handleManualReview(data, transcribedText) {
   );
 }
 
+/**
+ * Banner persistente de avisos clínicos do DecisionEngine (ex: biomicroscopia
+ * órfã). NÃO usa alert(): não é fatal e não deve travar o fluxo — mas precisa
+ * ficar visível até o médico limpar/injetar, porque sinaliza um campo que saiu
+ * em branco no prontuário.
+ */
+function _showClinicalWarnings(avisos) {
+  const existing = document.getElementById('clinicalWarningBanner');
+  if (existing) existing.remove();
+  if (!avisos || !avisos.length) return;
+
+  console.warn('[DecisionEngine] Avisos clínicos:', avisos);
+
+  const banner = document.createElement('div');
+  banner.id = 'clinicalWarningBanner';
+  const itens = avisos.map(a => `<li style="margin-bottom:4px">${a}</li>`).join('');
+  banner.innerHTML = `
+    <div style="background:#78350f;border:1px solid #f59e0b;border-radius:8px;padding:12px 14px;margin:10px 0;color:#fffbeb">
+      <div style="font-weight:700;font-size:13px;margin-bottom:6px">Atenção — revisar antes de fechar</div>
+      <ul style="font-size:12px;opacity:0.95;margin:0;padding-left:18px">${itens}</ul>
+    </div>`;
+
+  const container = audioFieldsContainer || document.getElementById('audioFieldsContainer');
+  if (container?.parentNode) {
+    container.parentNode.insertBefore(banner, container);
+  } else {
+    document.body.appendChild(banner);
+  }
+}
+
 async function processAudioInBackground(audioBlob, capturedText) {
   processingIndicator.classList.remove('hidden');
+  _analiseEmAndamento = true;
 
   try {
     processingStatus.textContent = 'Analisando com Gemini...';
@@ -500,6 +537,7 @@ async function processAudioInBackground(audioBlob, capturedText) {
           }
           console.log('[DecisionEngine] Flags reconciliadas:', decision.injectFlags,
             '| requestId:', decision.metadata.requestId);
+          _showClinicalWarnings(decision.avisos);
 
           // Usar resposta tratada pelo DE como fonte autoritativa
           workingData = decision.clonedAIResponse;
@@ -622,6 +660,7 @@ async function processAudioInBackground(audioBlob, capturedText) {
     statusText.textContent = 'Erro ao processar. Tente novamente.';
     statusText.style.color = '#dc2626';
   } finally {
+    _analiseEmAndamento = false;
     processingIndicator.classList.add('hidden');
     seconds = 0;
     updateTimerDisplay();
@@ -676,6 +715,21 @@ async function renderDilatacaoPausas() {
       ? 'Retomada armada — a próxima gravação continua a consulta deste paciente'
       : 'Paciente aguardando (a próxima gravação NÃO usa esta pausa a menos que você clique em Retomar)';
     row.appendChild(info);
+
+    // Slot armado (paciente voltou da dilatação): oferece capturar o NOVO grau
+    // dilatado e injetá-lo SOMENTE na Refração estática. Opt-in — nem toda
+    // retomada tem refração pós-dilatação.
+    if (slot.retomar) {
+      const estatica = document.createElement('button');
+      estatica.className = 'btn btn-secondary';
+      estatica.style.cssText = 'padding:2px 8px;font-size:11px;width:auto;';
+      estatica.textContent = '📷 Refração estática';
+      estatica.title = 'Capturar o ticket pós-dilatação e injetar apenas na Refração estática';
+      estatica.addEventListener('click', () => {
+        if (typeof startCameraCaptureEstatica === 'function') startCameraCaptureEstatica();
+      });
+      row.appendChild(estatica);
+    }
 
     const acao = document.createElement('button');
     acao.className = 'btn ' + (slot.retomar ? 'btn-secondary' : 'btn-primary');

@@ -732,6 +732,39 @@ Responda APENAS JSON puro (sem markdown). Exemplo de formato:
           // Flip puro de sinal (+1.00 vs -1.00): mesma magnitude, sinais
           // opostos. O caller dispara desempate por 3ª chamada nesse caso.
           const signFlip = pEsf !== 0 && Math.abs(pEsf + vEsf) < 0.01;
+
+          // ── (e) A 2ª leitura contradiz a PRÓPRIA aritmética ────────────────
+          // Testemunha que se auto-refuta não tem peso para derrubar uma 1ª
+          // leitura coerente. Se o trio (s, c, se) da verificação não fecha
+          // s + c/2 ≈ se, ela leu célula errada em algum ponto — e o único
+          // motivo de a 1ª estar bloqueada é a palavra dessa leitura quebrada.
+          // Generaliza (b)/(c), que só pegavam a assinatura estreita de "verify
+          // desceu uma linha"; aqui basta que a 2ª seja internamente incoerente.
+          //
+          // ESCOPO DELIBERADAMENTE ESTREITO — exige as três condições:
+          //   !signFlip  → flip puro de sinal NUNCA é liberado por esta via; a
+          //                política de recaptura obrigatória (caso 2026-07-24)
+          //                continua intacta, mesmo com a 2ª incoerente.
+          //   mathOk     → a 1ª precisa fechar S+C/2≈S.E. por conta própria.
+          //   > 0.30D    → mesma tolerância do cross-check de _postProcessRefraction.
+          //
+          // Caso real 2026-07-29 (pós-dilatação): 1ª leu OD -1.75 -2.00 x174,
+          // S.E. -2.75 (exato); a 2ª leu s="+2.00" c=-2 se="1.75" — que exigiria
+          // S.E.=+1.00. Não era flip puro (|-1.75 + 2.00| = 0.25), então nem o
+          // desempate rodava, e a captura correta foi bloqueada 5×. NÃO se aplica
+          // ao cilindro: em 18:27 a 1ª era coerente E errada (c=-0.5 vs -2.5 real),
+          // prova de que coerência interna não é prova de acerto.
+          if (!signFlip && mathOk) {
+            const vCilNum = v?.c != null ? parseFloat(v.c) : NaN;
+            if (!isNaN(vSe) && !isNaN(vCilNum)) {
+              const vSeCalc = vEsf + vCilNum / 2;
+              const vDiff = Math.abs(vSe - vSeCalc);
+              if (vDiff > 0.30) {
+                return { eye: lado, severity: 'soft', message: `${lado.toUpperCase()}: 2ª leitura é internamente incoerente (s=${vEsfStr}, c=${vCilNum} ⇒ S.E. esperado ${vSeCalc.toFixed(2)}, mas reportou ${vSeStr} — erro de ${vDiff.toFixed(2)}D); 1ª leitura fecha S+C/2≈S.E. Confira manualmente.` };
+              }
+            }
+          }
+
           return { eye: lado, severity: 'hard', signFlip, pEsf, vEsf, pEsfStr, vEsfStr, message: `${lado.toUpperCase()}: esfera discordante entre leituras (1ª="${pEsfStr}" vs 2ª="${vEsfStr}"). Refaça a captura.` };
         }
       } else if (!isNaN(pEsf) && isNaN(vEsf) && vEsfStr != null) {

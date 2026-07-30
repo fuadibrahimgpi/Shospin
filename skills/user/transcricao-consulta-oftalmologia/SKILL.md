@@ -130,6 +130,26 @@ agravado pelo trabalho com microscópio."
 ```
 *(A pressão de hoje vai no diagnóstico. A consulta de 2018 vai em antecedentes_oftalmologicos.)*
 
+#### Queixa principal — negativas de sintomas NÃO lideram:
+
+A queixa principal é sempre o **sintoma POSITIVO** que motivou a consulta. Não abra
+(nem preencha) a queixa principal com negativas de sintomas. As negativas relevantes
+**não são apagadas** — apenas não lideram: entram no corpo da HDA, depois da queixa positiva.
+
+**❌ Errado — negativa de sintoma abrindo a queixa:**
+```
+"Nega dor, coceira ou ardência. Refere desconforto ocasional ao usar computador,
+mas nega dificuldade para visão de perto."
+```
+
+**✅ Correto — queixa positiva lidera; negativas permanecem no corpo:**
+```
+"Desconforto ocasional ao usar computador. Nega dor, coceira ou ardência;
+nega dificuldade para visão de perto."
+```
+*(A negativa "nega dificuldade para perto" é MANTIDA — contrapõe presbiopia/H52.4 —,
+mas nunca lidera a queixa principal.)*
+
 ---
 
 ### `medicacoes_em_uso`
@@ -158,6 +178,17 @@ Formato sugerido: `"DM em uso de insulina e metformina, HAS em uso de losartan"`
 | Nunca fez cirurgia/tratamento | `"Nega diagnósticos e procedimentos oftalmológicos prévios"` |
 | Não tem doença | `"Nega comorbidades"` |
 | Família sem problema de visão | `"Nega diagnósticos oftalmológicos familiares"` |
+
+> ⚠️ **Anti-alucinação em `antecedentes_familiares` (CRÍTICO):** nunca fabrique um
+> antecedente familiar positivo a partir de ruído de STT que apenas *se parece* com a
+> pergunta do médico. Só registre doença familiar com resposta positiva CLARA do paciente
+> (*"minha mãe tem glaucoma"*, *"meu pai perdeu a visão"*).
+> - ❌ Médico pergunta *"algum parente perdeu a visão?"* e a transcrição traz o ruído
+>   *"perdeu a amizade muito muito carregamento"* → **não** interprete como parente que
+>   perdeu a visão. Trechos embolados que só rimam com a pergunta não são resposta.
+> - ✅ Nesse caso, como o médico **perguntou** e não houve afirmação clara →
+>   `"Nega diagnósticos oftalmológicos familiares"` (negativa implícita). Se o tópico
+>   nunca foi abordado → `null`. Jamais uma doença inventada.
 
 ### Afirmativas ambíguas — sem nome de doença:
 Quando o paciente confirma uso de remédio sistêmico ou acompanhamento médico regular mas **não nomeia** a doença, registre a informação disponível — **não use "Nega comorbidades"**:
@@ -275,66 +306,26 @@ Inclua `"H524 - Presbiopia"` no campo `diagnostico` **somente** se PELO MENOS UM
 `injectBlefarite` e `injectExamesNormais` são **MUTUAMENTE EXCLUSIVOS**.
 Se há blefarite → biomicroscopia NÃO é normal → `injectExamesNormais = false`.
 
-### `dados.biomicroscopia` — achados de segmento anterior
+### `dados.biomicroscopia` e `dados.fundoscopia` — delegação obrigatória
 
-#### ⚠️ REGRA DE FONTE — biomicroscopia (crítica)
-`dados.biomicroscopia` descreve EXCLUSIVAMENTE o que o **médico observou no exame atual**.
+> ⚠️ **A descrição do segmento ANTERIOR (`biomicroscopia`) e do segmento
+> POSTERIOR (`fundoscopia`) é sempre resolvida pelas skills dedicadas
+> `biomicroscopia-oftalmologia` e `fundoscopia-oftalmologia`.**
+>
+> Nunca classifique esses campos diretamente aqui. Passe o trecho relevante da
+> transcrição (queixa/HDA + fala do exame) para a skill correspondente e use o
+> output dela para preencher o campo e ajustar `injectExamesNormais` /
+> `injectBlefarite`. A cópia que executa em produção é o prompt
+> `src/gemini-interview-agent.js`.
 
-❌ NUNCA inclua na biomicroscopia:
-- Achados relatados pelo **paciente** como histórico (ex: "olho ficou vermelho 3 dias atrás")
-- Diagnósticos de consultas anteriores em outros serviços
-- Qualquer informação subjetiva que não seja observação direta do médico no exame presente
+Resumo das regras que aquelas skills aplicam (orientação rápida — a fonte
+canônica são as skills e o prompt):
 
-✅ Quando colocar onde:
-| Fonte | Campo |
-|---|---|
-| Paciente: "meu olho ficou vermelho há dias" | → `hda` |
-| Médico examinando: "hemorragia subconjuntival OD presente" | → `dados.biomicroscopia` |
-| Histórico em outro serviço: "operou retina em Palma" | → `antecedentes_oftalmologicos` |
-
-Popule este campo APENAS quando há achado específico de segmento anterior **detectado pelo médico no exame atual** (pterígio, pinguécula, leucoma, hemorragia subconjuntival observada, etc.).
-
-**Modelo base (sem blefarite):**
-`"AO: pterígio [localização] em crescimento; córnea transparente, câmara anterior formada, pupila regular e reagente, cristalino transparente"`
-
-**Modelo combinado (pterígio + blefarite concomitante):**
-`"AO: pterígio [localização] em crescimento; hiperemia e espessamento da margem palpebral, telangiectasias e disfunção de glândulas de meibômio com secreção espessa; córnea transparente, câmara anterior formada, pupila regular e reagente, cristalino transparente"`
-
-Quando `dados.biomicroscopia` está preenchido, ele **substitui** o template padrão de blefarite — não é necessário repetir os achados em outro campo.
-
-#### ⚠️ REGRA CRÍTICA — Paciente pseudofácico (pós-facectomia)
-
-Quando `antecedentes_oftalmologicos` contém **facectomia**, **cirurgia de catarata**, **facoemulsificação** ou equivalente:
-
-- **NUNCA escreva "catarata" na biomicroscopia** — após a cirurgia não há mais catarata, a lente natural foi removida
-- **NUNCA escreva "cristalino transparente"** — o cristalino natural não existe mais
-- Substitua obrigatoriamente por: `"pseudofácico, LIO bem posicionada"`
-
-| Situação do cristalino | O que escrever na biomicroscopia |
-|---|---|
-| Paciente sem cirurgia prévia | `cristalino transparente` |
-| Pós-facectomia (IOL implantada) | `pseudofácico, LIO bem posicionada` |
-| Pós-facectomia + opacidade de cápsula | `pseudofácico, opacidade de cápsula posterior` |
-
-**Exemplos:**
-
-❌ Errado — paciente operou catarata mas biomicroscopia diz "catarata" ou "cristalino transparente":
-```
-antecedentes_oftalmologicos: "Cirurgia de catarata AO — última há 3 meses"
-biomicroscopia: "... pupila regular e reagente, catarata"   ← ERRADO: não há mais catarata
-biomicroscopia: "... pupila regular e reagente, cristalino transparente"  ← ERRADO: cristalino foi removido
-```
-
-✅ Correto — paciente pseudofácico:
-```
-antecedentes_oftalmologicos: "Cirurgia de catarata AO — última há 3 meses"
-biomicroscopia: "AO: pterígio nasal; córnea transparente, câmara anterior formada,
-                 pupila regular e reagente, pseudofácico, LIO bem posicionada"
-```
-
-> **Origem desta regra (2026-06-24):** paciente relatou "catarata os dois, as duas cirurgias" na anamnese histórica. O modelo usou este dado histórico para escrever "catarata" na biomicroscopia como se fosse achado atual do exame — erro de fonte. A menção de catarata na transcrição deve ir para `antecedentes_oftalmologicos`; a biomicroscopia deve refletir o estado atual (LIO implantada).
-
-Se não houver achado específico de segmento anterior → deixe `dados.biomicroscopia: null` (o sistema usará o template automático correto).
+- **Normal nos dois olhos** → campo `null` + `injectExamesNormais=true` (template `AO` automático).
+- **Achado em um olho** → olho afetado detalhado + contralateral normal (`olho calmo` na biomicroscopia, `fundo sem alterações` na fundoscopia); `injectExamesNormais=false`.
+- **Lateralidade** sai de TODA a consulta; `AO` PROIBIDO em achado unilateral por natureza; lado indeterminável → `[CONFIRMAR OLHO AFETADO]`.
+- **Fonte** = exame do médico, nunca relato do paciente nem histórico.
+- **Exclusão mútua**: `injectBlefarite` e `injectExamesNormais` nunca são ambos `true`.
 
 ---
 
@@ -538,3 +529,5 @@ Resultado:
 | 2026-06-18 | Falso positivo opacidade cápsula | `opacidadeCapsulaDetectada=true` disparado pelo relato histórico do paciente ("fiz limpeza da lente") | `'limpeza da lente'` em OPACIDADE_CAPSULA_COMMANDS era genérico demais — aparece em histórico de pacientes pseudofácicos | Removido das triggers genéricas; adicionado LENTE_LIMPA_COMMANDS como sinal negativo explícito ("lente limpa") |
 | 2026-06-19 | Falso positivo H524 | Presbiopia (H524) inserida em consultaS onde paciente apenas menciona já usar multifocal/óculos para perto na anamnese, sem queixa ativa de dificuldade de perto nesta visita | Regra "obrigatória quando multifocal é prescrito" era ampla demais — disparava em renovação de receita e em menções históricas | Seção "FLAGS DE DIAGNÓSTICO — Presbiopia" adicionada com critérios explícitos; Caso 6 dividido em 6a (H524 ✅) e 6b (H524 ❌) |
 | 2026-06-24 | Fonte errada na biomicroscopia (paciente pseudofácico) | Paciente relatou "catarata os dois, as duas cirurgias" na anamnese → modelo escreveu "catarata" (ou "cristalino transparente") na biomicroscopia como se fosse achado atual | Dado histórico da anamnese (cirurgia prévia) foi confundido com achado de exame; a regra de fonte estava definida para "hemorragia subconjuntival" mas não cobria o caso de pseudofácico | Regra explícita adicionada na seção `dados.biomicroscopia`: pós-facectomia → "cristalino transparente" proibido → obrigatório "pseudofácico, LIO bem posicionada" |
+| 2026-07-27 | Lateralidade — bilateralização de achado unilateral | Abrasão corneana por corpo estranho (só o olho direito na história) injetada como `AO`, descrevendo lesão no olho são; diagnóstico `H161 - Ceratite traumática` sem lado | Regra antiga mandava usar `AO` como "fallback seguro" quando o médico não citava o olho no exame — fez exatamente o que está escrito. Lateralidade estava presa à fala do exame, ignorando a queixa/HDA | Regra reescrita (`biomicroscopia` + `diagnostico`): lado sai de toda a consulta; `AO` PROIBIDO em achados unilaterais por natureza (trauma/corpo estranho/abrasão); lado indeterminável → `[CONFIRMAR OLHO AFETADO]` / `(confirmar olho)`, nunca assumir `AO` |
+| 2026-07-28 | Fundoscopia sem regras de lateralidade (assimetria com a biomicroscopia) | A fundoscopia tinha só formato `OD sem alterações / OE achado` numa linha; sem regra de `AO`-proibido para achado unilateral, sem descritor normal completo do olho contralateral, sem escape de lado indeterminável | A seção de fundoscopia no prompt nunca recebeu o bloco de lateralidade que a biomicroscopia ganhou — dependia 100% do LLM não bilateralizar um descolamento/nevo/glaucoma | Seção `dados.fundoscopia` reescrita simétrica à biomicroscopia (prompt + SKILL): formato por olho (`OD:`/`OE:` em linhas separadas), contralateral como `fundo sem alterações`, `AO` proibido em achado posterior unilateral por natureza, `escavação fisiológica` (não "simétrica") em linha de um olho, regra de flag `injectExamesNormais=false` quando há achado |

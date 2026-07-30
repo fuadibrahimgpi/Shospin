@@ -260,17 +260,76 @@ test('[C5] clearAll reseta dilatacaoDetectada também quando apenas clearCamera 
 // ──────────────────────────────────────────────────────────────────────────────
 
 test('[FUNDO-1] branch de blefarite não fixa mais FUNDOSCOPIA_NORMAL — prefere dados.fundoscopia', () => {
-  expect(injectionJsSource).toContain("fundoscopia: audioData?.dados?.fundoscopia || FUNDOSCOPIA_NORMAL");
+  // dados.fundoscopia continua tendo prioridade sobre o template. O fallback passa pelo
+  // helper seguro (2026-07-29), que suprime o normal quando o diagnóstico afirma achado
+  // de fundo — mas a preferência pelo dado descrito é a mesma.
+  expect(injectionJsSource).toContain("fundoscopia: audioData?.dados?.fundoscopia || _fundoNormalSeguro()");
   // O comentário que sustentava o bug ("blefarite sempre injeta fundoscopia normal")
   // não pode voltar: blefarite é achado de segmento anterior e não implica fundo normal.
   expect(/blefarite sempre injeta fundoscopia normal/.test(injectionJsSource)).toBe(false);
 });
 
+// ──────────────────────────────────────────────────────────────────────────────
+// EXAME NORMAL NUNCA CONTRADIZ O DIAGNÓSTICO (log 2026-07-29)
+// Diagnóstico "H111 - Pterígio OD" + biomicroscopia null → o fallback de despedida
+// injetava "AO: olho calmo" no prontuário, contradizendo o próprio diagnóstico.
+// ──────────────────────────────────────────────────────────────────────────────
+
+test('[DX-NORMAL-1] no bloco pós-análise, todo default normal passa pelo helper', () => {
+  // Escopo: apenas o bloco de exames do injectAll (onde o diagnóstico do Gemini já existe).
+  // As injeções AO VIVO por gatilho de voz (injectExamesNormaisDirect/injectBlefariteDirect)
+  // ficam de fora de propósito: disparam durante a gravação, antes de haver diagnóstico —
+  // ali o médico declarou "exames normais" em voz alta e o template é o correto. Se a
+  // análise depois contradisser, o branch de correção pós-análise conserta.
+  const ini = injectionJsSource.indexOf('// Nunca afirmar exame NORMAL que contradiz');
+  const fim = injectionJsSource.indexOf('// Correção pós-análise');
+  expect(ini > 0 && fim > ini).toBe(true);
+
+  const linhas = injectionJsSource.slice(ini, fim).split('\n')
+    .filter(l => /getBiomicroscopiaComLente\(BIOMICROSCOPIA_NORMAL\)|:\s*FUNDOSCOPIA_NORMAL\b|\|\|\s*FUNDOSCOPIA_NORMAL\b|\|\|\s*BIOMICROSCOPIA_NORMAL\b/.test(l))
+    .filter(l => !/return getBiomicroscopiaComLente\(BIOMICROSCOPIA_NORMAL\);|return FUNDOSCOPIA_NORMAL;/.test(l));
+  expect(linhas).toEqual([]);
+});
+
+test('[DX-NORMAL-2] o fallback de despedida usa os helpers seguros', () => {
+  expect(injectionJsSource).toContain('biomicroscopia: _bioNormalSeguro(),');
+  expect(injectionJsSource).toContain('fundoscopia: mencionouFundoNaFala ? _fundoNormalSeguro() : null,');
+});
+
+test('[DX-NORMAL-3] helpers consultam o diagnóstico da consulta', () => {
+  expect(injectionJsSource).toContain('temAchadoAnteriorNoDiagnostico(audioData?.dados?.diagnostico)');
+  expect(injectionJsSource).toContain('temAchadoPosteriorNoDiagnostico(audioData?.dados?.diagnostico)');
+});
+
+test('[DX-NORMAL-5] payload com os dois campos nulos vira null (evita aviso enganoso)', () => {
+  // examesNormais truthy com tudo null faz o content.js reportar "não foram injetadas",
+  // mas a supressão é deliberada — null é o estado de "nada a injetar".
+  expect(injectionJsSource).toContain('combinedData.examesNormais = null;');
+});
+
+test('[DX-NORMAL-4] content.js não injeta biomicroscopia quando o campo vem null', () => {
+  // Sem este guard, suprimir a biomicroscopia causaria TypeError no .replace().
+  const contentSrc = readSrcNormalized('src', 'content.js');
+  expect(contentSrc).toContain('data.biomicroscopia ? this.detector.getTabId(\'biomicroscopia\') : null');
+});
+
 test('[FUNDO-2] achado de fundo corrige a fundoscopia normal já injetada por gatilho de voz', () => {
   // Sem este branch, o guard !blefariteInjetada && !examesNormaisInjetados faz o
   // injectAll pular todo o bloco de exames e a fundoscopia normal do gatilho persiste.
-  expect(injectionJsSource).toContain('} else if (!audioData?.dilatacaoDetectada && audioData?.dados?.fundoscopia) {');
-  expect(injectionJsSource).toContain('fundoscopia: audioData.dados.fundoscopia,');
+  // A condição cobre biomicroscopia TAMBÉM (2026-07-29): gatilho ao vivo injeta
+  // "AO: olho calmo" e o médico acha o pterígio depois — sem biomicroscopia na
+  // condição, o bloco inteiro era pulado e o falso normal ficava no prontuário.
+  expect(injectionJsSource).toContain(
+    "(audioData?.dados?.biomicroscopia || audioData?.dados?.fundoscopia)) {");
+  expect(injectionJsSource).toContain('fundoscopia: audioData.dados.fundoscopia || null,');
+});
+
+test('[FUNDO-3] correção pós-gatilho também repara biomicroscopia (log 2026-07-29)', () => {
+  // Regressão: antes, só dados.fundoscopia entrava no branch de correção.
+  const ini = injectionJsSource.indexOf('// Correção pós-análise');
+  expect(ini > 0).toBe(true);
+  const bloco = injectionJsSource.slice(ini, ini + 1200);
+  expect(/biomicroscopia:\s*_bioExplicita\s*\?/.test(bloco)).toBe(true);
 });
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -1760,6 +1819,79 @@ test('[SIGN-1] flip puro de sinal da esfera é marcado signFlip + severidade har
   expect(m.severity).toBe('hard');
 });
 
+// ──────────────────────────────────────────────────────────────────────────────
+// 2026-07-29 — 2ª leitura que contradiz a própria aritmética não bloqueia a 1ª.
+// Log real: 5 capturas seguidas bloqueadas; a 1ª leitura fechou S+C/2≈S.E. em
+// 5 de 5, a 2ª errou a própria conta em 4 de 5 (e perdeu o sinal do S.E. no OE
+// em 4 de 5). A refração pós-dilatação nunca chegou a ser injetada.
+// ──────────────────────────────────────────────────────────────────────────────
+
+test('[VMATH-1] log 2026-07-29: 2ª leitura incoerente vira soft (1ª coerente, sem flip puro)', () => {
+  // 1ª: -1.75 + (-2.00)/2 = -2.75 = S.E. → coerente.
+  // 2ª: +2.00 + (-2.00)/2 = +1.00, mas reportou S.E.="1.75" → erro de 0.75D.
+  // |−1.75 + 2.00| = 0.25 ⇒ NÃO é flip puro, então o desempate nem roda.
+  const processed = { od: { esf: '-1.75', cil: -2.00, eixo: 174, se: '-2.75' }, oe: null };
+  const verify    = { od: { s: '+2.00', c: -2.00, a: 174, se: '1.75' }, oe: null };
+  const m = _examAgent._compareRefractionAgainstVerify(processed, verify);
+  expect(m !== null).toBe(true);
+  expect(m.severity).toBe('soft'); // soft + 1ª math-consistent ⇒ caller não bloqueia
+});
+
+test('[VMATH-2] flip PURO de sinal continua hard mesmo com a 2ª incoerente (política intacta)', () => {
+  // Captura 18:32 do mesmo log: 1ª "-2.00" vs 2ª "+2.00" = flip puro.
+  // A 2ª também é incoerente (+2.00 −1.25 = +0.75, reportou "0.25"), mas o
+  // fail-safe de sinal (2026-07-24) tem precedência — não pode ser destravado.
+  const processed = { od: { esf: '-2.00', cil: -2.50, eixo: 177, se: '-3.25' }, oe: null };
+  const verify    = { od: { s: '+2.00', c: -2.50, a: 177, se: '0.25' }, oe: null };
+  const m = _examAgent._compareRefractionAgainstVerify(processed, verify);
+  expect(m.signFlip).toBe(true);
+  expect(m.severity).toBe('hard');
+});
+
+test('[VMATH-3] 2ª leitura COERENTE que discorda continua bloqueando (não vira soft)', () => {
+  // Captura 19:00: ambas as leituras fecham a própria conta — ambiguidade real.
+  const processed = { od: { esf: '+1.75', cil: -2.00, eixo: 174, se: '+0.75' }, oe: null };
+  const verify    = { od: { s: '-1.75', c: -2.00, a: 174, se: '-2.75' }, oe: null };
+  const m = _examAgent._compareRefractionAgainstVerify(processed, verify);
+  expect(m.severity).toBe('hard');
+});
+
+test('[VMATH-4] 1ª leitura NÃO-coerente não é resgatada pela incoerência da 2ª', () => {
+  // 1ª: -1.75 + (-2.00)/2 = -2.75, mas reportou S.E."-1.00" → também quebrada.
+  // Duas leituras ruins ⇒ bloqueio, nunca liberação.
+  const processed = { od: { esf: '-1.75', cil: -2.00, eixo: 174, se: '-1.00' }, oe: null };
+  const verify    = { od: { s: '+2.00', c: -2.00, a: 174, se: '1.75' }, oe: null };
+  const m = _examAgent._compareRefractionAgainstVerify(processed, verify);
+  expect(m.severity).toBe('hard');
+});
+
+test('[VMATH-5] flip de sinal no OE também segue hard (o loop varre od E oe)', () => {
+  // O ramo roda para os DOIS olhos e retorna no 1º mismatch — testar só OD não
+  // prova nada sobre OE. Aqui a 2ª leitura é incoerente (+3.50 -0.75 = +2.75 vs
+  // "1.00" reportado) E é flip puro de sinal ⇒ o guard !signFlip tem de segurar.
+  // Se voltar 'soft', o guard está no lugar errado e a política de sinal foi
+  // afrouxada justamente no olho que os outros testes não cobrem.
+  const processed = { od: null, oe: { esf: '-3.50', cil: -1.5, eixo: 176, se: '-4.25' } };
+  const verify    = { od: null, oe: { s: '+3.50', c: -1.5, a: 176, se: '1.00' } };
+  const m = _examAgent._compareRefractionAgainstVerify(processed, verify);
+  expect(m.eye).toBe('oe');
+  expect(m.signFlip).toBe(true);
+  expect(m.severity).toBe('hard');
+});
+
+test('[VMATH-6] PRÉ-EXISTENTE: hatch "verify leu S.E. como esfera" tem precedência sobre signFlip', () => {
+  // Dados literais do OE na captura 19:03: a 2ª reportou s="+3.50" e se="3.50"
+  // (idênticos) — assinatura (c) verifyAutoConfuso. Esse escape é avaliado ANTES
+  // de signFlip ser calculado, então um flip puro de sinal SAI como 'soft' por
+  // esta via. Comportamento anterior a [VMATH-1..5], não introduzido por elas;
+  // fixado aqui para que qualquer mudança futura na precedência apareça.
+  const processed = { od: null, oe: { esf: '-3.50', cil: -1.5, eixo: 176, se: '-4.25' } };
+  const verify    = { od: null, oe: { s: '+3.50', c: -1.5, a: 176, se: '3.50' } };
+  const m = _examAgent._compareRefractionAgainstVerify(processed, verify);
+  expect(m.severity).toBe('soft');
+  expect(m.signFlip).toBe(undefined); // não chega ao ramo de sinal
+});
+
 test('[SIGN-2] caller NUNCA auto-libera flip de sinal (sem mismatch=null no ramo signFlip)', () => {
   const start = examJsSource.indexOf("mismatch.severity === 'hard' && mismatch.signFlip");
   const end = examJsSource.indexOf('Desempate de Cilindro');
@@ -2079,12 +2211,487 @@ async function _dilatacaoQueueTests() {
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
+// REFRAÇÃO ESTÁTICA — rearme do modo após captura falhar (fix 2026-07-27)
+// ──────────────────────────────────────────────────────────────────────────────
+//
+// Modelo fiel do roteamento de scripts/sidepanel-camera.js. Bug corrigido: uma
+// captura ESTÁTICA (pós-dilatação) que falha na verificação do OCR passava por
+// stopCameraCapture() (zera _captureMode='normal') e o botão "Refazer captura"
+// reiniciava em modo NORMAL → a retentativa rodava injectAll e empurrava o grau
+// dilatado para a RECEITA DE ÓCULOS + refração dinâmica + CID. O fix passa o
+// snapshot do captureMode para showCaptureFailedMessage e rearma a estática no
+// retry. Fonte espelhada: captureAndProcess (branch _captureFailed),
+// showCaptureFailedMessage(reason, retryMode), startCameraCaptureEstatica,
+// stopCameraCapture.
+
+function _estaticaRetryTests() {
+  let _captureMode = 'normal';
+  const calls = [];
+
+  // stopCameraCapture(): ao parar a câmera, o modo expira para 'normal'.
+  const stopCameraCapture = () => { _captureMode = 'normal'; };
+  // startCameraCapture() (entrada normal, via switchMode): captura → dinâmica.
+  const startCameraCapture = () => { calls.push('normal'); _captureMode = 'normal'; };
+  // startCameraCaptureEstatica(): rearma estática (NÃO passa por switchMode).
+  const startCameraCaptureEstatica = () => { calls.push('estatica'); _captureMode = 'estatica'; };
+
+  // Handler do botão "Refazer captura" (o default 'normal' preserva chamadas legadas).
+  const retry = (retryMode = 'normal') => {
+    if (retryMode === 'estatica') startCameraCaptureEstatica();
+    else startCameraCapture();
+  };
+
+  // Fluxo de uma captura que falha na verificação: arma o modo → captura →
+  // captureAndProcess tira o snapshot (const captureMode = _captureMode) →
+  // stopCameraCapture() zera o modo → branch _captureFailed chama
+  // showCaptureFailedMessage(reason, snapshot) → usuário clica Refazer.
+  const capturaFalhaERetenta = (modoArmado) => {
+    _captureMode = modoArmado;
+    const snapshot = _captureMode;   // camera.js:280
+    stopCameraCapture();             // camera.js:344 — zera para 'normal'
+    retry(snapshot);                 // camera.js:349 → botão Refazer preserva o modo
+    return _captureMode;
+  };
+
+  test('[EST-RETRY-1] captura ESTÁTICA que falha → retry rearma estática', () => {
+    calls.length = 0;
+    expect(capturaFalhaERetenta('estatica')).toBe('estatica');
+    expect(calls).toEqual(['estatica']);
+  });
+
+  test('[EST-RETRY-2] captura NORMAL que falha → retry segue normal', () => {
+    calls.length = 0;
+    expect(capturaFalhaERetenta('normal')).toBe('normal');
+    expect(calls).toEqual(['normal']);
+  });
+
+  test('[EST-RETRY-3] regressão: threading do snapshot é o que separa o fix do bug', () => {
+    // Sem o fix, o snapshot era descartado (showCaptureFailedMessage(reason)) e o
+    // retry caía no default normal → vazamento p/ receita + refração dinâmica.
+    const semFix = (() => { _captureMode = 'estatica'; stopCameraCapture(); retry(); return _captureMode; })();
+    const comFix = (() => { _captureMode = 'estatica'; const snap = _captureMode; stopCameraCapture(); retry(snap); return _captureMode; })();
+    expect(semFix).toBe('normal');    // comportamento antigo (bug)
+    expect(comFix).toBe('estatica');  // comportamento corrigido
+    expect(semFix).not.toBe(comFix);
+  });
+
+  test('[EST-RETRY-4] retryMode default preserva o caminho normal (chamada legada)', () => {
+    calls.length = 0;
+    retry();
+    expect(calls).toEqual(['normal']);
+  });
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// 2026-07-29 — Blefarite descrita em linguagem LEIGA + biomicroscopia órfã
+//
+// Log 2026-07-29: consulta inteiramente de blefarite. O médico nunca disse
+// "blefarite" ao paciente — falou de cílios, das glândulas de óleo da pálpebra,
+// de pele oleosa e de pontinhos de inflamação. O guard literal derrubou
+// injectBlefarite; como o LLM tinha deixado biomicroscopia=null CONFIANDO na
+// flag (o texto viria do template), o bloco de exame saiu EM BRANCO em silêncio
+// e o prontuário ficou só com H52.2.
+// ──────────────────────────────────────────────────────────────────────────────
+
+const _TRANSCRICAO_LEIGA_2026_07_29 =
+  'ainda tá um pouco vermelho e outra coisa são os cílios, não sei se percebeu. ' +
+  'Volta só para higiene, isso é uma coisa que vai te acompanhar o resto da vida ' +
+  'porque sua pele é muito oleosa. Na pele o problema são as glândulas que produzem ' +
+  'a parte lipídica, a parte de óleo da pálpebra. Dá pra ver que tá com bastante ' +
+  'pontinho de inflamação.';
+
+test('[BLEF-LEIGO-1] descrição leiga (cílios + glândulas de óleo da pálpebra) preserva injectBlefarite', () => {
+  const raw = {
+    tipo_consulta: 'primeira_consulta',
+    dados: { hda: 'melhora parcial', diagnostico: 'H010 - Blefarite bilateral', biomicroscopia: null },
+    injectBlefarite: true,
+  };
+  const decision = DecisionEngine.buildDecision(raw, {
+    transcribedText: _TRANSCRICAO_LEIGA_2026_07_29,
+    hookFlags: {},
+  });
+  expect(decision.injectFlags.injectBlefarite).toBe(true);
+  // O CID de blefarite permanece no diagnóstico
+  expect(decision.clonedAIResponse.dados.diagnostico).toContain('H010');
+  // Flag preservada ⇒ o template cobre a biomicroscopia ⇒ nada de aviso
+  expect(decision.avisos.length).toBe(0);
+});
+
+test('[BLEF-LEIGO-2] "compressa" + "higiene" (sem a adjacência "higiene palpebral") preserva a flag', () => {
+  const raw = { tipo_consulta: 'retorno', dados: { biomicroscopia: null }, injectBlefarite: true };
+  const decision = DecisionEngine.buildDecision(raw, {
+    transcribedText: 'faz compressa morna e mantém a higiene todo dia',
+    hookFlags: {},
+  });
+  expect(decision.injectFlags.injectBlefarite).toBe(true);
+});
+
+test('[BLEF-LEIGO-3] pálpebra SOZINHA (sem sinal de blefarite) ainda reverte a flag', () => {
+  // A conjunção (e) exige as duas pontas — não pode virar um passe-livre.
+  const raw = { tipo_consulta: 'primeira_consulta', dados: { biomicroscopia: 'OD: pterígio nasal grau I' }, injectBlefarite: true };
+  const decision = DecisionEngine.buildDecision(raw, {
+    transcribedText: 'o pterígio está crescendo em direção à córnea; a pálpebra não tem nada',
+    hookFlags: {},
+  });
+  expect(decision.injectFlags.injectBlefarite).toBe(false);
+});
+
+test('[BIOMICRO-ORFA-1] flag revertida + biomicroscopia null ⇒ aviso ao médico (campo em branco)', () => {
+  const raw = {
+    tipo_consulta: 'primeira_consulta',
+    dados: { hda: 'olho seco', diagnostico: 'H522 - Astigmatismo OD', biomicroscopia: null },
+    injectBlefarite: true,
+    injectExamesNormais: false,
+  };
+  const decision = DecisionEngine.buildDecision(raw, {
+    transcribedText: 'paciente com olho seco, vamos acompanhar a visão e o grau',
+    hookFlags: {},
+  });
+  expect(decision.injectFlags.injectBlefarite).toBe(false);
+  expect(decision.avisos.length).toBe(1);
+  expect(decision.avisos[0]).toContain('EM BRANCO');
+  expect(decision.guardsApplied.some(g => /órfã/i.test(g))).toBe(true);
+});
+
+test('[BIOMICRO-ORFA-2] flag revertida MAS biomicroscopia preenchida ⇒ sem aviso', () => {
+  const raw = {
+    tipo_consulta: 'primeira_consulta',
+    dados: { biomicroscopia: 'OD: córnea transparente, câmara anterior formada' },
+    injectBlefarite: true,
+  };
+  const decision = DecisionEngine.buildDecision(raw, {
+    transcribedText: 'a visão está boa, o grau se manteve',
+    hookFlags: {},
+  });
+  expect(decision.injectFlags.injectBlefarite).toBe(false);
+  expect(decision.avisos.length).toBe(0);
+});
+
+test('[BIOMICRO-ORFA-3] dilatação zera a flag por design ⇒ sem aviso (exame pertence à fase 2)', () => {
+  const raw = {
+    tipo_consulta: 'primeira_consulta',
+    dados: { biomicroscopia: null },
+    injectBlefarite: true,
+    dilatacaoDetectada: true,
+  };
+  const decision = DecisionEngine.buildDecision(raw, {
+    transcribedText: 'blefarite presente, vou dilatar para ver o fundo',
+    hookFlags: {},
+  });
+  expect(decision.injectFlags.injectBlefarite).toBe(false);
+  expect(decision.avisos.length).toBe(0);
+});
+
+test('[BIOMICRO-ORFA-4] hook de blefarite já injetou o template ⇒ sem aviso', () => {
+  const raw = { tipo_consulta: 'primeira_consulta', dados: { biomicroscopia: null }, injectBlefarite: true };
+  const decision = DecisionEngine.buildDecision(raw, {
+    transcribedText: 'blefarite bilateral',
+    hookFlags: { blefariteInjetada: true },
+  });
+  expect(decision.injectFlags.injectBlefarite).toBe(false);
+  expect(decision.avisos.length).toBe(0);
+});
+
+// ──────────────────────────────────────────────────────────────────────────────
+// 2026-07-29 — CID relançado porque a cadeia esvaziou o diagnosticoField
+//
+// handleSearchCid consome o campo termo a termo (field.value = terms.slice(1)).
+// Ao fim da cadeia o campo está vazio; a passada seguinte (OCR) montava a base de
+// deduplicação a partir dele e relançava H52.2 no SHOSP. _cidsLancadosNaSessao é
+// a memória que sobrevive a esse consumo.
+// ──────────────────────────────────────────────────────────────────────────────
+
+const constantsJsSource = readSrcNormalized('scripts', 'sidepanel-constants.js');
+const stateManagerSource = readSrcNormalized('scripts', 'state-manager.js');
+
+test('[CIDDUP-1] _cidsLancadosNaSessao existe e é zerado em resetSession (não vaza entre pacientes)', () => {
+  expect(constantsJsSource).toContain('let _cidsLancadosNaSessao');
+  expect(stateManagerSource).toContain('_cidsLancadosNaSessao = new Set()');
+});
+
+test('[CIDDUP-2] registro do CID lançado fica no ramo de SUCESSO, antes de o campo ser consumido', () => {
+  // `field.value = terms.slice(1)` aparece 2x (sucesso e falha) — ancorar em
+  // `resp.success` garante que estamos olhando o ramo certo.
+  const idxSucesso = injectionJsSource.indexOf('if (resp && resp.success) {');
+  expect(idxSucesso > -1).toBe(true);
+  const ramoSucesso = injectionJsSource.slice(idxSucesso, idxSucesso + 700);
+  const idxRegistro = ramoSucesso.indexOf('_cidsLancadosNaSessao.add(_key)');
+  const idxConsumo = ramoSucesso.indexOf("field.value = terms.slice(1).join('\\n');");
+  expect(idxRegistro > -1).toBe(true);
+  expect(idxConsumo > -1).toBe(true);
+  expect(idxRegistro < idxConsumo).toBe(true);
+  // O ramo de FALHA não pode registrar: CID recusado pelo SHOSP não foi lançado
+  // e precisa continuar elegível numa passada posterior.
+  const idxFalha = injectionJsSource.indexOf('// S2: pular termo com falha');
+  expect(injectionJsSource.slice(idxFalha, idxFalha + 700)).not.toContain('_cidsLancadosNaSessao.add');
+});
+
+test('[CIDDUP-3] merge do OCR deduplica contra os CIDs já lançados, não só contra o campo', () => {
+  expect(injectionJsSource).toContain('..._cidsLancadosNaSessao,');
+});
+
+test('[CIDDUP-4] limpeza manual (novo paciente) zera a memória de CIDs lançados', () => {
+  const bloco = injectionJsSource.slice(injectionJsSource.indexOf('options.discardDilatacao === true'));
+  expect(bloco.slice(0, 400)).toContain('_cidsLancadosNaSessao = new Set()');
+});
+
+test('[CIDDUP-5] _cidKey colapsa "H522 - Astigmatismo OD", "H52.2 - Astigmatismo" e "Astigmatismo"', () => {
+  // Reproduz _cidKey isoladamente (o módulo é DOM-dependente e não é require-ável).
+  const CID_CODE_PATTERN = /^([A-Z]\d+(?:\.\d+)?)\s*[-–]/;
+  const termToCid = [[/astigmat/i, 'H522'], [/miop/i, 'H521']];
+  const keyFromText = t => (termToCid.find(([re]) => re.test(t)) || [])[1] || null;
+  const cidKey = (term) => {
+    const t = (term || '').trim();
+    if (!t) return '';
+    const m = t.match(CID_CODE_PATTERN);
+    if (m) return m[1].replace(/\./g, '').toUpperCase();
+    const bare = t.match(/^([A-Za-z]\d+(?:\.\d+)?)$/);
+    if (bare) return bare[1].replace(/\./g, '').toUpperCase();
+    return keyFromText(t) || t.toUpperCase();
+  };
+  expect(cidKey('H522 - Astigmatismo OD')).toBe('H522');
+  expect(cidKey('H52.2 - Astigmatismo')).toBe('H522');
+  expect(cidKey('H52.2')).toBe('H522');
+  expect(cidKey('Astigmatismo')).toBe('H522');
+});
+
+// ──────────────────────────────────────────────────────────────────────────────
+// 2026-07-29 — Ciclo de vida do banner de aviso clínico
+//
+// O banner nasce na análise; o injectAll dispara clearAll(clearAudio) ~1,5s
+// depois. Se a remoção morasse nesse clearAll, o aviso piscaria e sumiria antes
+// de o médico ler — exatamente quando um campo acabou de entrar VAZIO no
+// prontuário. Ele só pode morrer na fronteira de PACIENTE.
+// ──────────────────────────────────────────────────────────────────────────────
+
+// audioJsSource já declarado acima (linha ~358).
+
+test('[AVISO-1] clearAll automático pós-injeção NÃO remove o banner de aviso', () => {
+  const idxAudio = injectionJsSource.indexOf('if (clearAudio && !isRecording) {');
+  const idxCamera = injectionJsSource.indexOf('if (clearCamera) {', idxAudio);
+  expect(idxAudio > -1 && idxCamera > idxAudio).toBe(true);
+  const blocoClearAudio = injectionJsSource.slice(idxAudio, idxCamera);
+  expect(blocoClearAudio).not.toContain("getElementById('clinicalWarningBanner')");
+});
+
+test('[AVISO-2] limpeza manual (novo paciente) remove o banner', () => {
+  const idx = injectionJsSource.indexOf('options.discardDilatacao === true');
+  expect(injectionJsSource.slice(idx, idx + 600)).toContain("getElementById('clinicalWarningBanner')");
+});
+
+test('[AVISO-3] nova gravação remove o banner (médico que nunca aperta Limpar)', () => {
+  const idx = audioJsSource.indexOf('StateManager.resetSession();');
+  expect(idx > -1).toBe(true);
+  expect(audioJsSource.slice(idx, idx + 600)).toContain("getElementById('clinicalWarningBanner')");
+});
+
+test('[AVISO-4] banner é irmão ANTERIOR de audioFieldsContainer — hideResults() esconde o container, não o aviso', () => {
+  expect(audioJsSource).toContain('parentNode.insertBefore(banner, container)');
+  // hideResults() só adiciona 'hidden' ao próprio container
+  expect(injectionJsSource).toContain("audioFieldsContainer.classList.add('hidden')");
+});
+
+test('[AVISO-5] avisos do DecisionEngine chegam ao sidepanel e são exibidos', () => {
+  expect(audioJsSource).toContain('_showClinicalWarnings(decision.avisos)');
+});
+
+// ──────────────────────────────────────────────────────────────────────────────
+// 2026-07-29 — Refração ESTÁTICA: a falha tem que entregar o próprio diagnóstico
+// ──────────────────────────────────────────────────────────────────────────────
+//
+// Log 2026-07-29: TRÊS capturas estáticas (20:05, 20:10, 20:11) com
+// _captureFailed:false e NENHUM [InjectAll] depois — ou seja, o ramo estática
+// rodou de ponta a ponta e morreu na resolução dos campos, porque
+// `refracaoEstatica.*` é o único grupo sem IDs em FALLBACK_IDS e depende só da
+// heurística de rótulo. O painel dizia apenas "confira os campos e o mapeamento"
+// e a sessão seguinte recomeçava do zero. Agora a falha devolve o dump estrutural.
+
+test('[EST-DIAG-1] a falha da estática anexa o dump estrutural na resposta', () => {
+  expect(contentJsSource).toContain('dumpRefractionCandidates()');
+  // ternário: só monta o dump quando NÃO preencheu (sucesso não paga o custo)
+  expect(contentJsSource).toContain('const diag = filled');
+  expect(contentJsSource).toContain('sendResponse({ success: filled, diag })');
+});
+
+test('[EST-DIAG-2] o dump reporta o bloco que a heurística atribui a cada campo', () => {
+  // Sem isto não há como saber se _refractionBlockOf tinha chance de acertar.
+  expect(contentJsSource).toContain('bloco: this._refractionBlockOf(input)');
+});
+
+test('[EST-DIAG-3] o dump é estrutural — nunca lê .value do paciente', () => {
+  const dump = contentJsSource.slice(
+    contentJsSource.indexOf('dumpRefractionCandidates() {'),
+    contentJsSource.indexOf('getTabId(tabName) {')
+  );
+  expect(dump.length > 0).toBe(true);
+  expect(dump.includes('.value')).toBe(false);
+});
+
+test('[EST-DIAG-4] o painel loga o dump como JSON, não como "Object"', () => {
+  // O console imprime objeto como "Object" e o log copiado pelo médico perde o
+  // conteúdo — foi por isso que "[InjectAll] check: Object" nunca ajudou.
+  expect(injectionJsSource).toContain("JSON.stringify(diag.resolvidos)");
+  expect(injectionJsSource).toContain('JSON.stringify(diag.candidatos, null, 1)');
+});
+
+test('[EST-DIAG-5] escape hatch sob demanda, sem refazer captura', () => {
+  expect(injectionJsSource).toContain('async function dumpRefracaoBlocks()');
+  expect(contentJsSource).toContain("case 'dumpRefracaoBlocks'");
+  // A instrução ao médico é chamar no console do painel — tem que estar em window.
+  expect(injectionJsSource).toContain('window.dumpRefracaoBlocks = dumpRefracaoBlocks');
+});
+
+// Round trip do diag. sendToTab (injection.js) resolve TRÊS formas distintas:
+//   'CONTEXT_INVALIDATED' (string) | null (erro transiente) | resp (objeto)
+// Ler `.diag` de uma string dá undefined — sem separar os casos, o painel avisaria
+// "cole o dump acima" com dump nenhum impresso, que é a pista falsa que esta
+// instrumentação existe para eliminar. Modelo fiel do pós-resposta de
+// injectRefracaoEstaticaDirect.
+function _estaticaPosResposta(response) {
+  const saida = { logs: [], warns: [], ret: false };
+  if (response === 'CONTEXT_INVALIDATED') {
+    saida.warns.push('f5');
+    return saida;
+  }
+  if (!response || typeof response !== 'object') {
+    saida.warns.push('sem_resposta');
+    return saida;
+  }
+  const diag = response.diag;
+  if (diag) {
+    saida.logs.push('resolvidos');
+    if (diag.candidatos) saida.logs.push('dump');
+  }
+  if (!response.success) {
+    saida.warns.push(diag && diag.tabClicked === false ? 'aba' : 'cole_o_dump');
+  }
+  saida.ret = !!response.success;
+  return saida;
+}
+
+test('[EST-DIAG-6] falha de mapeamento → imprime o dump E pede para colá-lo', () => {
+  const r = _estaticaPosResposta({
+    success: false,
+    diag: { resolvidos: { 'od.esf': null }, tabClicked: true, candidatos: [{ id: 'x' }] },
+  });
+  expect(r.logs).toEqual(['resolvidos', 'dump']);
+  expect(r.warns).toEqual(['cole_o_dump']);
+  expect(r.ret).toBe(false);
+});
+
+test('[EST-DIAG-7] contexto invalidado NÃO pede dump inexistente — pede F5', () => {
+  const r = _estaticaPosResposta('CONTEXT_INVALIDATED');
+  expect(r.logs).toEqual([]);
+  expect(r.warns).toEqual(['f5']);
+  expect(r.ret).toBe(false);
+});
+
+test('[EST-DIAG-8] resposta ausente/transiente também não promete dump', () => {
+  for (const resp of [null, undefined]) {
+    const r = _estaticaPosResposta(resp);
+    expect(r.logs).toEqual([]);
+    expect(r.warns).toEqual(['sem_resposta']);
+  }
+});
+
+test('[EST-DIAG-9] aba Refração não clicada é diagnosticada como aba, não mapeamento', () => {
+  const r = _estaticaPosResposta({
+    success: false,
+    diag: { resolvidos: {}, tabClicked: false, candidatos: [] },
+  });
+  expect(r.warns).toEqual(['aba']);
+});
+
+test('[EST-DIAG-10] sucesso não imprime dump nem avisa nada', () => {
+  const r = _estaticaPosResposta({
+    success: true,
+    diag: { resolvidos: { 'od.esf': 'prontuario_resp_78074_1' }, tabClicked: true },
+  });
+  expect(r.logs).toEqual(['resolvidos']);
+  expect(r.warns).toEqual([]);
+  expect(r.ret).toBe(true);
+});
+
+// ──────────────────────────────────────────────────────────────────────────────
+// 2026-07-29 — "Dados já injetados" era mentira
+// ──────────────────────────────────────────────────────────────────────────────
+//
+// Às 20:07 e 20:10 o botão manual acusou "Dados já injetados" com NADA injetado:
+// audioData ainda era null (análise do Gemini em voo) e o ramo estática acabara
+// de zerar cameraData de propósito. injectAll conflatava "sem dados" com "já
+// injetado". Modelo fiel do guard de scripts/sidepanel-injection.js.
+
+function _guardNadaParaInjetar({ audioData, cameraData, audioDataInjected, cameraDataInjected, isRecording, analise }) {
+  const temAudio = audioData && !audioDataInjected;
+  const temCamera = cameraData && !cameraDataInjected;
+  if (!temAudio && !temCamera) {
+    if (!audioData && !cameraData) {
+      return isRecording ? 'gravando' : analise ? 'analise' : 'nada';
+    }
+    return 'ja_injetado';
+  }
+  return 'injeta';
+}
+
+test('[INJ-VAZIO-1] análise em voo → "análise em andamento", não "já injetados"', () => {
+  // Cenário exato de 20:07:30: estática zerou cameraData, Gemini ainda rodando.
+  expect(_guardNadaParaInjetar({
+    audioData: null, cameraData: null,
+    audioDataInjected: false, cameraDataInjected: false,
+    isRecording: false, analise: true,
+  })).toBe('analise');
+});
+
+test('[INJ-VAZIO-2] gravação em andamento tem precedência na mensagem', () => {
+  expect(_guardNadaParaInjetar({
+    audioData: null, cameraData: null,
+    audioDataInjected: false, cameraDataInjected: false,
+    isRecording: true, analise: false,
+  })).toBe('gravando');
+});
+
+test('[INJ-VAZIO-3] nada capturado e nada rodando → "nada capturado ainda"', () => {
+  expect(_guardNadaParaInjetar({
+    audioData: null, cameraData: null,
+    audioDataInjected: false, cameraDataInjected: false,
+    isRecording: false, analise: false,
+  })).toBe('nada');
+});
+
+test('[INJ-VAZIO-4] "já injetados" preservado quando os dados EXISTEM e foram injetados', () => {
+  expect(_guardNadaParaInjetar({
+    audioData: {}, cameraData: null,
+    audioDataInjected: true, cameraDataInjected: false,
+    isRecording: false, analise: false,
+  })).toBe('ja_injetado');
+});
+
+test('[INJ-VAZIO-5] auto-injeção pós-análise não regride: audioData setado antes de injectAll', () => {
+  // displayAudioResults(workingData) (seta audioData) vem ANTES do injectAll do
+  // ramo de dilatação — logo o caminho automático continua caindo em
+  // 'Dados já injetados', que sidepanel-audio.js trata como sucesso benigno.
+  const dil = audioJsSource.indexOf('displayAudioResults(workingData)');
+  const inj = audioJsSource.indexOf('await injectAll()', dil);
+  expect(dil > 0 && inj > dil).toBe(true);
+  expect(audioJsSource).toContain("injectError.message === 'Dados já injetados'");
+});
+
+test('[INJ-VAZIO-6] a flag de análise é armada e SEMPRE liberada no finally', () => {
+  expect(constantsJsSource).toContain('let _analiseEmAndamento = false');
+  expect(audioJsSource).toContain('_analiseEmAndamento = true');
+  // O finally cobre também os returns antecipados (áudio vazio / muito curto).
+  const fin = audioJsSource.indexOf('_analiseEmAndamento = false');
+  expect(audioJsSource.slice(fin - 200, fin).includes('} finally {')).toBe(true);
+});
+
+// ──────────────────────────────────────────────────────────────────────────────
 // RELATÓRIO FINAL
 // ──────────────────────────────────────────────────────────────────────────────
 
 (async () => {
   await _dilatacaoQueueTests();
   await _axisTiebreakTests();
+  _estaticaRetryTests();
 
   console.log('\n');
   console.log('═══════════════════════════════════════════════════');

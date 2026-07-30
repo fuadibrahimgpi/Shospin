@@ -104,16 +104,29 @@ function _cidKeyFromText(text) {
   return null;
 }
 
+/**
+ * Chave canônica de um termo de CID — base ÚNICA de deduplicação do módulo.
+ * "H522 - Astigmatismo OD", "H52.2 - Astigmatismo", "H522" e "Astigmatismo"
+ * colapsam todos em "H522" (a IA e o OCR escrevem o mesmo código em formatos
+ * diferentes: com ponto, sem ponto, com e sem lateralidade).
+ */
+function _cidKey(term) {
+  const t = (term || '').trim();
+  if (!t) return '';
+  const m = t.match(CID_CODE_PATTERN);
+  if (m) return m[1].replace(/\./g, '').toUpperCase();
+  const bare = t.match(/^([A-Za-z]\d+(?:\.\d+)?)$/);
+  if (bare) return bare[1].replace(/\./g, '').toUpperCase();
+  return _cidKeyFromText(t) || t.toUpperCase();
+}
+
 function _deduplicateCidField(field) {
   if (!field || !field.value.trim()) return;
   const terms = field.value.split(/\n|,|;/).map(t => t.trim()).filter(Boolean);
   if (terms.length <= 1) return;
   const seen = new Set();
   const unique = terms.filter(t => {
-    const m = t.match(CID_CODE_PATTERN);
-    const key = m
-      ? m[1].replace(/\./g, '').toUpperCase()
-      : (_cidKeyFromText(t) || t.toUpperCase());
+    const key = _cidKey(t);
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
@@ -203,6 +216,11 @@ async function handleSearchCid(field) {
     }
 
     if (resp && resp.success) {
+      // Memória de lançamento: o campo é consumido termo a termo logo abaixo e
+      // acaba vazio — sem este registro, a passada seguinte (OCR) perde a base de
+      // deduplicação e relança o mesmo CID no SHOSP.
+      const _key = _cidKey(rawTerm);
+      if (_key) _cidsLancadosNaSessao.add(_key);
       // Atualiza o campo com os restantes (remove o termo já buscado)
       field.value = terms.slice(1).join('\n');
       // Feedback de sucesso
@@ -426,6 +444,19 @@ async function injectAll(force = false) {
 
   if (!temAudio && !temCamera) {
     _setRunningState(false);
+    // "Nada capturado ainda" ≠ "já injetado". Conflatar os dois fazia o botão
+    // manual acusar "Dados já injetados" quando nada havia sido injetado: a
+    // análise do Gemini estava em voo (audioData ainda null) e o ramo estática
+    // acabara de zerar cameraData de propósito. Log 2026-07-29, 20:07 e 20:10.
+    if (!audioData && !cameraData) {
+      const motivo = isRecording
+        ? 'Gravação em andamento — pare a gravação para injetar.'
+        : _analiseEmAndamento
+          ? 'Análise em andamento — aguarde o resultado para injetar.'
+          : 'Nada capturado ainda — grave a consulta ou fotografe o ticket.';
+      showError(motivo);
+      throw new Error('Nada para injetar');
+    }
     showError('Dados já injetados! Limpe para injetar novamente.');
     throw new Error('Dados já injetados');
   }
@@ -502,11 +533,35 @@ async function injectAll(force = false) {
     }
   }
 
+  // Nunca afirmar exame NORMAL que contradiz o próprio diagnóstico da consulta.
+  // Origem (log 2026-07-29): diagnóstico "H111 - Pterígio OD" + biomicroscopia null →
+  // o fallback de despedida injetou "AO: olho calmo" logo abaixo do pterígio.
+  // `_temTratamentoAtivo` não cobria: a consulta não tinha tratamento nem encaminhamento.
+  // Política (mesma do _guardExamesNormaisFase2): campo VAZIO — que o médico redige —
+  // é preferível a texto fabricado que contradiz o prontuário. Não compomos a descrição
+  // por olho aqui: "pterígio nasal grau I" seria invenção; só o médico dita o detalhe.
+  const _dxAnterior  = temAchadoAnteriorNoDiagnostico(audioData?.dados?.diagnostico);
+  const _dxPosterior = temAchadoPosteriorNoDiagnostico(audioData?.dados?.diagnostico);
+  const _bioNormalSeguro = () => {
+    if (_dxAnterior) {
+      console.warn('[ExamesNormais] Biomicroscopia normal SUPRIMIDA — diagnóstico afirma achado de segmento anterior. Campo deixado vazio para descrição manual.');
+      return null;
+    }
+    return getBiomicroscopiaComLente(BIOMICROSCOPIA_NORMAL);
+  };
+  const _fundoNormalSeguro = () => {
+    if (_dxPosterior) {
+      console.warn('[ExamesNormais] Fundoscopia normal SUPRIMIDA — diagnóstico afirma achado de segmento posterior. Campo deixado vazio para descrição manual.');
+      return null;
+    }
+    return FUNDOSCOPIA_NORMAL;
+  };
+
   if (!SessionFlags.blefariteInjetada && !SessionFlags.examesNormaisInjetados) {
     if (!audioData?.dilatacaoDetectada && audioData?.injectExamesNormais && !_temTratamentoAtivo) {
       combinedData.examesNormais = {
-        biomicroscopia: getBiomicroscopiaComLente(BIOMICROSCOPIA_NORMAL),
-        fundoscopia: (SessionFlags.fundoscopiaDetectada || mencionouFundoNaFala) ? FUNDOSCOPIA_NORMAL : null
+        biomicroscopia: _bioNormalSeguro(),
+        fundoscopia: (SessionFlags.fundoscopiaDetectada || mencionouFundoNaFala) ? _fundoNormalSeguro() : null
       };
     } else if (!audioData?.dilatacaoDetectada && audioData?.injectBlefarite) {
       // Blefarite: se Gemini gerou biomicroscopia personalizada (ex: pterígio + blefarite),
@@ -519,7 +574,7 @@ async function injectAll(force = false) {
         // Se o médico discutiu achado posterior (ex.: escavação aumentada suspeita de
         // glaucoma), o Gemini preenche dados.fundoscopia e ela prevalece; o template
         // normal só entra quando nada foi descrito no fundo.
-        fundoscopia: audioData?.dados?.fundoscopia || FUNDOSCOPIA_NORMAL
+        fundoscopia: audioData?.dados?.fundoscopia || _fundoNormalSeguro()
       };
     } else if (!audioData?.dilatacaoDetectada &&
                (audioData?.dados?.biomicroscopia || audioData?.dados?.fundoscopia)) {
@@ -527,9 +582,9 @@ async function injectAll(force = false) {
       // Quando só fundoscopia foi preenchida (achado posterior com segmento anterior normal),
       // injeta o template normal de biomicroscopia para não deixar o campo em branco.
       combinedData.examesNormais = {
-        biomicroscopia: getBiomicroscopiaComLente(
-          audioData.dados.biomicroscopia || BIOMICROSCOPIA_NORMAL
-        ),
+        biomicroscopia: audioData.dados.biomicroscopia
+          ? getBiomicroscopiaComLente(audioData.dados.biomicroscopia)
+          : _bioNormalSeguro(),
         fundoscopia: audioData.dados.fundoscopia || null
       };
     } else if (audioData && SessionFlags.consultaEncerradaDetectada && !audioData.dilatacaoDetectada && !_temTratamentoAtivo) {
@@ -538,23 +593,41 @@ async function injectAll(force = false) {
       // Guard: _temTratamentoAtivo impede injeção de exames "normais" em consultas
       // com patologia ativa (conduta com encaminhamento ou tratamento prescrito).
       combinedData.examesNormais = {
-        biomicroscopia: getBiomicroscopiaComLente(BIOMICROSCOPIA_NORMAL),
-        fundoscopia: mencionouFundoNaFala ? FUNDOSCOPIA_NORMAL : null,
+        biomicroscopia: _bioNormalSeguro(),
+        fundoscopia: mencionouFundoNaFala ? _fundoNormalSeguro() : null,
       };
     }
-  } else if (!audioData?.dilatacaoDetectada && audioData?.dados?.fundoscopia) {
+  } else if (!audioData?.dilatacaoDetectada &&
+             (audioData?.dados?.biomicroscopia || audioData?.dados?.fundoscopia)) {
     // Correção pós-análise: um gatilho de voz (blefarite/exames normais) já injetou
-    // FUNDOSCOPIA_NORMAL no momento em que disparou — antes de o médico descrever o
-    // fundo. Se a análise depois identificou um achado posterior (ex.: escavação
-    // aumentada suspeita de glaucoma), o achado real prevalece sobre o template, que
-    // afirmaria "escavação simétrica e fisiológica" e contradiria o diagnóstico.
-    const _bioBase = audioData?.dados?.biomicroscopia ||
-      (SessionFlags.blefariteInjetada ? BIOMICROSCOPIA_BLEFARITE : BIOMICROSCOPIA_NORMAL);
+    // os templates no momento em que disparou — antes de o médico descrever o exame.
+    // Se a análise depois identificou um achado, o achado real prevalece sobre o
+    // template, que afirmaria "olho calmo" / "escavação simétrica e fisiológica" e
+    // contradiria o diagnóstico.
+    // A condição cobre biomicroscopia TAMBÉM (2026-07-29): o caso mais provável é o
+    // médico disparar "exames normais" cedo e achar o pterígio depois — antes, só
+    // fundoscopia entrava aqui e o "AO: olho calmo" do gatilho ficava no prontuário.
+    const _bioExplicita = audioData?.dados?.biomicroscopia ||
+      (SessionFlags.blefariteInjetada ? BIOMICROSCOPIA_BLEFARITE : null);
     combinedData.examesNormais = {
-      biomicroscopia: getBiomicroscopiaComLente(_bioBase),
-      fundoscopia: audioData.dados.fundoscopia,
+      biomicroscopia: _bioExplicita ? getBiomicroscopiaComLente(_bioExplicita) : _bioNormalSeguro(),
+      // null = nada a corrigir no fundo; a fundoscopia já injetada pelo gatilho permanece.
+      fundoscopia: audioData.dados.fundoscopia || null,
     };
-    console.log('[ExamesNormais] Fundoscopia do gatilho corrigida — achado de fundo descrito na consulta.');
+    console.log('[ExamesNormais] Exame do gatilho corrigido —',
+      [audioData?.dados?.biomicroscopia && 'biomicroscopia',
+       audioData?.dados?.fundoscopia && 'fundoscopia'].filter(Boolean).join(' + '),
+      'descrito(s) na consulta.');
+  }
+
+  // Se a supressão zerou os dois campos, não enviar o objeto vazio: `examesNormais`
+  // truthy com tudo null faz o content.js reportar "não foram injetadas" — aviso
+  // enganoso, já que a supressão é deliberada. null é o estado pré-existente de
+  // "nada a injetar" e já é tratado pelo handler.
+  if (combinedData.examesNormais &&
+      !combinedData.examesNormais.biomicroscopia &&
+      !combinedData.examesNormais.fundoscopia) {
+    combinedData.examesNormais = null;
   }
 
   if (audioData?.injectBlefarite) {
@@ -734,6 +807,17 @@ async function injectAll(force = false) {
       const ocrCids = (combinedData.exames && cameraData?.cid_refracao?.length)
         ? [...cameraData.cid_refracao]
         : [];
+      // Persistir os específicos do ticket: a passada de áudio (entrevista) que vem
+      // DEPOIS sobrescreve o diagnosticoField com o diagnóstico dela (ex: H52.9 via
+      // displayAudioResults) e cameraData já foi anulado pelo clearAll da câmera —
+      // sem persistir, H52.0/H52.2 se perdem (regressão do log 2026-07-27).
+      if (ocrCids.length) _pendingOcrRefracaoCids = [...ocrCids];
+
+      // CIDs a mesclar: os do OCR desta passada OU, numa passada de áudio, os CIDs
+      // refrativos pendentes de uma passada de câmera anterior do mesmo paciente.
+      const cidsToMerge = ocrCids.length
+        ? ocrCids
+        : (combinedData.audio && _pendingOcrRefracaoCids.length ? [..._pendingOcrRefracaoCids] : []);
 
       clearAll({
         clearAudio: !!combinedData.audio,
@@ -742,24 +826,28 @@ async function injectAll(force = false) {
 
       // Mesclar CIDs do OCR ao campo de diagnóstico (deduplicados contra CIDs de áudio)
       let novosCids = [];
-      const cidTarget = cidField || (ocrCids.length ? diagnosticoField : null);
-      if (ocrCids.length && cidTarget) {
-        // Normaliza removendo pontos para comparar "H521" e "H52.1" como iguais
-        const normCid = s => s.replace(/\./g, '').toUpperCase();
-        const existingCodes = new Set(
-          (cidTarget.value || '').split(/\n|,|;/)
-            .map(t => { const m = t.match(CID_CODE_PATTERN); return normCid(m ? m[1] : t.trim()); })
-            .filter(Boolean)
-        );
-        novosCids = ocrCids.filter(cid => {
-          const m = cid.match(CID_CODE_PATTERN);
-          return !existingCodes.has(normCid(m ? m[1] : cid.trim()));
-        });
+      const cidTarget = cidField || (cidsToMerge.length ? diagnosticoField : null);
+      if (cidsToMerge.length && cidTarget) {
+        // Base de deduplicação = o que ainda está no campo + o que JÁ FOI LANÇADO
+        // nesta consulta. A segunda parcela é indispensável: quando a entrevista
+        // vem antes do OCR, a cadeia de handleSearchCid já esvaziou o campo e o
+        // campo sozinho não prova nada (H52.2 duplicado, log 2026-07-29).
+        const existingCodes = new Set([
+          ..._cidsLancadosNaSessao,
+          ...(cidTarget.value || '').split(/\n|,|;/).map(t => _cidKey(t)).filter(Boolean),
+        ]);
+        novosCids = cidsToMerge.filter(cid => !existingCodes.has(_cidKey(cid)));
+        const _jaLancados = cidsToMerge.filter(cid => existingCodes.has(_cidKey(cid)));
+        if (_jaLancados.length) {
+          console.log('[AutoCID-OCR] CIDs ignorados (já lançados nesta consulta):', _jaLancados);
+        }
         if (novosCids.length) {
           cidTarget.value = [cidTarget.value, ...novosCids].filter(Boolean).join('\n');
           console.log('[AutoCID-OCR] CIDs de refração adicionados:', novosCids);
         }
       }
+      // Passada de áudio consumiu os pendentes — não devem vazar p/ o próximo paciente.
+      if (combinedData.audio) _pendingOcrRefracaoCids = [];
 
       // Retificação: remove H52.9 (refração NE) quando já há CID refrativo específico
       // no diagnóstico (vindo do OCR ou da própria entrevista).
@@ -888,6 +976,11 @@ function clearAll(options = { clearAudio: true, clearCamera: true }) {
         antecedentesFamField, retornoField, medicacoesRetornoField, condutaField,
         medicamentosPrescritosField, condutaRetornoField, medicamentosPrescritosRetornoField];
       audioFields.forEach(f => { if (f) f.value = ''; });
+      // NÃO remover o clinicalWarningBanner aqui: este clearAll é o AUTOMÁTICO
+      // pós-injeção, que roda ~1,5s depois da análise. Removê-lo aqui apagaria o
+      // aviso (ex: biomicroscopia em branco) antes de o médico conseguir lê-lo —
+      // justamente no momento em que o campo acabou de entrar vazio no prontuário.
+      // O banner morre só na fronteira de PACIENTE (limpeza manual / nova gravação).
       hideResults();
     }
 
@@ -954,6 +1047,12 @@ function clearAll(options = { clearAudio: true, clearCamera: true }) {
     // da sala de espera. O clearAll automático pós-injeção não passa a opção.
     if (options.discardDilatacao === true) {
       try { DilatacaoPausas.desmarcarRetomadas(); } catch (_e) { /* não-fatal */ }
+      // Novo paciente: a memória de CIDs lançados não pode atravessar fichas —
+      // senão um CID legítimo do próximo paciente seria silenciosamente ignorado.
+      _cidsLancadosNaSessao = new Set();
+      // Fronteira de paciente: o aviso clínico da consulta anterior sai de cena.
+      const _warnBanner = document.getElementById('clinicalWarningBanner');
+      if (_warnBanner) _warnBanner.remove();
     }
 
     console.log('[ClearAll] Limpeza concluída', options);
@@ -1088,3 +1187,83 @@ async function injectReceitaOlhoIrritadoDirect() {
     statusText.textContent = 'Gravando... (receita não injetada)';
   }
 }
+
+/**
+ * Injeção pós-dilatação: escreve o grau capturado APENAS no bloco Refração
+ * ESTÁTICA, sem passar pelo injectAll (não toca em receita, tono, paqui, CID,
+ * áudio nem clearAll). Estrutura idêntica à refração dinâmica; só muda o alvo.
+ * @param {{od:object|null, oe:object|null}} refracao objeto no formato do OCR
+ * @returns {Promise<boolean>} true se ao menos um campo foi preenchido
+ */
+async function injectRefracaoEstaticaDirect(refracao) {
+  if (!refracao || (refracao.od == null && refracao.oe == null)) return false;
+  const tab = await _getShospTab();
+  if (!tab) return false;
+  const response = await sendToTab(tab.id, {
+    action: 'injectRefracaoEstatica',
+    data: { refracao },
+  });
+
+  // Falha de TRANSPORTE não traz diag: sendToTab resolve a string
+  // 'CONTEXT_INVALIDATED' ou null. Sem separar esses casos, o painel mandaria o
+  // médico colar um dump que nunca foi impresso — a mesma pista falsa que este
+  // diagnóstico existe para eliminar.
+  if (response === 'CONTEXT_INVALIDATED') {
+    console.warn('[RefracaoEstatica] Contexto da extensão invalidado — dê F5 na página do SHOSP e refaça a captura.');
+    return false;
+  }
+  if (!response || typeof response !== 'object') {
+    console.warn('[RefracaoEstatica] Sem resposta do content script (SPA ainda carregando?) — refaça a captura.');
+    return false;
+  }
+
+  // JSON.stringify de propósito: o console imprime objeto como "Object" e o log
+  // copiado pelo médico perde exatamente o conteúdo que interessa. Ver
+  // [InjectAll] check: Object no log 2026-07-29.
+  const diag = response.diag;
+  if (diag) {
+    console.log('[RefracaoEstatica] IDs resolvidos:', JSON.stringify(diag.resolvidos), '| aba clicada:', diag.tabClicked);
+    if (diag.candidatos) {
+      console.log('[RefracaoEstatica] campos de refração no DOM (estrutura, sem valores):');
+      console.log(JSON.stringify(diag.candidatos, null, 1));
+    }
+  }
+  if (!response.success) {
+    if (diag && diag.tabClicked === false) {
+      console.warn('[RefracaoEstatica] A aba Refração não foi aberta — o mapeamento nem chegou a ser testado. Abra o prontuário na aba Refração e refaça.');
+    } else {
+      console.warn('[RefracaoEstatica] Nada injetado — bloco ESTÁTICA não mapeado. ' +
+        'Cole o dump acima para fixar os 6 IDs em FALLBACK_IDS (src/content.js:56-61).');
+    }
+  }
+  return !!response.success;
+}
+
+/**
+ * Dump estrutural dos campos de refração, sob demanda e sem injetar nada.
+ * Uso: abrir o console do painel com o prontuário aberto e chamar
+ * `dumpRefracaoBlocks()`. Serve para fixar os 6 IDs do bloco ESTÁTICA sem
+ * precisar refazer uma captura pós-dilatação.
+ * @returns {Promise<boolean>} true se o dump foi obtido
+ */
+async function dumpRefracaoBlocks() {
+  const tab = await _getShospTab();
+  if (!tab) { console.warn('[DumpRefracao] Nenhuma aba do SHOSP encontrada.'); return false; }
+  const response = await sendToTab(tab.id, { action: 'dumpRefracaoBlocks' });
+  if (response === 'CONTEXT_INVALIDATED') {
+    console.warn('[DumpRefracao] Contexto da extensão invalidado — dê F5 na página do SHOSP.');
+    return false;
+  }
+  if (!response || typeof response !== 'object' || !response.success) {
+    console.warn('[DumpRefracao] Falhou:', (response && response.error) || 'sem resposta do content script');
+    return false;
+  }
+  console.log('[DumpRefracao] campos de refração no DOM (estrutura, sem valores):');
+  console.log(JSON.stringify(response.candidatos, null, 1));
+  return true;
+}
+
+// Exposto explicitamente: a instrução ao médico é "chame dumpRefracaoBlocks() no
+// console do painel", e isso tem que valer independente de como o console resolve
+// o escopo dos scripts concatenados.
+window.dumpRefracaoBlocks = dumpRefracaoBlocks;

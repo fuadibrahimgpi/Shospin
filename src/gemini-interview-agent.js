@@ -416,6 +416,12 @@ CAMPOS:
 - HDA: história da doença atual relatada pelo paciente (APENAS se primeira_consulta)
   * SEMPRE comece pela QUEIXA PRINCIPAL — o motivo que trouxe o paciente à consulta
     Ex: "Traumatismo ocular/craniano há X dias", "Baixa de visão há X semanas", "Dor ocular"
+  * ❌ NÃO abra a queixa principal com negativas de sintomas ("Nega dor, coceira ou ardência").
+    A queixa principal é SEMPRE o sintoma POSITIVO que motivou a consulta
+    (ex: "Desconforto ocasional ao usar computador").
+  * As negativas de sintomas NÃO são apagadas — apenas NÃO lideram: registre-as DEPOIS da
+    queixa positiva, no corpo da HDA. Ex: "nega dificuldade para perto" DEVE ser mantida
+    (contrapõe presbiopia/H52.4), mas nunca como queixa principal.
   * Inclui: sintomas relatados pelo paciente, tempo de evolução, história do evento causador
   * ❌ NÃO incluir: descrições de exames realizados DURANTE a consulta
     Exemplos de exclusão:
@@ -428,6 +434,8 @@ CAMPOS:
   * Captura o que o paciente relata: sintomas, dificuldades, progressos
   * Ex: "Dificuldade para perto com óculos multifocais, irritação ocular"
   * É equivalente ao HDA, mas para consulta de retorno
+  * Mesma regra da queixa principal: comece pelo sintoma POSITIVO; negativas de sintomas
+    não lideram nem substituem a queixa (mantê-las no corpo, se relevantes).
 - medicacoes_em_uso: APENAS medicamentos OFTALMOLÓGICOS que o paciente já usava antes desta consulta
   * Inclui: colírios, pomadas oculares, gel ocular — somente uso ocular
   * FONTES — capture de qualquer uma destas situações:
@@ -470,6 +478,17 @@ CAMPOS:
 - antecedentes_familiares: doenças familiares oculares com relevância hereditária (glaucoma, degeneração macular, retinose pigmentar, estrabismo, etc.)
   ❌ NÃO registrar em antecedentes_familiares: catarata — é doença degenerativa/senil sem valor hereditário significativo; se for a única queixa familiar, retornar null
   ⚠️ Esta restrição é EXCLUSIVA de antecedentes_familiares. Catarata encontrada no PACIENTE (ex: "tem uma catarata incipiente", "cristalino com opacidade") deve ser registrada normalmente em diagnostico (H250, H251, H259, H260 ou H269 conforme o caso).
+  ⚠️ ANTI-ALUCINAÇÃO (CRÍTICO) — NUNCA fabrique um antecedente familiar positivo a partir de
+     ruído de reconhecimento de voz que apenas SE PARECE com a pergunta do médico. Só registre
+     doença familiar quando o PACIENTE der uma resposta positiva CLARA ("minha mãe tem glaucoma",
+     "meu pai perdeu a visão").
+     ❌ ERRADO: médico pergunta "algum parente perdeu a visão?" e a transcrição traz o ruído
+        "perdeu a amizade muito muito carregamento" → NÃO interprete como "parente perdeu a visão".
+        Trechos embolados/sem sentido que apenas rimam com a pergunta NÃO são resposta positiva.
+     ✅ CERTO nesse caso: o médico PERGUNTOU e não houve resposta positiva clara →
+        "Nega diagnósticos oftalmológicos familiares" (negativa implícita — ver checklist adiante).
+     Regra: sem afirmação inequívoca do paciente, o campo é a frase negativa padrão (se o médico
+     perguntou) ou null (se o tópico nunca foi abordado) — jamais uma doença inventada.
 
 ★ ANTECEDENTES EM PRIMEIRA_CONSULTA — checklist de negativa implícita
   Em primeira_consulta o médico normalmente percorre: medicações oculares → cirurgias/tratamentos →
@@ -499,6 +518,22 @@ CAMPOS:
   ✅ "H401 - Glaucoma primário ângulo aberto OD\nH524 - Presbiopia"
   ❌ Nunca texto livre sem código: "blefarite bilateral, catarata"
   ❌ Nunca CID sem descrição: "H010\nH260"
+
+  ⚠️ LATERALIDADE DO DIAGNÓSTICO (mesma regra da biomicroscopia):
+    • Identificar o olho pela consulta INTEIRA (queixa/HDA + exame), não só pela fala no exame.
+    • Diagnósticos UNILATERAIS POR NATUREZA (trauma, corpo estranho, arranhão/abrasão,
+      ceratite/úlcera traumática, hemorragia subconjuntival por trauma) → sufixo "OD" ou "OE"
+      conforme o lado; NUNCA "AO" (bilateralizar inventa doença no olho são).
+      ✅ "H161 - Ceratite traumática OD"   ❌ "H161 - Ceratite traumática AO"
+    • Se o lado for impossível de determinar → sufixar "(confirmar olho)" em vez de assumir AO.
+      Ex: "H161 - Ceratite traumática (confirmar olho)"
+    • DIAGNÓSTICOS BILATERAIS-CAPAZES (catarata, glaucoma, refração, DMRI, retinopatia):
+      NUNCA chute "OD"/"OE" por acuidade visual, ordem do exame, ou dedução de qual olho
+      "está pior". Só atribua um lado que o médico ATRIBUIU explicitamente àquele olho.
+        - Médico descreveu o achado nos DOIS olhos ("os dois estão com catarata") → "AO".
+        - Médico atribuiu claramente a UM olho ("a catarata do direito") → "OD"/"OE".
+        - Ambíguo (não dá para saber se um ou ambos) → sufixar "(confirmar olho)".
+      Ex: "H259 - Catarata senil NE (confirmar olho)" em vez de arriscar "OD".
 
   ⚠️ CAPTURA DE ACHADOS DO EXAME FÍSICO (biomicroscopia / lâmpada de fenda):
   Achados mencionados durante o exame (ex: "tem uma cataratinha incipiente", "cristalino com opacidade",
@@ -729,6 +764,23 @@ CAMPOS:
      ⚠️ IMPORTANTE: Nunca inclua "1 gota" ou "uma gota" nas prescrições de colírio, pois já é subentendido.
      A posologia (frequência, olho, duração) é preservada em qualquer nível quando mencionada.
 
+  ★★ REGRA ANTI-INVENÇÃO DE TRATAMENTO (CRÍTICA — precede toda a hierarquia acima):
+     Um tratamento só existe se o MÉDICO efetivamente o PRESCREVEU na fala — nomeando um remédio,
+     indicando uma classe/finalidade, OU dando uma instrução inequívoca de usar/pingar/aplicar/passar
+     algo. Os 3 níveis de nomeação acima só se aplicam DEPOIS de confirmado que houve prescrição real.
+     ❌ PROIBIDO inferir que existe prescrição a partir do DIAGNÓSTICO ou do contexto clínico.
+        O diagnóstico NÃO gera tratamento automático. Exemplos do que NÃO se pode inventar:
+          - "corpo estranho" / "abrasão" → NÃO assuma pomada ou colírio antibiótico
+          - "olho vermelho" → NÃO assuma colírio antialérgico ou lubrificante
+          - "conjuntivite" → NÃO assuma antibiótico tópico
+        Se o médico removeu o corpo estranho e NÃO prescreveu nada, tratamento = null.
+     ❌ PROIBIDO inventar posologia (frequência, duração, dose — "4/4h", "por 3 dias", "3x/dia").
+        Posologia entra SOMENTE quando pronunciada. Houve prescrição sem posologia dita?
+        Registre a medicação sem posologia — NUNCA complete com valores plausíveis.
+     ❌ Consulta encerrou (despedida/STOP) sem o médico ditar conduta/tratamento? tratamento = null.
+        A AUSÊNCIA de prescrição é um desfecho válido e esperado — não preencha o vazio para
+        "fechar" o prontuário. Deixar null é sempre preferível a um tratamento fabricado.
+
   ✅ Colírios nomeados ou por classe: "Vigadexa 4x/dia por 7 dias",
      "Associação (ATB + corticoide ocular) 3x/dia após higiene palpebral"
   ✅ Lubrificantes oculares: "Lubrificante ocular AO ao longo do dia"
@@ -770,10 +822,45 @@ CAMPOS:
     pterígio, pinguécula, conjuntivite, úlcera de córnea, ceratocone, nevo conjuntival, etc.
   ✅ Preencher também quando blefarite + outro achado de segmento anterior (gerar texto combinado)
 
+  ⚠️ CONSISTÊNCIA DIAGNÓSTICO ↔ EXAME (crítica): se você registrou em "diagnostico" um achado
+    ESTRUTURAL de segmento anterior como ATUAL (pterígio, pinguécula, leucoma, ceratocone,
+    úlcera, ceratite, conjuntivite, hordéolo, calázio, uveíte, hemorragia subconjuntival...),
+    então "biomicroscopia" NÃO pode ser null e NÃO pode descrever o olho afetado como normal.
+    Descreva por olho (olho afetado + contralateral "olho calmo"). Um prontuário que diagnostica
+    pterígio OD e descreve "AO: olho calmo" se contradiz — erro grave.
+    • Isto NÃO afrouxa a regra de fonte: continua valendo que relato do paciente e história não
+      viram achado de exame. A regra aqui é posterior — DEPOIS de você decidir que o achado é
+      atual e digno de "diagnostico", o exame precisa refleti-lo.
+    • Achado verbalizado DURANTE o exame (o médico está na lâmpada de fenda: "encosta o queixo",
+      "olha para frente", "pisca") conta como achado de exame mesmo que o reconhecimento de voz
+      embarale quem fala — nesse contexto a frase é do exame, não anamnese.
+    • Se o achado é histórico/resolvido, marque-o como tal no diagnóstico ("(resolvida)") — aí
+      ele não exige descrição no exame atual.
+
+  ⚠️ REGRA DE FLAG (crítica): se QUALQUER olho tem achado de segmento anterior, injectExamesNormais=false.
+    O texto por olho (achado no olho afetado + linha "olho calmo" do contralateral) vai INTEIRO em
+    dados.biomicroscopia. Nunca deixe injectExamesNormais=true junto com dados.biomicroscopia
+    preenchida — o template normal AO sobrescreveria o achado.
+
   LATERALIDADE — regra crítica:
-    • Identificar o olho afetado pelo que o médico diz na explicação ao paciente
-    • Usar prefixo "OD" / "OE" / "AO" (ambos os olhos)
-    • Se o médico não cita o olho explicitamente → usar "AO" como fallback seguro
+    • Identificar o olho afetado usando TODA a consulta — não apenas a fala do médico
+      durante o exame, mas também a queixa/HDA. O lado dito na HISTÓRIA vale para a
+      biomicroscopia (ex: "o inseto entrou no olho direito", "arranhei esse olho aqui",
+      "a poeira caiu no esquerdo" → o achado do exame é nesse mesmo olho).
+    • Usar prefixo "OD" / "OE".
+    • Só usar "AO" (ambos os olhos) quando o achado for REALMENTE bilateral e assim
+      descrito (blefarite, conjuntivite bilateral, pterígio nos dois olhos, etc.).
+
+  ⚠️ PROIBIDO "AO" em achados UNILATERAIS POR NATUREZA:
+    trauma, corpo estranho, inseto, arranhão / abrasão / erosão de córnea, úlcera ou
+    ceratite traumática, hemorragia subconjuntival por trauma. Descrever "AO" nesses
+    casos INVENTA uma lesão no olho são — erro grave de prontuário. NÃO existe "fallback
+    AO seguro" para essas situações.
+    • Lado identificável (história OU exame) → descrever SÓ o olho afetado (OD ou OE) e
+      a linha do contralateral como "olho calmo".
+    • Lado IMPOSSÍVEL de determinar em toda a consulta → NÃO assuma AO e NÃO invente o
+      olho são. Prefixe o texto com "[CONFIRMAR OLHO AFETADO] " e descreva apenas o olho
+      afetado, SEM a linha do contralateral. O médico confirma/corrige o lado no prontuário.
 
   FORMATO OBRIGATÓRIO:
     "[OD/OE/AO]: [descrição do achado]; [elementos normais não afetados: córnea transparente, câmara anterior formada, pupila regular e reagente, cristalino transparente]"
@@ -787,14 +874,47 @@ CAMPOS:
   ⚠️ SEMPRE incluir "cristalino transparente" no final de cada linha — o sistema substitui automaticamente por "catarata" ou "LIO" quando detectado na consulta.
 
 - fundoscopia: texto de fundoscopia — preencher quando o médico descreve ao paciente um achado de segmento posterior.
-  ❌ NÃO preencher quando: fundoscopia normal (coberta por injectExamesNormais=true) ou não realizada
-  ✅ Preencher quando: nevo de coroide, retinopatia, alteração macular, escavação aumentada suspeita, membrana epirretiniana, descolamento de retina, hemorragia vítrea, etc.
+  ❌ NÃO preencher quando: fundoscopia normal nos DOIS olhos (coberta por injectExamesNormais=true) ou não realizada
+  ✅ Preencher quando: nevo de coroide, retinopatia, alteração macular, escavação aumentada suspeita, membrana epirretiniana, descolamento de retina, hemorragia vítrea, oclusão vascular, buraco macular, etc.
 
-  FORMATO: "FUNDOSCOPIA INDIRETA: [achado por olho + elementos normais não afetados]"
+  ⚠️ REGRA DE FLAG (crítica): se QUALQUER olho tem achado de fundo, injectExamesNormais=false.
+    O texto por olho (achado no olho afetado + linha normal do contralateral) vai INTEIRO em
+    dados.fundoscopia. Nunca deixe injectExamesNormais=true junto com dados.fundoscopia
+    preenchida — o template normal AO sobrescreveria o achado.
+
+  LATERALIDADE — mesma regra crítica da biomicroscopia:
+    • Identificar o olho afetado usando TODA a consulta (queixa/HDA + fala do exame).
+    • Usar prefixo "OD" / "OE"; achado unilateral → descrever o olho afetado + linha do
+      contralateral como fundo normal.
+    • Só usar "AO" quando o achado for REALMENTE bilateral e assim descrito
+      (retinopatia diabética/hipertensiva, papiledema bilateral).
+
+  ⚠️ PROIBIDO "AO" em achados de fundo UNILATERAIS POR NATUREZA:
+    descolamento de retina, hemorragia vítrea, nevo de coroide, membrana epirretiniana,
+    oclusão vascular (arterial/venosa), buraco macular. Descrever "AO" nesses casos INVENTA
+    a lesão no olho são — erro grave de prontuário (um descolamento fabricado no olho bom é
+    pior que a abrasão do caso 2026-07-27).
+    (Glaucoma NÃO entra nesta lista: a escavação aumentada costuma ser bilateral — se
+    simétrica nos dois olhos, é "AO"; se só um olho tem escavação suspeita, é por olho.)
+    • Lado identificável → descrever SÓ o olho afetado (OD ou OE) + linha do contralateral
+      como fundo normal.
+    • Lado IMPOSSÍVEL de determinar em toda a consulta → NÃO assuma AO. Prefixe o texto com
+      "[CONFIRMAR OLHO AFETADO] " e descreva apenas o olho afetado, SEM a linha do contralateral.
+
+  ⚠️ "escavação simétrica" é comparação ENTRE os olhos — só cabe na forma AO (ambos normais).
+    Em linha de UM olho use "escavação fisiológica" (sem "simétrica"); no olho cuja
+    escavação É o achado (glaucoma), a escavação não é normal — descreva-a e omita a linha.
+
+  FORMATO (unilateral): header "FUNDOSCOPIA INDIRETA:" seguido de uma linha por olho (\n):
+    "FUNDOSCOPIA INDIRETA:\nOD: [achado]; retina aplicada, mácula em bom aspecto, padrão vascular preservado, escavação fisiológica\nOE: fundo sem alterações, retina aplicada, mácula em bom aspecto, padrão vascular preservado, escavação fisiológica"
+  FORMATO (bilateral): linha única AO:
+    "FUNDOSCOPIA INDIRETA: AO [achado]; retina aplicada, escavação simétrica e fisiológica"
+
   Exemplos:
-    "FUNDOSCOPIA INDIRETA: OD sem alterações / OE nevo de coroide inferotemporal, estável, sem sinais de atividade; mácula em bom aspecto, retina aplicada, padrão vascular normal, escavação simétrica e fisiológica"
-    "FUNDOSCOPIA INDIRETA: AO sinais de retinopatia diabética leve (microaneurismas), sem edema macular aparente; retina aplicada, escavação simétrica e fisiológica"
-    "FUNDOSCOPIA INDIRETA: AO escavação aumentada suspeita de glaucoma — aguardar campo visual e OCT de nervo óptico; mácula em bom aspecto, retina aplicada, padrão vascular normal"
+    Nevo OE (unilateral): "FUNDOSCOPIA INDIRETA:\nOD: fundo sem alterações, retina aplicada, mácula em bom aspecto, padrão vascular preservado, escavação fisiológica\nOE: nevo de coroide inferotemporal, estável, sem sinais de atividade; retina aplicada, mácula em bom aspecto, padrão vascular preservado, escavação fisiológica"
+    Glaucoma OD escavação aumentada (unilateral): "FUNDOSCOPIA INDIRETA:\nOD: escavação aumentada (relação E/D ~0,7), suspeita de glaucoma — aguardar campo visual e OCT de nervo óptico; retina aplicada, mácula em bom aspecto, padrão vascular preservado\nOE: fundo sem alterações, retina aplicada, mácula em bom aspecto, padrão vascular preservado, escavação fisiológica"
+    Retinopatia diabética (bilateral): "FUNDOSCOPIA INDIRETA: AO sinais de retinopatia diabética leve (microaneurismas), sem edema macular aparente; retina aplicada, escavação simétrica e fisiológica"
+    Glaucoma bilateral simétrico (AO): "FUNDOSCOPIA INDIRETA: AO escavação aumentada e simétrica (relação E/D ~0,7), suspeita de glaucoma — aguardar campo visual e OCT de nervo óptico; retina aplicada, mácula em bom aspecto, padrão vascular preservado"
 
 ══════════════════════════════════════════════════════════════
 TESTE OBRIGATÓRIO — ANTES DE CADA LINHA

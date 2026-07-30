@@ -85,6 +85,8 @@ var _BRIDGE = {
   shospState: window.__shospState,
   getBiomicroscopiaComLente: getBiomicroscopiaComLente,
   parseCatarataFromDiagnostico: parseCatarataFromDiagnostico,
+  temAchadoAnteriorNoDiagnostico: temAchadoAnteriorNoDiagnostico,
+  temAchadoPosteriorNoDiagnostico: temAchadoPosteriorNoDiagnostico,
   BIOMICROSCOPIA_NORMAL: BIOMICROSCOPIA_NORMAL,
   BIOMICROSCOPIA_BLEFARITE: BIOMICROSCOPIA_BLEFARITE,
   normalizeText: normalizeText,
@@ -540,6 +542,49 @@ test('[DIL-ENCERR-3] despedida endAnchored ("até mais") NÃO trava despedidaNaS
 test('[DIL-2] "pode esperar lá fora" → dilatacaoDetectada=true', () => {
   speak('pode esperar lá fora');
   expect(ctx._BRIDGE.dilatacaoDetectada).toBe(true);
+});
+
+test('[DIL-AREM-1] infinitivo pessoal plural "esperarem lá fora" → dilatacaoDetectada=true', () => {
+  // Log 2026-07-29 (criança + acompanhante): a fala terminou em
+  // "...esperarem lá fora um pouquinho vou colher de fazer efeito para dilatar
+  // em seguida a gente acaba usando óculos tá bom obrigada" e NADA disparou.
+  // 'esperar la fora' não casa "esperarem la fora" por substring.
+  speak('vocês vão esperarem lá fora um pouquinho');
+  expect(ctx._BRIDGE.dilatacaoDetectada).toBe(true);
+});
+
+test('[DIL-AREM-2] "ficarem/sentarem/aguardarem lá fora" também disparam', () => {
+  for (const frase of ['podem ficarem lá fora',
+                       'podem sentarem ali fora',
+                       'vão aguardarem aqui fora']) {
+    ctx._BRIDGE.resetFlags();
+    ctx._BRIDGE.stopCommandTimeout = null; // resetFlags não limpa o stop agendado (ver DIL-4)
+    speak(frase);
+    expect(ctx._BRIDGE.dilatacaoDetectada).toBe(true);
+  }
+});
+
+test('[DIL-EFEITO-1] "fazer efeito para dilatar" dispara mesmo sem a palavra "colírio"', () => {
+  // Mesmo log: o ASR transformou "vou colocar o colírio" em "vou colher",
+  // derrubando o combo ['colirio','dilatar'] — e nada mais casava a frase.
+  speak('vou colher de fazer efeito para dilatar');
+  expect(ctx._BRIDGE.dilatacaoDetectada).toBe(true);
+});
+
+test('[DIL-LOG-2026-07-29] cauda real do log dispara DILATAÇÃO (e não o stop de fim de consulta)', () => {
+  // Cauda exata registrada no console (slice(-120)), com o "esper" recomposto:
+  // a fala junta o envio para fora, a aplicação do dilatador E a despedida.
+  // Nada disparou no dia. A dilatação (prioridade 50) tem de vencer o stop (99):
+  // é pausa, não fim de consulta — conduta/tratamento vêm na fase 2.
+  speak('esperarem la fora um pouquinho vou colher de fazer efeito para dilatar ' +
+        'em seguida a gente acaba usando oculos ta bom obrigada');
+  expect(ctx._BRIDGE.dilatacaoDetectada).toBe(true);
+  expect(ctx._BRIDGE.consultaEncerradaDetectada).toBe(false);
+});
+
+test('[DIL-EFEITO-2] "fazer efeito" de medicação SEM dilatar NÃO dispara (sem falso positivo)', () => {
+  speak('esse colírio leva uns vinte minutos para fazer efeito use de oito em oito horas');
+  expect(ctx._BRIDGE.dilatacaoDetectada).toBe(false);
 });
 
 test('[DIL-3] "vou pedir para esperar lá fora" → stop agendado', () => {
@@ -1201,6 +1246,67 @@ test('[CAT-DX-8] catarata ativa + menção cirúrgica na mesma linha → ainda d
   // "indicada cirurgia de catarata" convive com a catarata ativa do olho fácico.
   const r = ctx._BRIDGE.parseCatarataFromDiagnostico('H250 - Catarata senil AO — indicada cirurgia de catarata');
   expect(r.detected).toBe(true);
+});
+
+// ──────────────────────────────────────────────────────────────────────────────
+// EXAME NORMAL vs DIAGNÓSTICO — temAchadoAnterior/PosteriorNoDiagnostico()
+// Log 2026-07-29: diagnóstico "H111 - Pterígio OD" com biomicroscopia null fez o
+// fallback de despedida injetar "AO: olho calmo" — prontuário contradizendo a si
+// mesmo. O predicado casa por TERMO e por FAIXA de CID (o modelo emitiu H111 para
+// pterígio, que na CID-10 é H11.0 — o termo não pode depender do código correto).
+// ──────────────────────────────────────────────────────────────────────────────
+
+test('[DX-EXAME-1] pterígio OD no diagnóstico → achado anterior detectado (caso real)', () => {
+  expect(ctx._BRIDGE.temAchadoAnteriorNoDiagnostico('H111 - Pterígio OD')).toBe(true);
+});
+
+test('[DX-EXAME-2] termo detecta mesmo com CID errado/ausente', () => {
+  expect(ctx._BRIDGE.temAchadoAnteriorNoDiagnostico('Pterígio nasal olho direito')).toBe(true);
+  expect(ctx._BRIDGE.temAchadoAnteriorNoDiagnostico('H160 - Úlcera de córnea OE')).toBe(true);
+});
+
+test('[DX-EXAME-3] diagnóstico só refrativo NÃO bloqueia exame normal', () => {
+  expect(ctx._BRIDGE.temAchadoAnteriorNoDiagnostico('H52.1 - Miopia\nH52.2 - Astigmatismo')).toBe(false);
+  expect(ctx._BRIDGE.temAchadoPosteriorNoDiagnostico('H52.1 - Miopia\nH52.2 - Astigmatismo')).toBe(false);
+});
+
+test('[DX-EXAME-4] catarata NÃO conta como achado anterior (lente dinâmica cobre)', () => {
+  expect(ctx._BRIDGE.temAchadoAnteriorNoDiagnostico('H250 - Catarata senil incipiente AO')).toBe(false);
+  expect(ctx._BRIDGE.temAchadoAnteriorNoDiagnostico('Z961 - Presença de lente intra-ocular')).toBe(false);
+});
+
+test('[DX-EXAME-5] achado marcado como resolvido NÃO bloqueia exame normal', () => {
+  expect(ctx._BRIDGE.temAchadoAnteriorNoDiagnostico('H109 - Conjuntivite NE (resolvida)')).toBe(false);
+});
+
+test('[DX-EXAME-5b] achado ATIVO descrito como cicatriz/prévio NÃO é filtrado', () => {
+  // Um leucoma É uma cicatriz — "cicatrizado" descreve o achado atual, não que ele
+  // passou. Filtrar essas linhas desarmaria o guard no caso que ele existe para pegar
+  // (mesmo modo de falha dos Casos 7/7c do contexto histórico da catarata).
+  expect(ctx._BRIDGE.temAchadoAnteriorNoDiagnostico('H170 - Leucoma aderente OE (cicatrizado)')).toBe(true);
+  expect(ctx._BRIDGE.temAchadoAnteriorNoDiagnostico('H111 - Pterígio OD (cirurgia prévia)')).toBe(true);
+});
+
+test('[DX-EXAME-6] resolvido + ativo na mesma lista → ativo prevalece', () => {
+  const dx = 'H109 - Conjuntivite NE (resolvida)\nH010 - Blefarite bilateral';
+  expect(ctx._BRIDGE.temAchadoAnteriorNoDiagnostico(dx)).toBe(true);
+});
+
+test('[DX-EXAME-7] achados posteriores detectados por termo e por CID', () => {
+  expect(ctx._BRIDGE.temAchadoPosteriorNoDiagnostico('H360 - Retinopatia diabética')).toBe(true);
+  expect(ctx._BRIDGE.temAchadoPosteriorNoDiagnostico('H400 - Suspeita de glaucoma')).toBe(true);
+  expect(ctx._BRIDGE.temAchadoPosteriorNoDiagnostico('Descolamento de retina OE')).toBe(true);
+});
+
+test('[DX-EXAME-8] anterior e posterior não se confundem', () => {
+  expect(ctx._BRIDGE.temAchadoPosteriorNoDiagnostico('H111 - Pterígio OD')).toBe(false);
+  expect(ctx._BRIDGE.temAchadoAnteriorNoDiagnostico('H360 - Retinopatia diabética')).toBe(false);
+});
+
+test('[DX-EXAME-9] diagnóstico vazio/null → não bloqueia', () => {
+  expect(ctx._BRIDGE.temAchadoAnteriorNoDiagnostico(null)).toBe(false);
+  expect(ctx._BRIDGE.temAchadoAnteriorNoDiagnostico('')).toBe(false);
+  expect(ctx._BRIDGE.temAchadoPosteriorNoDiagnostico(null)).toBe(false);
 });
 
 // ──────────────────────────────────────────────────────────────────────────────

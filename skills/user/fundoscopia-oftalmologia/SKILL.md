@@ -61,6 +61,12 @@ Se o fundo é normal nos dois olhos → `dados.fundoscopia: null` (o sistema inj
 ### Achado REALMENTE bilateral
 - Linha única `AO:` — só quando o achado é dos dois olhos e assim descrito (retinopatia diabética/hipertensiva, papiledema, escavação aumentada simétrica).
 
+## Consistência diagnóstico ↔ exame (regra crítica)
+
+Se o `diagnostico` registra um achado de **segmento posterior como ATUAL** (retinopatia, descolamento, DMRI, membrana epirretiniana, buraco macular, nevo de coroide, oclusão vascular, glaucoma/escavação aumentada), a fundoscopia não pode afirmar `retina aplicada, escavação simétrica e fisiológica` nos dois olhos. Vale a mesma lógica da biomicroscopia — ver `biomicroscopia-oftalmologia`.
+
+> 🛡️ **Rede de segurança no runtime (2026-07-29):** `temAchadoPosteriorNoDiagnostico()` em `scripts/sidepanel-constants.js` suprime o template `FUNDOSCOPIA_NORMAL` quando o diagnóstico afirma achado de fundo — campo **vazio** em vez de normal fabricado. A rede não compõe a descrição; descrever é trabalho desta skill.
+
 ## Lateralidade (regra crítica — nunca bilateralizar unilateral)
 
 A lateralidade sai de **toda a consulta** (queixa/HDA + fala do exame).

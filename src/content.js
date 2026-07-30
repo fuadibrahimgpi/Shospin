@@ -47,6 +47,18 @@ const FALLBACK_IDS = {
   'refracao.oe.esf': 'prontuario_resp_78074_259526',
   'refracao.oe.cil': 'prontuario_resp_78074_259527',
   'refracao.oe.eixo': 'prontuario_resp_78074_259528',
+  // ── Refração ESTÁTICA (pós-dilatação) — mesma aba tdCadastro-78074 ──
+  // Alvo preenchido em runtime por detecção dinâmica (bloco cujo rótulo casa
+  // "estática"; ver _refractionBlockOf). Estes fallbacks só entram em cena se a
+  // detecção falhar. Cole aqui os 6 IDs reais do bloco estática (dump do console
+  // na aba Refração) e descomente — um ID errado injetaria no campo errado, por
+  // isso ficam comentados até serem confirmados na página:
+  // 'refracaoEstatica.od.esf':  'prontuario_resp_78074_XXXXXX',
+  // 'refracaoEstatica.od.cil':  'prontuario_resp_78074_XXXXXX',
+  // 'refracaoEstatica.od.eixo': 'prontuario_resp_78074_XXXXXX',
+  // 'refracaoEstatica.oe.esf':  'prontuario_resp_78074_XXXXXX',
+  // 'refracaoEstatica.oe.cil':  'prontuario_resp_78074_XXXXXX',
+  // 'refracaoEstatica.oe.eixo': 'prontuario_resp_78074_XXXXXX',
   'receitaOculos.od.esf': 'od_esferico',
   'receitaOculos.od.cil': 'od_cilindrico',
   'receitaOculos.od.eixo': 'od_eixo',
@@ -54,6 +66,15 @@ const FALLBACK_IDS = {
   'receitaOculos.oe.cil': 'oe_cilindrico',
   'receitaOculos.oe.eixo': 'oe_eixo'
 };
+
+// IDs conhecidos da refração DINÂMICA (alvo do OCR normal). Guarda de segurança:
+// a detecção da estática NUNCA pode reclassificar um destes como estática — se a
+// heurística de rótulo falhar, o pior caso deve ser "não injeta" (seguro), nunca
+// gravar o grau dilatado no campo dinâmico errado. Ver _detectDynamicFields.
+const DYNAMIC_REFRACTION_IDS = new Set([
+  FALLBACK_IDS['refracao.od.esf'], FALLBACK_IDS['refracao.od.cil'], FALLBACK_IDS['refracao.od.eixo'],
+  FALLBACK_IDS['refracao.oe.esf'], FALLBACK_IDS['refracao.oe.cil'], FALLBACK_IDS['refracao.oe.eixo'],
+].filter(Boolean));
 
 const TAB_IDS = {
   biomicroscopia: 'tdCadastro-78728',
@@ -213,12 +234,88 @@ class ShospFieldDetector {
           
           if (fieldType) {
             const isReceita = text.includes('receita') || text.includes('prescrição') || text.includes('prescricao') || id.includes('esferico') || id.includes('cilindrico') || id.includes('eixo') && (id.startsWith('od') || id.startsWith('oe'));
-            const prefix = isReceita ? 'receitaOculos' : 'refracao';
+            // Fora da receita, o campo pode pertencer ao bloco Refração DINÂMICA
+            // (padrão, alvo do OCR normal) ou ao bloco Refração ESTÁTICA
+            // (pós-dilatação). _refractionBlockOf decide pelo rótulo do bloco.
+            let prefix = isReceita ? 'receitaOculos' : this._refractionBlockOf(input);
+            // Guarda de segurança: um ID sabidamente dinâmico jamais vira estática
+            // (evita gravar o grau dilatado no campo dinâmico se o rótulo enganar).
+            if (prefix === 'refracaoEstatica' && DYNAMIC_REFRACTION_IDS.has(id)) {
+              prefix = 'refracao';
+            }
             this.cache.set(`${prefix}.${eye}.${fieldType}`, id);
           }
         }
       }
     }
+  }
+
+  /**
+   * Decide a qual bloco de refração um campo esf/cil/eixo pertence, subindo a
+   * árvore até achar o rótulo de bloco mais próximo. "estát*" → estática
+   * (pós-dilatação); "dinâm*" ou nenhum → dinâmica (padrão, alvo do OCR normal,
+   * preservando o comportamento anterior). Só considera rótulos curtos para não
+   * casar com blobs de texto de containers grandes (que englobam os dois blocos).
+   * @param {Element} input
+   * @returns {'refracao'|'refracaoEstatica'}
+   */
+  _refractionBlockOf(input) {
+    let node = input;
+    for (let i = 0; i < 7 && node; i++, node = node.parentElement) {
+      // 1) cabeçalho estrutural dentro do container atual
+      const heads = node.querySelectorAll
+        ? node.querySelectorAll('legend, caption, th, h3, h4, h5, .titulo, .title, [class*="titulo" i]')
+        : [];
+      for (const h of heads) {
+        const t = (h.textContent || '').trim();
+        if (!t || t.length > 60) continue; // ignora blocos de texto longos
+        if (/est[aá]t/i.test(t)) return 'refracaoEstatica';
+        if (/din[aâ]m/i.test(t)) return 'refracao';
+      }
+      // 2) rótulo solto imediatamente antes deste container
+      let sib = node.previousElementSibling;
+      for (let j = 0; j < 3 && sib; j++, sib = sib.previousElementSibling) {
+        const t = (sib.textContent || '').trim();
+        if (!t || t.length > 60) continue;
+        if (/est[aá]t/i.test(t)) return 'refracaoEstatica';
+        if (/din[aâ]m/i.test(t)) return 'refracao';
+      }
+    }
+    return 'refracao'; // padrão seguro: dinâmica
+  }
+
+  /**
+   * Dump ESTRUTURAL dos campos de refração no DOM: id, name, placeholder, o bloco
+   * que _refractionBlockOf atribui a cada um e os rótulos curtos dos 7 ancestrais
+   * mais próximos. NUNCA lê .value — nenhum dado de paciente sai da página.
+   *
+   * Existe porque `refracaoEstatica.*` é o único grupo sem IDs em FALLBACK_IDS e
+   * depende inteiramente da heurística de rótulo contra um DOM nunca inspecionado.
+   * Quando a injeção estática não preenche nada, este dump é a resposta: mostra se
+   * existe um segundo bloco de esf/cil/eixo, quais são seus IDs e se algum rótulo
+   * ancestral contém "estát" (isto é, se a heurística tinha chance de acertar).
+   * @returns {Array<{id:string,name:string|null,ph:string|null,bloco:string,labels:string[]}>}
+   */
+  dumpRefractionCandidates() {
+    const inputs = document.querySelectorAll('input[id*="prontuario_resp" i], input[id*="esferico" i], input[id*="cilindrico" i], input[id*="eixo" i]');
+    return Array.from(inputs).map(input => {
+      const labels = [];
+      let node = input;
+      for (let i = 0; i < 7 && node; i++, node = node.parentElement) {
+        if (!node.querySelectorAll) continue;
+        for (const h of node.querySelectorAll('legend, caption, th, h3, h4, h5, label, .titulo, .title, b, strong')) {
+          const t = (h.textContent || '').trim();
+          if (t && t.length <= 60) labels.push(t);
+        }
+      }
+      return {
+        id: input.id,
+        name: input.name || null,
+        ph: input.placeholder || null,
+        bloco: this._refractionBlockOf(input),
+        labels: Array.from(new Set(labels)).slice(0, 8)
+      };
+    });
   }
 
   getTabId(tabName) {
@@ -717,8 +814,11 @@ class ShospInjector {
   async injectExamesNormais(data) {
     let success = false;
 
-    // Biomicroscopia
-    const bioTabId = this.detector.getTabId('biomicroscopia');
+    // Biomicroscopia — só injeta se o dado for fornecido.
+    // Pode vir null quando o diagnóstico afirma achado de segmento anterior e não há
+    // texto descrito: nesse caso o campo fica VAZIO para o médico redigir, em vez de
+    // receber o template normal que contradiria o diagnóstico (log 2026-07-29).
+    const bioTabId = data.biomicroscopia ? this.detector.getTabId('biomicroscopia') : null;
     if (bioTabId && (await this.clickTab(bioTabId))) {
       const tabNumber = extractTabNumber(bioTabId);
       // Polling: aguarda editores Froala inicializarem após o container aparecer
@@ -1281,6 +1381,65 @@ window.__shospMessageListener = (message, _sender, sendResponse) => {
         .catch(err => sendResponse({ success: false, error: err.message }));
       return true;
 
+    case 'injectRefracaoEstatica': {
+      // Captura pós-dilatação: escreve SOMENTE o bloco Refração ESTÁTICA.
+      // Reusa fillRefractionFields (mesma aba Refração), trocando só o fieldType
+      // para o mapeamento estática — nenhum outro campo é tocado.
+      const refr = message.data && message.data.refracao;
+      if (!refr) { sendResponse({ success: false, error: 'Sem dados de refração' }); return false; }
+      (async () => {
+        try {
+          // A estática não tem fallback de IDs: depende da detecção dinâmica.
+          // Clicar na aba Refração garante que os campos estejam no DOM antes de
+          // redetectar (senão o bloco estática pode não ser mapeado).
+          const tabId = injector.detector.getTabId('refracao');
+          // Guardar o resultado do clique: fillRefractionFields retorna false tanto
+          // por aba não clicada quanto por campo não mapeado. Sem distinguir, uma
+          // falha de aba viraria "confira o mapeamento" + dump da aba errada.
+          const tabClicked = tabId ? await injector.clickTab(tabId) : null;
+          await injector.detector.refresh();
+
+          const paths = ['od.esf', 'od.cil', 'od.eixo', 'oe.esf', 'oe.cil', 'oe.eixo'];
+          const resolvidos = {};
+          for (const p of paths) {
+            resolvidos[p] = injector.detector.getFieldId(`refracaoEstatica.${p}`) || null;
+          }
+
+          const filled = await injector.fillRefractionFields('refracao', 'refracaoEstatica', refr);
+
+          // Quando não preenche, a causa é sempre mapeamento ausente (a estática não
+          // tem FALLBACK_IDS). Anexar o dump estrutural faz a própria falha entregar
+          // os IDs necessários para fixá-la: sem isso o painel só diz "confira os
+          // campos" e a sessão seguinte recomeça do zero — foi o que aconteceu nas
+          // três capturas estáticas do log 2026-07-29.
+          const diag = filled
+            ? { resolvidos, tabClicked }
+            : { resolvidos, tabClicked, candidatos: injector.detector.dumpRefractionCandidates() };
+          sendResponse({ success: filled, diag });
+        } catch (err) {
+          sendResponse({ success: false, error: err.message });
+        }
+      })();
+      return true;
+    }
+
+    // Dump estrutural dos campos de refração sob demanda (sem injetar nada).
+    // Escape hatch para fixar os IDs do bloco ESTÁTICA sem precisar refazer uma
+    // captura: chamar dumpRefracaoBlocks() no console do painel.
+    case 'dumpRefracaoBlocks': {
+      (async () => {
+        try {
+          const tabId = injector.detector.getTabId('refracao');
+          if (tabId) await injector.clickTab(tabId);
+          await injector.detector.refresh();
+          sendResponse({ success: true, candidatos: injector.detector.dumpRefractionCandidates() });
+        } catch (err) {
+          sendResponse({ success: false, error: err.message });
+        }
+      })();
+      return true;
+    }
+
     case 'searchCid':
       (async () => {
         try {
@@ -1455,6 +1614,12 @@ window.__shospMessageListener = (message, _sender, sendResponse) => {
           let rows = [];
           let usedVariant = '';
           let targetRow = null;
+          // Rastreia se ALGUMA variante retornou linhas, independente de terem
+          // sido aceitas. `rows` só é preenchido quando há match (segue com break),
+          // então não serve para distinguir "SHOSP não tem o código" de
+          // "SHOSP retornou linhas mas nenhuma casou" no ramo de falha abaixo.
+          let sawAnyRows = false;
+          let rejectedRows = [];
 
           const matchCandidates = [term];
           if (term.includes('.')) matchCandidates.push(term.replace(/\./g, ''));
@@ -1495,6 +1660,8 @@ window.__shospMessageListener = (message, _sender, sendResponse) => {
             const currentRows = await waitForRows(3000);
             if (currentRows.length === 0) continue;
 
+            sawAnyRows = true;
+            rejectedRows = currentRows; // guardado p/ diagnóstico se nenhuma casar
             contentLogger.info(`[searchCid] Encontrados ${currentRows.length} resultado(s) para "${variant}"`);
             contentLogger.debug('[searchCid] Resultados:', currentRows.map(r => (r.textContent || '').trim().slice(0, 60)).join(' | '));
 
@@ -1512,15 +1679,17 @@ window.__shospMessageListener = (message, _sender, sendResponse) => {
           }
 
           if (!targetRow) {
-            // Nenhuma variante funcionou
-            const hadRows = rows.length > 0;
-            if (hadRows) {
-              contentLogger.error(`[searchCid] Nenhum resultado compatível com a categoria ${category || term}`);
-              contentLogger.debug('[searchCid] Linhas descartadas:', rows.map(r => (r.getAttribute('onclick') || '').slice(0, 60)).join(' | '));
-              sendResponse({ success: false, error: `Nenhum resultado compatível com a categoria para o CID: ${term}` });
+            // Nenhuma variante funcionou. Distinguir os dois cenários é crucial
+            // para depurar: "SHOSP não indexa este código" exige entrada manual,
+            // enquanto "retornou linhas mas nenhuma casou" é bug de matching.
+            if (sawAnyRows) {
+              const descartadas = rejectedRows.map(r => (r.textContent || '').trim().slice(0, 60)).join(' | ');
+              contentLogger.error(`[searchCid] SHOSP retornou linhas para "${term}" mas nenhuma casou (variantes: ${searchVariants.join(', ')})`);
+              contentLogger.error('[searchCid] Linhas descartadas:', descartadas);
+              sendResponse({ success: false, error: `CID ${term}: SHOSP retornou resultados mas nenhum correspondeu — verifique matching. Descartadas: ${descartadas}` });
             } else {
-              contentLogger.warn('[searchCid] Nenhum resultado para:', term);
-              sendResponse({ success: false, error: `Nenhum resultado para o CID: ${term}` });
+              contentLogger.warn(`[searchCid] Nenhuma variante retornou resultados para "${term}" (tentadas: ${searchVariants.join(', ')}) — provável ausência no subset SHOSP`);
+              sendResponse({ success: false, error: `Nenhum resultado no SHOSP para o CID: ${term} (variantes tentadas: ${searchVariants.join(', ')})` });
             }
             return;
           }

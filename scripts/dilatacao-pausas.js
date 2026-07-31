@@ -22,6 +22,10 @@
  *     audio:     object|null — payload de áudio injetado na fase 1 (re-injeção)
  *     tabUrl:    string|null — URL do prontuário aberto quando a pausa nasceu
  *     tabTitle:  string|null — título da aba (rótulo humano na lista)
+ *     cids:      string[]|undefined — códigos já lançados na ficha na fase 1
+ *                (ex: ['H520','H522']). A fase 2 os restaura em
+ *                _cidsLancadosNaSessao para não relançá-los: resetSession()
+ *                zera essa memória a cada gravação nova.
  *     retomar:   boolean — o médico confirmou que ESTE paciente voltou; a
  *                próxima gravação é a fase 2 dele. No máximo UM slot armado.
  *   }

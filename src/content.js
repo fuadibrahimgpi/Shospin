@@ -1402,10 +1402,28 @@ window.__shospSeenRequestIds = _seenRequestIds;
 
 // Deduplicação de CIDs por paciente: evita injetar o mesmo código duas vezes
 // na mesma aba (ex: áudio "Miopia" + OCR "H52.1 - Miopia" chegando separados).
-// Resetado pela navegação SPA (nova URL = novo paciente).
+//
+// ⚠️ A URL NÃO É FRONTEIRA DE PACIENTE. O SHOSP abre todas as fichas na mesma
+// URL (`https://sistema.shosp.com.br/`, sem path nem hash — ver nota "SHOSP não
+// tem id de paciente em URL/DOM"), então o reset por location.href abaixo nunca
+// dispara na prática e este Set acumularia do 1º paciente do dia em diante.
+// Consequência real (log 2026-07-31, 4 fichas na mesma aba): do 2º paciente em
+// diante, H520/H522 repetidos eram descartados como "já injetado neste paciente"
+// e o painel ainda dizia "C.I.D. lançado" — CID sumindo da ficha em silêncio.
+//
+// A autoridade sobre a fronteira de paciente é o PAINEL (`_cidsLancadosNaSessao`,
+// que zera em StateManager.resetSession() a cada gravação nova e é semeado com a
+// fase 1 quando há retomada de dilatação armada). Ele espelha o set aqui via
+// `setInjectedCids` no início de cada cadeia. O reset por URL fica só como rede
+// para o caso de o SHOSP passar a rotear por ficha.
 if (!window.__shospInjectedCids || window.__shospInjectedCidsUrl !== location.href) {
   window.__shospInjectedCids = new Set();
   window.__shospInjectedCidsUrl = location.href;
+}
+
+/** Normaliza um código de CID para a chave do Set (maiúsculo, sem ponto). */
+function _normalizeCidCode(code) {
+  return String(code || '').toUpperCase().replace(/\./g, '').trim();
 }
 
 // Retificação cross-injeção de H52.9: o transtorno de refração NÃO especificado
@@ -2058,6 +2076,24 @@ window.__shospMessageListener = (message, _sender, sendResponse) => {
     case 'getFieldMapping':
       sendResponse({ success: true, mapping: fieldDetector.getFullMapping() });
       return false;
+
+    // Fronteira de paciente: o painel redefine o Set de CIDs já injetados.
+    // Sobrescreve (não mescla) — é justamente para DESCARTAR os códigos do
+    // paciente anterior, que a URL constante do SHOSP jamais descartaria.
+    case 'setInjectedCids': {
+      const _codes = Array.isArray(message.codes) ? message.codes : [];
+      const _antes = window.__shospInjectedCids ? [...window.__shospInjectedCids] : [];
+      window.__shospInjectedCids = new Set(_codes.map(_normalizeCidCode).filter(Boolean));
+      window.__shospInjectedCidsUrl = location.href;
+      const _depois = [...window.__shospInjectedCids];
+      const _descartados = _antes.filter(c => !window.__shospInjectedCids.has(c));
+      contentLogger.info(
+        `[setInjectedCids] Set redefinido pelo painel: ${JSON.stringify(_depois)}` +
+        (_descartados.length ? ` | descartados (paciente anterior): ${JSON.stringify(_descartados)}` : '')
+      );
+      sendResponse({ success: true, codes: _depois });
+      return false;
+    }
 
     default:
       return false;

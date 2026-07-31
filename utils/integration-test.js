@@ -2756,6 +2756,85 @@ test('[CIDDUP-5] _cidKey colapsa "H522 - Astigmatismo OD", "H52.2 - Astigmatismo
 });
 
 // ──────────────────────────────────────────────────────────────────────────────
+// 2026-07-31 — Fronteira de PACIENTE do dedup de CID
+//
+// Duas camadas de dedup com fronteiras OPOSTAS: o painel zera
+// `_cidsLancadosNaSessao` a cada gravação nova; o content script só zerava
+// quando `location.href` mudava — e o SHOSP abre toda ficha na MESMA URL.
+// Resultado real (log 2026-07-31, 4 fichas na mesma aba): do 2º paciente em
+// diante os códigos repetidos (H520/H522) eram descartados como "já injetado
+// neste paciente" e o painel ainda exibia "C.I.D. lançado". O painel passa a
+// ser a autoridade e espelha seu Set no content script.
+// ──────────────────────────────────────────────────────────────────────────────
+
+const _normalizeCidCode = new Function(
+  _extractFn(contentJsSource, '_normalizeCidCode') + '\nreturn _normalizeCidCode;'
+)();
+
+test('[CIDPAC-1] _normalizeCidCode colapsa ponto, caixa e espaços', () => {
+  expect(_normalizeCidCode('h52.2')).toBe('H522');
+  expect(_normalizeCidCode(' H520 ')).toBe('H520');
+  expect(_normalizeCidCode(null)).toBe('');
+});
+
+test('[CIDPAC-2] content.js expõe setInjectedCids e SOBRESCREVE o Set (mesclar manteria o paciente anterior)', () => {
+  const idx = contentJsSource.indexOf("case 'setInjectedCids'");
+  expect(idx > -1).toBe(true);
+  const bloco = contentJsSource.slice(idx, idx + 900);
+  expect(bloco).toContain('window.__shospInjectedCids = new Set(');
+  expect(bloco.includes('__shospInjectedCids.add(')).toBe(false);
+});
+
+test('[CIDPAC-3] a URL está documentada como NÃO sendo fronteira de paciente', () => {
+  expect(contentJsSource).toContain('A URL NÃO É FRONTEIRA DE PACIENTE');
+});
+
+test('[CIDPAC-4] o painel sincroniza a fronteira no início da cadeia, antes do searchCid', () => {
+  const idxSync = injectionJsSource.indexOf('_syncCidsLancadosToTabs(tabs)');
+  const idxSearch = injectionJsSource.indexOf("action: 'searchCid'");
+  expect(idxSync > -1).toBe(true);
+  expect(idxSearch > idxSync).toBe(true);
+  // Só no INÍCIO: sincronizar a cada termo apagaria os códigos que o content
+  // script acabou de registrar durante esta mesma cadeia.
+  expect(injectionJsSource).toContain('if (!opts._continuation) await _syncCidsLancadosToTabs');
+});
+
+test('[CIDPAC-4b] a sincronização vai para TODAS as abas do SHOSP, não só a escolhida', () => {
+  const fn = _extractFn(injectionJsSource, '_syncCidsLancadosToTabs');
+  // Uma aba não-sincronizada guardaria o Set do paciente anterior — o bug original.
+  expect(fn).toContain('tabs.map(');
+  expect(fn.includes('cidTab')).toBe(false);
+});
+
+test('[CIDPAC-5] as chamadas recursivas se identificam como continuação (sucesso e falha)', () => {
+  const recursivas = injectionJsSource.match(/handleSearchCid\(field, \{ _continuation: true \}\)/g) || [];
+  expect(recursivas.length).toBe(2);
+});
+
+test('[CIDPAC-6] skipped NÃO é reportado como "C.I.D. lançado"', () => {
+  const idx = injectionJsSource.indexOf('if (resp.skipped) {');
+  expect(idx > -1).toBe(true);
+  const ramoSkipped = injectionJsSource.slice(idx, injectionJsSource.indexOf('} else {', idx));
+  expect(ramoSkipped).toContain('já estava na ficha');
+  expect(ramoSkipped.includes('C.I.D. lançado')).toBe(false);
+});
+
+test('[CIDPAC-7] a fase 1 da dilatação persiste no slot os CIDs já lançados', () => {
+  const idx = injectionJsSource.indexOf('const _patch = {');
+  expect(idx > -1).toBe(true);
+  expect(injectionJsSource.slice(idx, idx + 700)).toContain('cids: [..._cidsLancadosNaSessao]');
+});
+
+test('[CIDPAC-8] a fase 2 restaura os CIDs da fase 1 antes de qualquer dedup (não relança na mesma ficha)', () => {
+  const idxObter = injectionJsSource.indexOf('DilatacaoPausas.obterRetomada()');
+  const idxRestore = injectionJsSource.indexOf('_phase1Data.cids.forEach');
+  const idxMerge = injectionJsSource.indexOf('..._cidsLancadosNaSessao,');
+  expect(idxObter > -1).toBe(true);
+  expect(idxRestore > idxObter).toBe(true);
+  expect(idxRestore < idxMerge).toBe(true);
+});
+
+// ──────────────────────────────────────────────────────────────────────────────
 // 2026-07-29 — Ciclo de vida do banner de aviso clínico
 //
 // O banner nasce na análise; o injectAll dispara clearAll(clearAudio) ~1,5s

@@ -140,13 +140,52 @@ function _deduplicateCidField(field) {
   }
 }
 
-async function handleSearchCid(field) {
+/**
+ * Espelha `_cidsLancadosNaSessao` no content script (fronteira de paciente).
+ *
+ * O content script mantém o próprio Set de dedup, mas a fronteira dele era
+ * `location.href` — e o SHOSP abre toda ficha na mesma URL, então o Set nunca
+ * zerava e passou a suprimir CIDs legítimos do paciente seguinte (log
+ * 2026-07-31). Aqui o painel assume a autoridade: `_cidsLancadosNaSessao` já
+ * tem a semântica certa (zera em resetSession() a cada gravação nova; semeado
+ * com a fase 1 quando há dilatação armada), então basta empurrá-lo antes de
+ * cada cadeia. Melhor esforço — falha aqui nunca aborta a busca de CID.
+ *
+ * Vai para TODAS as abas do SHOSP, não só a escolhida para esta cadeia: o Set
+ * vive por aba, e uma aba não-sincronizada guardaria o Set do paciente anterior
+ * indefinidamente — se `selectShospTab` a escolhesse numa cadeia seguinte, o bug
+ * original voltaria inteiro. A mensagem é idempotente, então mandar para todas
+ * não custa nada.
+ */
+async function _syncCidsLancadosToTabs(tabs) {
+  const codes = [..._cidsLancadosNaSessao];
+  const acks = await Promise.all(
+    tabs.map(t => sendToTab(t.id, { action: 'setInjectedCids', codes }, { silent: true }))
+  );
+  const ok = acks.filter(a => a?.success).length;
+  if (ok > 0) {
+    console.log(`[CID] Fronteira de paciente sincronizada em ${ok}/${tabs.length} aba(s) do SHOSP:`, codes);
+  }
+  if (ok < tabs.length) {
+    console.warn(`[CID] ${tabs.length - ok} aba(s) do SHOSP não responderam à sincronização da fronteira ` +
+      '— dê F5 nelas. Sem isso, um CID legítimo repetido do paciente anterior pode ser ignorado em silêncio.');
+  }
+}
+
+/**
+ * @param {HTMLElement} field
+ * @param {{ _continuation?: boolean }} [opts] `_continuation` marca as chamadas
+ *        recursivas (termo seguinte da MESMA cadeia): elas não re-sincronizam a
+ *        fronteira de paciente, senão apagariam os códigos que o content script
+ *        acabou de registrar nesta mesma cadeia.
+ */
+async function handleSearchCid(field, opts = {}) {
   // Guard: previne chamadas paralelas (câmera + áudio, botão duplo, etc.)
   // Reagenda em vez de descartar silenciosamente — evita perda de CIDs do áudio
   // quando a cadeia do OCR ainda está em andamento.
   if (handleSearchCid._running) {
     console.warn('[CID] Já em execução — reagendando para 2s');
-    setTimeout(() => handleSearchCid(field), 2000);
+    setTimeout(() => handleSearchCid(field, opts), 2000);
     return;
   }
   handleSearchCid._running = true;
@@ -202,6 +241,9 @@ async function handleSearchCid(field) {
     // CID na ficha errada quando há 2+ abas SHOSP.
     const cidTab = await selectShospTab(tabs, { retries: 1, reinject: false }) || tabs[0];
 
+    // Início de cadeia: declarar ao content script de quem é esta ficha.
+    if (!opts._continuation) await _syncCidsLancadosToTabs(tabs);
+
     console.log(`[SearchCid] termo="${termToSearch}" → tab=${cidTab.id}`);
     const resp = await sendToTab(cidTab.id, { action: 'searchCid', term: termToSearch });
     console.log(`[SearchCid] resp=`, resp);
@@ -231,18 +273,28 @@ async function handleSearchCid(field) {
       if (_key) _cidsLancadosNaSessao.add(_key);
       // Atualiza o campo com os restantes (remove o termo já buscado)
       field.value = terms.slice(1).join('\n');
-      // Feedback de sucesso
+      // Feedback de sucesso.
+      // `skipped` = o content script NÃO clicou (código já estava na ficha, ou
+      // H52.9 redundante). Dizer "C.I.D. lançado" aí é mentira — foi assim que
+      // a supressão cross-paciente do log 2026-07-31 passou despercebida.
       successMessage.classList.remove('hidden');
-      successMessage.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg><span>C.I.D. lançado: ${termToSearch}</span>`;
-      successMessage.style.background = '#dcfce7';
-      successMessage.style.color = '#166534';
+      if (resp.skipped) {
+        console.log(`[SearchCid] "${termToSearch}" já estava na ficha — não relançado`);
+        successMessage.innerHTML = `<span>C.I.D. já estava na ficha: ${termToSearch}</span>`;
+        successMessage.style.background = '#eff6ff';
+        successMessage.style.color = '#1e40af';
+      } else {
+        successMessage.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg><span>C.I.D. lançado: ${termToSearch}</span>`;
+        successMessage.style.background = '#dcfce7';
+        successMessage.style.color = '#166534';
+      }
       _armHideSuccess();
       // Auto-encadear próximo termo após delay.
       // O lock é mantido logicamente: liberamos e re-adquirimos dentro do callback
       // do setTimeout (JS é single-threaded — nenhum outro código corre entre as duas linhas).
       const stillHasCid = field.value.trim();
       if (stillHasCid) {
-        setTimeout(() => { handleSearchCid._running = false; handleSearchCid(field); }, 1800);
+        setTimeout(() => { handleSearchCid._running = false; handleSearchCid(field, { _continuation: true }); }, 1800);
         return; // Não liberar o lock antes do próximo passo
       } else {
         handleSearchCid._running = false;
@@ -263,7 +315,7 @@ async function handleSearchCid(field) {
       field.value = terms.slice(1).join('\n');
       const stillHasCid = field.value.trim();
       if (stillHasCid) {
-        setTimeout(() => { handleSearchCid._running = false; handleSearchCid(field); }, 1800);
+        setTimeout(() => { handleSearchCid._running = false; handleSearchCid(field, { _continuation: true }); }, 1800);
         return;
       } else {
         handleSearchCid._running = false;
@@ -505,6 +557,19 @@ async function injectAll(force = false) {
   try {
     _phase1Data = await DilatacaoPausas.obterRetomada();
   } catch (_e) { _phase1Data = null; }
+
+  // Retomada armada = MESMO paciente voltando. `_cidsLancadosNaSessao` foi
+  // zerado por resetSession() ao iniciar a gravação da fase 2, então sem esta
+  // semeadura a fase 2 relançaria no SHOSP os CIDs que a fase 1 já pôs na ficha
+  // (H520 duplicado no caso da dilatação de 2026-07-31). Antes isso não
+  // acontecia só porque o Set do content script nunca zerava — a mesma falha
+  // que suprimia CIDs entre pacientes diferentes.
+  if (Array.isArray(_phase1Data?.cids) && _phase1Data.cids.length) {
+    const _antes = _cidsLancadosNaSessao.size;
+    _phase1Data.cids.forEach(c => { if (c) _cidsLancadosNaSessao.add(c); });
+    console.log('[InjectAll] CIDs da fase 1 restaurados para a dedup da fase 2:',
+      _phase1Data.cids, `(${_antes} → ${_cidsLancadosNaSessao.size})`);
+  }
 
   // Sanidade anti-contaminação: se a pausa armada nasceu em OUTRO prontuário
   // (URL diferente da aba de injeção), avisar — o médico pode ter armado a
@@ -779,6 +844,9 @@ async function injectAll(force = false) {
         retomar: false,
         tabUrl: tab?.url || null,
         tabTitle: tab?.title || null,
+        // CIDs que a fase 1 já lançou nesta ficha. A fase 2 os restaura para não
+        // relançá-los (resetSession() zera a memória a cada gravação nova).
+        cids: [..._cidsLancadosNaSessao],
       };
       try {
         const _atualizado = _slotId ? await DilatacaoPausas.atualizar(_slotId, _patch) : null;

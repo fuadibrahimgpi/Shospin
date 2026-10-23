@@ -1988,7 +1988,7 @@ window.__shospMessageListener = (message, _sender, sendResponse) => {
           // e nota de bug "H52.9 duplicado" 2026-07-21). Cobre a ordem OCR→áudio.
           if (_isRedundantUnspecifiedRefraction(normCode, cidSet)) {
             contentLogger.warn('[searchCid] H52.9 ignorado — CID refrativo específico já injetado neste paciente:', [...cidSet]);
-            sendResponse({ success: true, skipped: true });
+            sendResponse({ success: true, skipped: true, reason: 'redundant' });
             return;
           }
           // Sanidade final: a linha escolhida tem mesmo o código pedido? `pickRow`

@@ -498,7 +498,7 @@ Tabela de decisão:
   | Resposta clara do paciente: "sim", "uso", "tenho", "fiz"  | ✅ Registrar afirmativa                         |
   | Paciente descreve: "ele me serve", "o grau aumentou"      | ✅ Registrar — implícita mas inequívoca         |
   | Apenas pergunta do médico, sem resposta capturada         | ❌ Não inferir → null OU frase negativa padrão  |
-  | Resposta ambígua (parece continuação da pergunta)         | ❌ Preferir negação                             |
+  | Resposta ambígua (parece continuação da pergunta)         | ❌ Não afirmar; negativa só se não há indício de história (ver exceções dos antecedentes) |
 
 Exemplos:
   ❌ Médico: "já usou óculos de grau?" (sem resposta) → antecedentes_oftalmologicos: null
@@ -790,6 +790,16 @@ CAMPOS:
         especificada" (se afirmou sem nomear).
      ⚠️ Se há QUALQUER indício afirmativo de doença/remédio sistêmico na transcrição, mesmo
         com ASR ruidoso, NÃO use "Nega comorbidades" — registre a dúvida com o que há.
+     ⛔ RESPOSTA EMBOLADA COM INDÍCIO DE HISTÓRIA (log 2026-10-23): se a resposta à pergunta
+        sistêmica veio fragmentada mas cita cirurgia, câncer/"cancerígena", internação,
+        "cirurgias na cabeça", tratamento ou remédio, NÃO é ausência de resposta e NÃO é
+        negação. NÃO escreva "Nega comorbidades" (ambiguidade NÃO "prioriza a negação").
+        → registre o que foi dito, sem completar o que o ASR não entregou:
+        "Relata cirurgias prévias (múltiplas, região craniana — detalhes não especificados)" /
+        "Relata comorbidade sistêmica não especificada". Só se o trecho não trouxer NENHUM
+        indício (puro ruído, sem nada que pareça história) a negativa padrão continua valendo.
+        ❌ ERRO REAL: paciente falou em "cinco cirurgias na minha cabeça" e "cancerígena não
+           sei" → campo saiu "Nega comorbidades" e o antecedente sumiu do prontuário.
      Mesma regra vale para medicacoes_em_uso: paciente que responde "sim, uso um colírio"
      NÃO recebe "Nega uso de medicações oculares".
        • Nomeou ou deu a finalidade → descreva o que ele disse, no nível que a fala permitir

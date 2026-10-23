@@ -368,6 +368,8 @@ Use `\n` para separar múltiplos itens dentro de um campo.
     "tratamento": "string com \n entre itens, ou null",
     "biomicroscopia": "string ou null (preencher apenas quando há achado de segmento anterior: pterígio, pinguécula, leucoma, etc.)"
   },
+> ⛔ **Resposta embolada com indício de história** (log 2026-10-23): se a resposta à pergunta sistêmica veio fragmentada mas cita cirurgia, câncer/"cancerígena", internação, "cirurgias na cabeça", tratamento ou remédio, **não é ausência de resposta nem negação** — a ambiguidade NÃO "prioriza a negação". Registre o que foi dito sem completar o que o STT não entregou (ex.: "Relata cirurgias prévias (múltiplas, região craniana — detalhes não especificados)" ou "Relata comorbidade sistêmica não especificada"). A negativa padrão só vale se o trecho for puro ruído, sem nenhum indício de história. Erro real: "cinco cirurgias na minha cabeça" + "cancerígena não sei" → "Nega comorbidades".
+
   "injectExamesNormais": false,
   "injectBlefarite": false,
   "dilatacaoDetectada": false,

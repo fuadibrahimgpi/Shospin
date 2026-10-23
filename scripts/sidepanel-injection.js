@@ -279,8 +279,13 @@ async function handleSearchCid(field, opts = {}) {
       // a supressão cross-paciente do log 2026-07-31 passou despercebida.
       successMessage.classList.remove('hidden');
       if (resp.skipped) {
-        console.log(`[SearchCid] "${termToSearch}" já estava na ficha — não relançado`);
-        successMessage.innerHTML = `<span>C.I.D. já estava na ficha: ${termToSearch}</span>`;
+        const _redundante = resp.reason === 'redundant';
+        console.log(_redundante
+          ? `[SearchCid] "${termToSearch}" redundante (CID refrativo específico já lançado) — não relançado`
+          : `[SearchCid] "${termToSearch}" já estava na ficha — não relançado`);
+        successMessage.innerHTML = _redundante
+          ? `<span>C.I.D. redundante, não lançado: ${termToSearch}</span>`
+          : `<span>C.I.D. já estava na ficha: ${termToSearch}</span>`;
         successMessage.style.background = '#eff6ff';
         successMessage.style.color = '#1e40af';
       } else {

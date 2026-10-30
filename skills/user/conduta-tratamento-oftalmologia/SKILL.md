@@ -99,9 +99,11 @@ Ao registrar um medicamento que o médico **prescreve**, use o nível mais espec
 
 ⚠️ **O nível 1 é o alvo, não o caso ideal.** Um princípio ativo registrado vale mais que uma classe; uma classe vale mais que o genérico. Antes de descer de nível, confira: o médico disse a marca? disse o princípio? a fala corresponde a um protocolo declarado (nível 1.5)? Só então desça.
 
-**Nível 1 — Princípio ativo.** Quando o médico **nomeou** o remédio: princípio ativo dito, ou marca mapeável pela base de conhecimento. Ex.: "Vigadexa" → `Moxifloxacino + dexametasona`; "dorzolamida" → `Dorzolamida`; "Tobradex" → `Tobramicina + dexametasona`.
+**Nível 1 — Princípio ativo.** O princípio ativo é **sempre** o nome principal do registro. Vale quando o médico **nomeou** o remédio: princípio ativo dito, ou marca mapeável pela base de conhecimento. Se o médico disse o **nome comercial**, o nome comercial dito vai entre parênteses logo após o princípio ativo. Ex.: "Vigadexa" → `Moxifloxacino + dexametasona (Vigadexa)`; "Xalatan" → `Latanoprosta (Xalatan)`; "Tobradex" → `Tobramicina + dexametasona (Tobradex)`. Se disse **só o princípio**: "dorzolamida" → `Dorzolamida`, sem marca.
 
-- Marca dita **sempre** vira princípio ativo — não registre o nome comercial cru quando há mapeamento.
+- Marca dita **sempre** traz o princípio ativo na frente — não registre o nome comercial sozinho quando há mapeamento.
+- ⚠️ Nunca coloque entre parênteses uma marca que o médico **não pronunciou**: a base de conhecimento serve para reconhecer nomes ditos, nunca para completá-los.
+- **Lubrificantes:** a marca dita **não** autoriza princípio (não há princípio único por marca) → `Lubrificante ocular (Systane)`. Se o médico disse o princípio ("hialuronato", "carmelose"), registre-o: `Hialuronato`. Disse só "lubrificante" → `Lubrificante ocular`, sem marca.
 - ⚠️ Nunca infira o princípio ativo a partir do diagnóstico ou do contexto — só quando o nome (marca ou princípio) foi efetivamente pronunciado, ou quando um protocolo declarado (nível 1.5) se aplica. Princípio ativo errado num prontuário é pior que um genérico.
 
 **Nível 1.5 — Protocolo declarado do médico.** O médico declarou previamente qual remédio ele usa em determinada combinação de tratamento. Não é inferência a partir do diagnóstico: é a conduta padrão dele, informada por ele.
@@ -131,7 +133,7 @@ O tratamento de blefarite deste consultório é: **compressa morna → higiene p
 
 Ordem de precedência ao nomear o colírio da blefarite:
 
-1. **Médico nomeou o remédio** (marca ou princípio) → princípio ativo correspondente. O nome dito sempre vence o protocolo. Ex.: "usa o Maxitrol" → `Neomicina + polimixina B + dexametasona`.
+1. **Médico nomeou o remédio** (marca ou princípio) → princípio ativo correspondente. O nome dito sempre vence o protocolo. Ex.: "usa o Maxitrol" → `Neomicina + polimixina B + dexametasona (Maxitrol)`.
 2. **Médico não nomeou**, mas prescreveu compressa e/ou higiene palpebral **mais** um colírio a pingar em seguida → `Tobramicina + dexametasona`.
    - Vale mesmo quando a fala é vaga: *"vou passar um colírio"*, *"um tratamento pra desinflamar"*, *"um tratamento mais forte"*, *"pinga esse aqui depois da limpeza"*.
    - Não exija os três itens literais nem posologia dita — higiene **ou** compressa, mais o colírio, já bastam.
@@ -628,7 +630,7 @@ Antes de finalizar a conduta, confirme:
 
 - A conduta veio do médico, não de inferência.
 - Medicamentos com posologia foram separados para `tratamento`.
-- Cada medicação foi registrada no nível mais específico possível — marca dita virou princípio ativo, e não se desceu de nível sem antes checar nome e protocolo declarado.
+- Cada medicação foi registrada no nível mais específico possível — marca dita virou princípio ativo com a marca entre parênteses, e não se desceu de nível sem antes checar nome e protocolo declarado.
 - O colírio da blefarite não nomeado, prescrito junto de compressa/higiene, virou `Tobramicina + dexametasona` — e nenhum colírio foi criado onde o médico não prescreveu nenhum.
 - Associações medicamentosas não foram criadas se o médico não as prescreveu explicitamente.
 - Logística operacional foi descartada.
@@ -803,3 +805,15 @@ Antes de finalizar a conduta, confirme:
 - **Não alterado**: "tratamento mais forte" (2026-07-07, 2026-08-03) e "pra desinflamar" seguem acionando o protocolo; remédio pronunciado (nível 1) nunca é removido; `[DE-3c]` e `[DE-PROT-1..7]` intactos.
 - **Testes**: `[DE-PROT-8..14]` em `utils/integration-test.js` (fala do log como fixture; `[DE-PROT-14]` pina "pinga esse aqui" + lubrificante logo depois; `[DE-PROT-10]`, `[DE-PROT-12]` e `[DE-PROT-14]` conferidos por mutação — ficam vermelhos sem o ramo que guardam) e âncora `[SKILL-SYNC]` "O lubrificante NÃO é o colírio da blefarite".
 - **Pendente**: o `H010 - Blefarite bilateral` da mesma consulta foi lançado no SHOSP. Se a compressa/higiene não foi dita, o diagnóstico também foi inferido sem base — conferir com a transcrição completa (o log mostra só 120 caracteres por linha).
+
+### 2026-10-30 — Princípio ativo primeiro; marca dita entre parênteses
+
+- **Decisão do médico**: o registro prioriza sempre o princípio ativo; quando o nome comercial foi citado na consulta, ele aparece entre parênteses após o princípio (`Moxifloxacino + dexametasona (Vigadexa)`). Princípio dito sozinho não ganha marca.
+- **Correção aplicada**:
+  - Prompt (`src/gemini-interview-agent.js`) e esta skill: regra do nível 1 reescrita (o nome comercial dito vai entre parênteses logo após o princípio ativo); exemplos de Vigadexa e Maxitrol atualizados.
+  - Léxico (`config/medicamentos-lexico.js`): campo `marcas` por entrada e `nomeRegistrado()`; o agente de medicamentos compõe `Princípio (Marca)`.
+  - Lubrificantes: marca dita → `Lubrificante ocular (Marca)` (sem inferir princípio); princípio dito (hialuronato, carmelose) é registrado como dito.
+  - Base de conhecimento: `Optive Fusion` saiu do grupo da ciclosporina (é lubrificante).
+- **Não alterado**: marca fora da base e nome destruído pelo ASR continuam sem marca entre parênteses (genérico `Medicação ocular prescrita`).
+- **Testes**: `[LEXICO-6..9]`, corpus `marca-*` em `utils/agents-test.js` e âncora `[SKILL-SYNC]` "o nome comercial dito vai entre parênteses".
+

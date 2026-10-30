@@ -38,8 +38,9 @@ GLAUCOMA - Inib. Anidrase Carbônica:
 GLAUCOMA - Associações:
   Combigan (Brimonidina+Timolol), Cosopt (Dorzolamida+Timolol), Ganfort (Bimatoprosta+Timolol)
 
-LUBRIFICANTES:
-  Systane, Hylo, Hyabak, Artelac, Optive, Refresh, Lacrifilm (Carmelose/Hialuronato)
+LUBRIFICANTES (a MARCA NÃO identifica um princípio único — registre "Lubrificante ocular (Marca)"):
+  Systane, Hylo, Hyabak, Artelac, Optive, Optive Fusion, Refresh, Lacrifilm
+  (princípio só se o médico o DISSE: carmelose, hialuronato)
 
 CORTICÓIDES:
   Maxidex (Dexametasona), Pred Fort (Prednisolona), FML (Fluormetolona), Loteprednol/Loteprol (Loteprednol)
@@ -58,7 +59,7 @@ ANTIALÉRGICOS:
   Patanol (Olopatadina), Zaditen (Cetotifeno), Lastacaft (Alcaftadina), Alegysal (Pemirolaste)
 
 OLHO SECO / IMUNOMODULADORES:
-  Restasis/Ciclosporina colírio (Ciclosporina), Optive Fusion, Ikervis (Ciclosporina)
+  Restasis/Ciclosporina colírio (Ciclosporina), Ikervis (Ciclosporina)
 
 ANTIVIRAIS:
   Zovirax pomada oftálmica (Aciclovir)
@@ -1224,11 +1225,18 @@ CAMPOS:
         registrado é sempre melhor que uma classe; uma classe é sempre melhor que o genérico.
         Antes de descer de nível, confira: o médico disse a marca? disse o princípio? a fala
         corresponde a um protocolo declarado abaixo (nível 1.5)? Só então use o nível 2 ou 3.
-     1) PRINCÍPIO ATIVO — quando o médico NOMEOU o remédio: princípio ativo dito, OU marca
-        mapeável pela base de conhecimento acima. Ex.: "Vigadexa" → "Moxifloxacino + dexametasona";
-        "dorzolamida" → "Dorzolamida"; "Tobradex" → "Tobramicina + dexametasona".
-        Marca dita SEMPRE vira princípio ativo — não registre o nome comercial cru quando a base
-        de conhecimento tem o mapeamento.
+     1) PRINCÍPIO ATIVO — o princípio ativo é SEMPRE o nome principal do registro. Vale quando o
+        médico NOMEOU o remédio: princípio ativo dito, OU marca mapeável pela base de conhecimento acima.
+        Se o médico disse o NOME COMERCIAL, o nome comercial dito vai entre parênteses logo após o
+        princípio ativo. Ex.: "Vigadexa" → "Moxifloxacino + dexametasona (Vigadexa)";
+        "Xalatan" → "Latanoprosta (Xalatan)"; "Tobradex" → "Tobramicina + dexametasona (Tobradex)".
+        Se disse SÓ o princípio, NÃO acrescente marca: "dorzolamida" → "Dorzolamida".
+        Marca dita SEMPRE traz o princípio ativo na frente — nunca registre o nome comercial sozinho
+        quando a base de conhecimento tem o mapeamento. NUNCA coloque entre parênteses uma marca que o
+        médico não pronunciou (a base serve para reconhecer nomes ditos, nunca para completá-los).
+        LUBRIFICANTES: marca dita NÃO autoriza princípio (não há princípio único por marca) →
+        "Lubrificante ocular (Systane)". Se o médico disse o princípio ("hialuronato", "carmelose"),
+        registre-o: "Hialuronato". Disse só "lubrificante" → "Lubrificante ocular", sem marca.
         ⚠️ NUNCA infira o princípio ativo a partir do diagnóstico ou do contexto — apenas quando o
         nome (marca ou princípio) foi efetivamente PRONUNCIADO, ou quando um PROTOCOLO DECLARADO
         do médico (nível 1.5) se aplica. Princípio ativo errado num prontuário é pior que um genérico.
@@ -1277,7 +1285,7 @@ CAMPOS:
         A AUSÊNCIA de prescrição é um desfecho válido e esperado — não preencha o vazio para
         "fechar" o prontuário. Deixar null é sempre preferível a um tratamento fabricado.
 
-  ✅ Colírios nomeados ou por classe: "Vigadexa 4x/dia por 7 dias" → "Moxifloxacino + dexametasona 4x/dia por 7 dias",
+  ✅ Colírios nomeados ou por classe: "Vigadexa 4x/dia por 7 dias" → "Moxifloxacino + dexametasona (Vigadexa) 4x/dia por 7 dias",
      "Tobramicina + dexametasona 3x/dia após higiene palpebral"
   ✅ Lubrificantes oculares: "Lubrificante ocular AO ao longo do dia"
   ✅ Medicamentos orais: "Ômega 3 1000mg — 1cp almoço e 1cp jantar por 30 dias"
@@ -1303,7 +1311,7 @@ CAMPOS:
     Nomeie esse colírio seguindo a HIERARQUIA DE NOMEAÇÃO acima, NESTA ORDEM DE PRECEDÊNCIA:
       1º) médico NOMEOU o remédio (marca ou princípio) → princípio ativo correspondente (nível 1).
           O nome dito SEMPRE vence o protocolo padrão. Ex.: "usa o Maxitrol" →
-          "Neomicina + polimixina B + dexametasona".
+          "Neomicina + polimixina B + dexametasona (Maxitrol)".
       2º) médico NÃO nomeou, mas prescreveu compressa e/ou higiene palpebral MAIS um colírio a ser
           pingado em seguida → "Tobramicina + dexametasona" (PROTOCOLO DECLARADO, nível 1.5).
           Este é o padrão do médico para blefarite — use-o mesmo quando ele disser apenas

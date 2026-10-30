@@ -5391,6 +5391,7 @@ function _mockChrome(initialMem = {}) {
     },
   };
 }
+  ['princípio ativo primeiro, marca dita entre parênteses (2026-10-30)', 'o nome comercial dito vai entre parênteses'],
 
 async function testAsync(name, fn) {
   try {

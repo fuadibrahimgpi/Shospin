@@ -1,0 +1,248 @@
+{
+  "_doc": "Casos reais/derivados para o agente de medicamentos. 'modelo' = o que o LLM devolveu (itens); 'esperado' = o que validar()+formatar() precisam produzir. Acrescentar um caso por erro visto em log.",
+  "casos": [
+    {
+      "id": "trometolou-asr",
+      "origem": "log 2026-10-22 (retirada de corpo estranho)",
+      "fala": "Retirei o corpo estranho. Vou passar um colírio de trometolou, três vezes ao dia por cinco dias, no olho direito.",
+      "modelo": [
+        {
+          "nome": "Colírio antibiótico",
+          "nivel": "classe",
+          "status": "novo",
+          "posologia": "3 vezes ao dia",
+          "olho": "OD",
+          "duracao": "5 dias",
+          "evidencia": "colírio de trometolou"
+        }
+      ],
+      "esperado": {
+        "aceitos": 1,
+        "descartados": 0,
+        "tratamento": "Cetorolaco 3 vezes ao dia 5 dias OD"
+      }
+    },
+    {
+      "id": "evidencia-inventada",
+      "fala": "Vamos acompanhar. Volta em seis meses.",
+      "modelo": [
+        {
+          "nome": "Moxifloxacino",
+          "nivel": "principio",
+          "status": "novo",
+          "evidencia": "colírio de moxifloxacino"
+        }
+      ],
+      "esperado": {
+        "aceitos": 0,
+        "descartados": 1,
+        "tratamento": null
+      }
+    },
+    {
+      "id": "classe-nao-dita",
+      "fala": "Vou passar um colírio pra você usar quatro vezes ao dia.",
+      "modelo": [
+        {
+          "nome": "Colírio antibiótico",
+          "nivel": "classe",
+          "status": "novo",
+          "posologia": "4 vezes ao dia",
+          "evidencia": "vou passar um colírio"
+        }
+      ],
+      "esperado": {
+        "aceitos": 1,
+        "descartados": 0,
+        "tratamento": "Medicação ocular prescrita 4 vezes ao dia",
+        "avisos": 1
+      }
+    },
+    {
+      "id": "principio-fora-da-evidencia",
+      "fala": "Vou passar um colírio por cinco dias. Depois a gente vê.",
+      "modelo": [
+        {
+          "nome": "Moxifloxacino",
+          "nivel": "principio",
+          "status": "novo",
+          "duracao": "5 dias",
+          "evidencia": "um colírio por cinco dias"
+        }
+      ],
+      "esperado": {
+        "aceitos": 1,
+        "descartados": 0,
+        "tratamento": "Medicação ocular prescrita 5 dias",
+        "avisos": 1
+      }
+    },
+    {
+      "id": "protocolo-vago",
+      "origem": "log 2026-09-15 (tobramicina sem colírio)",
+      "fala": "Tem blefarite. Vou passar um tratamento pra você, higiene das pálpebras.",
+      "modelo": [
+        {
+          "nome": "Tobramicina + dexametasona",
+          "nivel": "protocolo",
+          "status": "novo",
+          "evidencia": "vou passar um tratamento"
+        }
+      ],
+      "esperado": {
+        "aceitos": 0,
+        "descartados": 1,
+        "tratamento": null
+      }
+    },
+    {
+      "id": "glaucoma-mantido",
+      "origem": "log 2026-10-22 (mantido virava 'sem medicação')",
+      "fala": "A pressão está boa. Continua com o latanoprosta à noite nos dois olhos.",
+      "modelo": [
+        {
+          "nome": "Latanoprosta",
+          "nivel": "principio",
+          "status": "mantido",
+          "posologia": "à noite",
+          "olho": "AO",
+          "evidencia": "continua com o latanoprosta à noite"
+        }
+      ],
+      "esperado": {
+        "aceitos": 1,
+        "descartados": 0,
+        "tratamento": "Latanoprosta à noite AO"
+      }
+    },
+    {
+      "id": "associacao-nao-duplica",
+      "fala": "Vou passar o Vigadexa quatro vezes ao dia.",
+      "modelo": [
+        {
+          "nome": "Dexametasona",
+          "nivel": "principio",
+          "status": "novo",
+          "posologia": "4 vezes ao dia",
+          "evidencia": "o vigadexa quatro vezes ao dia"
+        }
+      ],
+      "esperado": {
+        "aceitos": 1,
+        "descartados": 0,
+        "tratamento": "Moxifloxacino + dexametasona (Vigadexa) 4 vezes ao dia"
+      }
+    },
+    {
+      "id": "suspenso",
+      "fala": "Pode parar o colírio de prednisolona, já melhorou.",
+      "modelo": [
+        {
+          "nome": "Prednisolona",
+          "nivel": "principio",
+          "status": "suspenso",
+          "evidencia": "parar o colírio de prednisolona"
+        }
+      ],
+      "esperado": {
+        "aceitos": 1,
+        "descartados": 0,
+        "tratamento": null,
+        "suspensos": [
+          "Prednisolona"
+        ]
+      }
+    },
+    {
+      "id": "marca-entre-parenteses",
+      "origem": "decisão 2026-10-30: princípio primeiro, marca dita entre parênteses",
+      "fala": "Vou passar o Xalatan à noite no olho direito.",
+      "modelo": [
+        {
+          "nome": "Xalatan",
+          "nivel": "principio",
+          "status": "novo",
+          "posologia": "à noite",
+          "olho": "OD",
+          "evidencia": "o xalatan a noite"
+        }
+      ],
+      "esperado": {
+        "aceitos": 1,
+        "descartados": 0,
+        "tratamento": "Latanoprosta (Xalatan) à noite OD"
+      }
+    },
+    {
+      "id": "principio-dito-sem-marca",
+      "origem": "decisão 2026-10-30: princípio dito sozinho não ganha marca",
+      "fala": "Vou passar a dorzolamida duas vezes ao dia.",
+      "modelo": [
+        {
+          "nome": "Dorzolamida",
+          "nivel": "principio",
+          "status": "novo",
+          "posologia": "duas vezes ao dia",
+          "evidencia": "a dorzolamida duas vezes ao dia"
+        }
+      ],
+      "esperado": {
+        "aceitos": 1,
+        "descartados": 0,
+        "tratamento": "Dorzolamida duas vezes ao dia"
+      }
+    },
+    {
+      "id": "lubrificante-marca",
+      "origem": "decisão 2026-10-30: marca de lubrificante não mapeia princípio",
+      "fala": "Pode usar o Systane quando sentir o olho seco.",
+      "modelo": [
+        {
+          "nome": "Lubrificante ocular",
+          "nivel": "classe",
+          "status": "novo",
+          "posologia": "quando sentir o olho seco",
+          "evidencia": "o systane quando sentir o olho seco"
+        }
+      ],
+      "esperado": {
+        "aceitos": 1,
+        "descartados": 0,
+        "tratamento": "Lubrificante ocular (Systane) quando sentir o olho seco"
+      }
+    },
+    {
+      "id": "lubrificante-principio-dito",
+      "origem": "decisão 2026-10-30: princípio dito é registrado como dito",
+      "fala": "Usa um colírio de hialuronato quatro vezes ao dia.",
+      "modelo": [
+        {
+          "nome": "Lubrificante ocular",
+          "nivel": "classe",
+          "status": "novo",
+          "posologia": "quatro vezes ao dia",
+          "evidencia": "colirio de hialuronato quatro vezes ao dia"
+        }
+      ],
+      "esperado": {
+        "aceitos": 1,
+        "descartados": 0,
+        "tratamento": "Hialuronato quatro vezes ao dia"
+      }
+    }
+  ],
+  "deteccao": [
+    {
+      "fala": "Vou passar um colírio.",
+      "detectar": true
+    },
+    {
+      "fala": "Usa o Xalatan à noite.",
+      "detectar": true
+    },
+    {
+      "fala": "Exame normal, volta em um ano.",
+      "detectar": false
+    }
+  ]
+}

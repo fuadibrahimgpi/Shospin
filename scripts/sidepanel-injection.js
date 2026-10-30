@@ -391,9 +391,15 @@ async function selectShospTab(tabs, { retries = 0, reinject = false } = {}) {
   const probeAll = async () => {
     let responsiveTab = null;
     const prontuarioTabs = [];
-    for (const t of tabs) {
-      const resp = await sendToTab(t.id, { action: 'checkPage' }, { silent: true });
-      if (resp === 'CONTEXT_INVALIDATED') throw new Error('Extension context invalidated');
+    // Sondas em paralelo (cada aba é independente); a escolha abaixo percorre os
+    // resultados na ORDEM ORIGINAL das abas, então o desempate não muda.
+    const resps = await Promise.all(
+      tabs.map(t => sendToTab(t.id, { action: 'checkPage' }, { silent: true }))
+    );
+    if (resps.includes('CONTEXT_INVALIDATED')) throw new Error('Extension context invalidated');
+    for (let i = 0; i < tabs.length; i++) {
+      const t = tabs[i];
+      const resp = resps[i];
       if (resp?.isShospPage) {
         if (!responsiveTab) responsiveTab = t;
         if (resp.prontuarioOpen) prontuarioTabs.push(t);
@@ -558,10 +564,7 @@ async function injectAll(force = false) {
   // levar a entrevista de um paciente ao prontuário de outro atendido durante
   // a espera (caso 2026-07-17). Slots expirados são podados na leitura; os
   // não-armados são apenas ignorados (seguem aguardando na sala de espera).
-  let _phase1Data = null;
-  try {
-    _phase1Data = await DilatacaoPausas.obterRetomada();
-  } catch (_e) { _phase1Data = null; }
+  const _phase1Data = await _phase1Promise;
 
   // Retomada armada = MESMO paciente voltando. `_cidsLancadosNaSessao` foi
   // zerado por resetSession() ao iniciar a gravação da fase 2, então sem esta
@@ -574,6 +577,9 @@ async function injectAll(force = false) {
     _phase1Data.cids.forEach(c => { if (c) _cidsLancadosNaSessao.add(c); });
     console.log('[InjectAll] CIDs da fase 1 restaurados para a dedup da fase 2:',
       _phase1Data.cids, `(${_antes} → ${_cidsLancadosNaSessao.size})`);
+  // A leitura do slot de dilatação (storage local) não depende da aba escolhida:
+  // roda junto com a sondagem das abas em vez de depois dela.
+  const _phase1Promise = DilatacaoPausas.obterRetomada().catch(() => null);
   }
 
   // Sanidade anti-contaminação: se a pausa armada nasceu em OUTRO prontuário
@@ -947,10 +953,10 @@ async function injectAll(force = false) {
       const activeField = (cidField?.value?.trim() ? cidField : null)
         || (novosCids.length && cidTarget?.value?.trim() ? cidTarget : null);
       if (activeField) {
-        handleSearchCid._failed = []; // início de cadeia — zera CIDs recusados
-        setTimeout(() => handleSearchCid(activeField), 800);
+        _startCidChain(); // início de cadeia — zera recusados e reagendados
+        setTimeout(() => handleSearchCid(activeField), 300);
       }
-    }, 1500);
+    }, 500);
     return true;
   } else {
     console.warn('[InjectAll] Injeção não sucedida (success=false). Revertendo flags para permitir nova tentativa.');

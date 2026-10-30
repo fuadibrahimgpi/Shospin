@@ -599,8 +599,7 @@ async function processAudioInBackground(audioBlob, capturedText) {
         statusText.style.color = '#3b82f6';
         statusText.style.fontWeight = 'normal';
 
-        await new Promise(r => setTimeout(r, 800));
-
+        // displayAudioResults é síncrono: campos já preenchidos, sem espera fixa.
         if (audioDataInjected) {
           processingStatus.textContent = 'Dados injetados (junto com exames)!';
         } else {
@@ -630,7 +629,7 @@ async function processAudioInBackground(audioBlob, capturedText) {
       processingStatus.textContent = 'Injetando automaticamente...';
       displayAudioResults(workingData);
 
-      await new Promise(r => setTimeout(r, 800)); // aguarda campos do sidepanel renderizarem
+      // displayAudioResults é síncrono (atribui .value direto): sem espera fixa de render.
 
       // Se audioDataInjected já está setado, os dados de áudio foram injetados
       // em conjunto com os exames OCR por uma chamada anterior de injectAll().
@@ -865,7 +864,6 @@ async function cancelarDilatacao() {
     workingData.dilatacaoDetectada = false; // garante placeholder correto em displayAudioResults
 
     displayAudioResults(workingData);
-    await new Promise(r => setTimeout(r, 800));
     await injectAll(true); // force: sobrescreve a injeção da fase 1
 
     await DilatacaoPausas.remover(store.id); // só o slot cancelado — a fila segue

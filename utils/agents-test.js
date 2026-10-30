@@ -70,6 +70,28 @@ t('SOMBRA-2', s2.log.length === 0, JSON.stringify(s2));
 const s3 = sombra('Exame normal, volta em um ano.', null);
 t('SOMBRA-3', s3.log.length === 0);
 
+// Auto-feedback de medicações (captura + fila de revisão)
+const Fb = require('../src/agents/medicamentos-feedback.js');
+const sus = (f, t) => Fb.encontrarSuspeitas(f, t).map(x => x.termo).join();
+t('FEEDBACK-1', sus('Vou passar o colírio Zirgan duas vezes ao dia', 'Medicação ocular prescrita') === 'zirgan');
+t('FEEDBACK-2', sus('Vou passar um colírio de trometolou três vezes ao dia', null) === '', 'variante de ASR já conhecida não é suspeita');
+t('FEEDBACK-3', sus('Usa o Xalatan à noite', 'Latanoprosta (Xalatan)') === '', 'remédio do léxico não é suspeito');
+t('FEEDBACK-4', sus('Faz compressa morna e passa um colírio para pressão', null) === '', 'classe/finalidade não é nome de remédio');
+t('FEEDBACK-5', sus('Vou receitar o Eylid de manhã', null) === 'eylid');
+t('FEEDBACK-6', Fb.encontrarSuspeitas('Pode usar o Lacrimax quando precisar', 'Medicação ocular prescrita')[0].genericoNoTratamento === true);
+let fila = Fb.adicionarNaFila([], Fb.encontrarSuspeitas('passa o colírio Zirgan', null));
+fila = Fb.adicionarNaFila(fila, Fb.encontrarSuspeitas('de novo o colírio zirgan', null));
+t('FEEDBACK-7', fila.length === 1 && fila[0].ocorrencias === 2, JSON.stringify(fila));
+t('FEEDBACK-8', Fb.adicionarNaFila(Array.from({ length: 100 }, (_, i) => ({ id: 'x' + i, termo: 'termo' + i })), [{ termo: 'novo' }]).length === Fb.MAX_FILA);
+const rV = Fb.resolver(fila, fila[0].id, { acao: 'variante', alvoId: 'ciclosporina' });
+t('FEEDBACK-9', !rV.erro && rV.fila.length === 0 && rV.aprovado.alvoId === 'ciclosporina');
+t('FEEDBACK-10', !!Fb.resolver(fila, fila[0].id, { acao: 'variante', alvoId: 'inexistente' }).erro && !!Fb.resolver(fila, fila[0].id, { acao: 'novo', principio: '', classe: 'antiviral' }).erro && !!Fb.resolver(fila, fila[0].id, { acao: 'novo', principio: 'Ganciclovir', classe: 'xx' }).erro);
+const rN = Fb.resolver(fila, fila[0].id, { acao: 'novo', principio: 'Ganciclovir', classe: 'antiviral', marca: 'Zirgan' });
+const rR = Fb.resolver(fila, fila[0].id, { acao: 'ruido' });
+t('FEEDBACK-11', rR.aprovado === null && rR.fila.length === 0);
+const exp = Fb.montarExportacao([rV.aprovado, rN.aprovado]);
+t('FEEDBACK-12', exp.variantes.length === 1 && exp.novos.length === 1 && exp.novos[0].marca === 'Zirgan' && exp.versao === 1, JSON.stringify(exp));
+
 // Recheck da injeção — fidelidade enviado × prontuário (camada 1)
 const Recheck = require('../src/agents/recheck-agent.js');
 const enviadoAten = Recheck.montarEnviado({ audio: {

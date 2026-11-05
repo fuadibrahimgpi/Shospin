@@ -66,7 +66,48 @@ function openCameraPermissionPage() {
 // CAPTURA DE CÂMERA
 // ============================================================================
 
+// Abertura em degraus: da configuração ideal (alta resolução, foco contínuo)
+// até a câmera "como vier". Antes, `min: 1920x1080` fazia getUserMedia rejeitar
+// com OverconstrainedError em qualquer webcam abaixo disso, e como a abertura
+// automática ao escolher a aba Câmera é silenciosa, parecia que nada acontecia.
+const CAMERA_CONSTRAINT_STEPS = [
+  { video: {
+      facingMode: 'environment',
+      width: { ideal: 4096, min: 1920 },
+      height: { ideal: 2160, min: 1080 },
+      advanced: [
+        { focusMode: 'continuous' },
+        { whiteBalanceMode: 'continuous' },
+        { exposureMode: 'continuous' }
+      ]
+  } },
+  { video: { facingMode: 'environment', width: { ideal: 4096 }, height: { ideal: 2160 } } },
+  { video: true }
+];
+
+let _cameraStarting = false;
+
+async function openCameraStreamWithFallback() {
+  let lastError;
+  for (const constraints of CAMERA_CONSTRAINT_STEPS) {
+    try {
+      return await navigator.mediaDevices.getUserMedia(constraints);
+    } catch (e) {
+      lastError = e;
+      // Permissão negada ou sem dispositivo: relaxar a resolução não resolve.
+      if (e.name === 'NotAllowedError' || e.name === 'NotFoundError' || e.name === 'SecurityError') break;
+      console.warn('[Camera] Configuração recusada, tentando a próxima:', e.name, e.message);
+    }
+  }
+  throw lastError;
+}
+
 async function startCameraCapture() {
+  // Já abrindo ou aberta: ignorar (a abertura automática ao trocar de aba e o
+  // botão "Iniciar Câmera" podem disparar quase juntos).
+  if (_cameraStarting || cameraStream) return;
+  _cameraStarting = true;
+
   // Pausar reconhecimento de voz se gravação estiver ativa
   if (isRecording && typeof pauseSpeechRecognition === 'function') {
     pauseSpeechRecognition();
@@ -74,20 +115,10 @@ async function startCameraCapture() {
 
   try {
     cameraStatusText.textContent = 'Iniciando câmera...';
+    cameraStatusText.style.color = '';
     cameraOverlay.classList.remove('hidden');
 
-    cameraStream = await navigator.mediaDevices.getUserMedia({
-      video: {
-        facingMode: 'environment',
-        width: { ideal: 4096, min: 1920 },
-        height: { ideal: 2160, min: 1080 },
-        advanced: [
-          { focusMode: 'continuous' },
-          { whiteBalanceMode: 'continuous' },
-          { exposureMode: 'continuous' }
-        ]
-      }
-    });
+    cameraStream = await openCameraStreamWithFallback();
 
     // Foco automático e zoom leve
     try {
@@ -124,7 +155,14 @@ async function startCameraCapture() {
     else if (error.name === 'NotFoundError') msg = 'Câmera não encontrada.';
     else msg = error.message;
     cameraStatusText.textContent = msg;
+    cameraStatusText.style.color = '#dc2626';
     cameraOverlay.classList.add('hidden');
+    // Falhou: devolve o controle ao usuário e não deixa a voz pausada à toa.
+    if (isRecording && isSpeechPausedByCamera && typeof resumeSpeechRecognition === 'function') {
+      resumeSpeechRecognition();
+    }
+  } finally {
+    _cameraStarting = false;
   }
 }
 

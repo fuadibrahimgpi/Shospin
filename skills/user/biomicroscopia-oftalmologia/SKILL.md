@@ -268,3 +268,11 @@ Antes de finalizar a biomicroscopia, confirme:
 ### 2026-07-27 — Lateralidade (bilateralização de achado unilateral)
 - **Erro**: abrasão corneana por corpo estranho (só o olho direito na história) injetada como `AO`, descrevendo lesão no olho são; diagnóstico sem lado.
 - **Correção**: lado sai de toda a consulta; `AO` PROIBIDO em achado unilateral por natureza; lado indeterminável → `[CONFIRMAR OLHO AFETADO]` / ` - confirmar olho` no diagnóstico, nunca `AO`.
+
+---
+
+## Antes do passo final — revisão obrigatória
+
+**Passo final desta skill:** entregar o texto do campo biomicroscopia ou ligar `injectExamesNormais` (a "Lista de checagem final" desta skill entra inteira na revisão).
+
+Antes de executá-lo, rodar a skill `revisao-final` sobre o resultado pronto: ela relê os parâmetros desta skill (regras críticas, checagem final, formato de saída, histórico de erros) e as regras do médico na memória, confere item por item e só então libera o passo final. Com algum item violado, corrige e revisa de novo (no máximo 3 rodadas); se ainda falhar, o passo final não é executado e o problema vai para o Fuad.

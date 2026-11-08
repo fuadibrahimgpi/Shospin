@@ -46,6 +46,10 @@ O que não deve conter:
 
 Toda skill clínica abre com a seção "Onde isso REALMENTE roda (autoridade)", e um teste confere que ela existe e que não cita número de linha.
 
+## Revisão final (todas as skills)
+
+Toda skill desta pasta fecha com a seção "Antes do passo final — revisão obrigatória", que aponta para a skill `revisao-final`. Ela não tem regra clínica própria: relê os parâmetros da skill que trabalhou, confere o resultado item por item e só então libera o passo final. Um teste em `utils/integration-test.js` (`[SKILL-REVISAO]`) confere que a seção existe em todas.
+
 ## Cópias instaladas
 
 As skills que o Claude carrega quando você as chama pelo nome são cópias enviadas ao claude.ai, não estes arquivos. Depois de mudar uma skill aqui, reenvie-a ao claude.ai; senão o Claude continua lendo a versão antiga.

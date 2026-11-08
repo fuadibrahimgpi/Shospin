@@ -603,3 +603,11 @@ Formato de saída: `"H00.0 - Descrição"` — sempre use o código exato abaixo
 | H59.0 | Ceratopatia bolhosa pós-operatória |
 | H59.8 | Outros transtornos do olho pós-procedimentos |
 | H59.9 | Transtorno do olho pós-procedimentos, não especificado |
+
+---
+
+## Antes do passo final — revisão obrigatória
+
+**Passo final desta skill:** lançar ou indicar o CID (código sem ponto, conferido contra a tabela desta skill) ou, se a tarefa foi mexer na busca, seguir para testes e commit.
+
+Antes de executá-lo, rodar a skill `revisao-final` sobre o resultado pronto: ela relê os parâmetros desta skill (regras críticas, checagem final, formato de saída, histórico de erros) e as regras do médico na memória, confere item por item e só então libera o passo final. Com algum item violado, corrige e revisa de novo (no máximo 3 rodadas); se ainda falhar, o passo final não é executado e o problema vai para o Fuad.

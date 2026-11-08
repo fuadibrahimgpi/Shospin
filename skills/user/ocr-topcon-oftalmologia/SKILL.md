@@ -456,3 +456,11 @@ Ticket com `TOPCON CL-200`, `PSM`, `ABBE`, `DWN` ou `UP`: `refracao`, `tonometri
 - **Nível de resposta aplicado**: Nível 2 — Revisão Estrutural (refinou regressão da lição anterior, não simples remendo).
 - **Correção aplicada**: ramo de Esfera em `_compareRefractionAgainstVerify` agora retorna `severity: 'hard'` sempre. Math-consistency exception fica restrita a CIL e EIXO. Comentários e JSDoc atualizados.
 - **Regra preventiva adicionada**: sim — lição "Alucinação math-consistent em esfera" em `licoes-aprendidas.md`. Princípio generalizado: **coerência interna da 1ª leitura não vale contra discordância da 2ª, para campos clinicamente críticos**. Em futuras adições, qualquer novo campo crítico (grau de óculos, dose, lateralidade) deve seguir essa política.
+
+---
+
+## Antes do passo final — revisão obrigatória
+
+**Passo final desta skill:** entregar os valores de refração/tonometria/paquimetria para injeção (a "Validação final obrigatória" desta skill entra inteira na revisão).
+
+Antes de executá-lo, rodar a skill `revisao-final` sobre o resultado pronto: ela relê os parâmetros desta skill (regras críticas, checagem final, formato de saída, histórico de erros) e as regras do médico na memória, confere item por item e só então libera o passo final. Com algum item violado, corrige e revisa de novo (no máximo 3 rodadas); se ainda falhar, o passo final não é executado e o problema vai para o Fuad.

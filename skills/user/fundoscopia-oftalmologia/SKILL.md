@@ -190,3 +190,11 @@ Antes de finalizar a fundoscopia, confirme:
 ### 2026-08-04 — Fundoscopia injetada afirmando "suspeita de glaucoma"
 - **Erro**: os exemplos canônicos (prompt e skill) mandavam escrever `escavação aumentada (relação E/D ~0,7), suspeita de glaucoma — aguardar campo visual e OCT de nervo óptico` dentro do texto da fundoscopia. O laudo do exame saía carregando a leitura diagnóstica e o plano de exames, que pertencem a `diagnostico` e `conduta`.
 - **Correção**: regra "descritiva, nunca interpretativa" no prompt (`src/gemini-interview-agent.js`, seção `fundoscopia`) e nesta skill; os dois exemplos de glaucoma reescritos só com a descrição. O plano some junto porque estava na mesma oração. Rede no runtime: `_avisoFundoscopiaInterpretativa()` avisa sem editar o texto. Testes `[FUNDO-INTERP-1..4]` em `utils/integration-test.js`.
+
+---
+
+## Antes do passo final — revisão obrigatória
+
+**Passo final desta skill:** entregar o texto do campo fundoscopia ou ligar `injectExamesNormais` (a "Lista de checagem final" desta skill entra inteira na revisão).
+
+Antes de executá-lo, rodar a skill `revisao-final` sobre o resultado pronto: ela relê os parâmetros desta skill (regras críticas, checagem final, formato de saída, histórico de erros) e as regras do médico na memória, confere item por item e só então libera o passo final. Com algum item violado, corrige e revisa de novo (no máximo 3 rodadas); se ainda falhar, o passo final não é executado e o problema vai para o Fuad.

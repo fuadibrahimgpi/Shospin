@@ -829,3 +829,11 @@ Antes de finalizar a conduta, confirme:
 - **Não alterado**: marca fora da base e nome destruído pelo ASR continuam sem marca entre parênteses (genérico `Medicação ocular prescrita`).
 - **Testes**: `[LEXICO-6..9]`, corpus `marca-*` em `utils/agents-test.js` e âncora `[SKILL-SYNC]` "o nome comercial dito vai entre parênteses".
 
+
+---
+
+## Antes do passo final — revisão obrigatória
+
+**Passo final desta skill:** entregar os campos `conduta` e `tratamento` prontos (a "Lista de checagem final" desta skill entra inteira na revisão).
+
+Antes de executá-lo, rodar a skill `revisao-final` sobre o resultado pronto: ela relê os parâmetros desta skill (regras críticas, checagem final, formato de saída, histórico de erros) e as regras do médico na memória, confere item por item e só então libera o passo final. Com algum item violado, corrige e revisa de novo (no máximo 3 rodadas); se ainda falhar, o passo final não é executado e o problema vai para o Fuad.

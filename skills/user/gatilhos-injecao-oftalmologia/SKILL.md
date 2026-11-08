@@ -616,3 +616,11 @@ Ver `transcricao-consulta-oftalmologia/SKILL.md` → "FLAGS DE DIAGNÓSTICO — 
 **Mesma classe, caminho ao vivo:** o hook `exames_normais` (`scripts/sidepanel-hooks.js`) marcava `fundoscopiaDetectada` com `text.includes('fundo')`, então uma declaração de escopo global ("exames estão todos normais", "seus olhos estão normais") caía no ramo restrito ao segmento anterior — e, como o hook também marca `examesNormaisInjetados`, o `injectAll()` pula o bloco de exames depois e ninguém corrige a omissão. Agora quem decide é o **escopo da frase**: só suprime a fundoscopia quando a fala cita biomicroscopia/segmento anterior **sem** citar o fundo. Testes `[EXNORM-1..4]` em `utils/hooks-test.js`.
 **Não alterado:** o **fallback de despedida** (nenhum gatilho disparou, sem `injectExamesNormais`) segue exigindo `mencionouFundoNaFala` — ali não há afirmação nenhuma de que o fundo foi visto. Testes `[FUNDO-4]` e `[FUNDO-5]` em `utils/integration-test.js`.
 **Data:** 2026-08-05
+
+---
+
+## Antes do passo final — revisão obrigatória
+
+**Passo final desta skill:** aplicar a mudança de gatilho em `config/clinical-triggers.js` e seguir para testes e commit (as "Regras de qualidade dos gatilhos" desta skill entram inteiras na revisão).
+
+Antes de executá-lo, rodar a skill `revisao-final` sobre o resultado pronto: ela relê os parâmetros desta skill (regras críticas, checagem final, formato de saída, histórico de erros) e as regras do médico na memória, confere item por item e só então libera o passo final. Com algum item violado, corrige e revisa de novo (no máximo 3 rodadas); se ainda falhar, o passo final não é executado e o problema vai para o Fuad.

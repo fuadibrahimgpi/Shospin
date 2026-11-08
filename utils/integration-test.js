@@ -5645,6 +5645,24 @@ for (const nome of SKILLS_CLINICAS) {
   });
 }
 
+// 2026-11-07 — toda skill do projeto fecha com a revisão obrigatória antes do passo final.
+const SKILLS_COM_REVISAO = [...SKILLS_CLINICAS, 'caso-clinico-oftalmologia', 'simulador-oftalmologia'];
+for (const nome of SKILLS_COM_REVISAO) {
+  test(`[SKILL-REVISAO] ${nome}: seção de revisão final presente e aponta para revisao-final`, () => {
+    const src = readSrcNormalized('skills', 'user', nome, 'SKILL.md');
+    const ini = src.indexOf('## Antes do passo final — revisão obrigatória');
+    expect(ini >= 0).toBe(true);
+    expect(src.slice(ini).includes('`revisao-final`')).toBe(true);
+    expect(src.slice(ini).includes('**Passo final desta skill:**')).toBe(true);
+  });
+}
+test('[SKILL-REVISAO] revisao-final existe, tem frontmatter e não copia regra clínica', () => {
+  const src = readSrcNormalized('skills', 'user', 'revisao-final', 'SKILL.md');
+  expect(/^---\nname: revisao-final\n/.test(src)).toBe(true);
+  expect(src.includes('Passo 3 — Decidir')).toBe(true);
+  expect(src.includes('No máximo **3 rodadas**')).toBe(true);
+});
+
 // ──────────────────────────────────────────────────────────────────────────────
 // 2026-07-20 — FILA DE PAUSAS DE DILATAÇÃO (sala de espera multi-paciente)
 // A rotina real intercala consultas enquanto pacientes dilatam. Dois defeitos

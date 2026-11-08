@@ -2004,6 +2004,22 @@ test('[EXNORM-4] "biomicroscopia e fundoscopia normais" marca fundoscopia', () =
   expect(ctx._BRIDGE.HOOK_STATE.fundoscopiaDetectada).toBe(true);
 });
 
+// 2026-11-08 — simulação H09: frase condicional é intenção, não resultado
+test('[EXNORM-COND-1] "vamos ver se os exames estão normais" NÃO injeta', () => {
+  speakSemCaptura('vamos ver se os exames estao normais primeiro');
+  expect(ctx._BRIDGE.HOOK_STATE.examesNormaisInjetados).toBe(false);
+});
+
+test('[EXNORM-COND-2] condicional seguida de resultado declarado → injeta', () => {
+  speakSemCaptura('vamos ver se os exames estao normais pronto seus exames estao normais');
+  expect(ctx._BRIDGE.HOOK_STATE.examesNormaisInjetados).toBe(true);
+});
+
+test('[EXNORM-COND-3] "será que o fundo de olho está normal" NÃO injeta', () => {
+  speakSemCaptura('sera que o fundo de olho esta normal');
+  expect(ctx._BRIDGE.HOOK_STATE.examesNormaisInjetados).toBe(false);
+});
+
 // 2026-09-29 — nervo óptico/H400 fabricado a partir de exemplo do prompt
 noiseTest('[NERVO-1] sem fala de nervo/glaucoma/pressão → H400 e fundoscopia de nervo removidos', () => {
   const raw = { tipo_consulta: 'retorno', dados: {

@@ -47,6 +47,19 @@ function _negadoAntes(src, idx) {
 }
 
 /**
+ * Frase CONDICIONAL antes do comando ("vamos ver se os exames estão normais",
+ * "será que o fundo de olho está normal"): é intenção de examinar, não
+ * declaração de resultado. Só vale para hooks com `bloqueiaCondicional`
+ * (simulação 2026-11-08, caso H09: injetava exames normais antes do exame).
+ * Janela curta (25 chars) para não pegar um "se" de cláusula distante.
+ */
+function _condicionalAntes(src, idx) {
+  if (idx <= 0) return false;
+  const prefix = src.slice(Math.max(0, idx - 25), idx);
+  return /\b(ver|saber|checar|conferir|verificar|confirmar|olhar|examinar)\s+se\b|\bsera\s+que\b|\bse\s+(os\s+|o\s+|seus\s+|suas\s+|a\s+|as\s+)?$/.test(prefix);
+}
+
+/**
  * Fronteira de palavra no INÍCIO do comando: rejeita matches que começam no
  * meio de outra palavra. Sem isso, comandos curtos casam por substring dentro
  * de palavras maiores — 'e catarata' casava em "cirurgiada d[e catarata]",
@@ -116,7 +129,8 @@ function _hookMatches(hook, normalizedFinal, normalizedCurrent, recentTextBuffer
       // a afirmativa deve disparar.
       let idx = src.indexOf(cmd);
       while (idx !== -1) {
-        if (_inicioDePalavra(src, idx) && !_negadoAntes(src, idx)) return cmd;
+        if (_inicioDePalavra(src, idx) && !_negadoAntes(src, idx) &&
+            !(hook.bloqueiaCondicional && _condicionalAntes(src, idx))) return cmd;
         idx = src.indexOf(cmd, idx + cmd.length);
       }
     }

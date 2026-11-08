@@ -161,6 +161,8 @@ const VOICE_HOOKS = [
     type: 'inject',
     priority: 11,
     commands: EXAMES_NORMAIS_COMMANDS,
+    // "vamos ver se os exames estão normais" é intenção, não resultado.
+    bloqueiaCondicional: true,
     guard: (s) => s.examesNormaisInjetados || s.dilatacaoDetectada,
     inject: () => injectExamesNormaisDirect(),
     onMatch: (text, s) => {

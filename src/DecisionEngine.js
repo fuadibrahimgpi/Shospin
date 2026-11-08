@@ -792,6 +792,12 @@
     /\bultima\s+consulta\b/,
     /\bconsulta\s+(passada|anterior)\b/,
     /\bja\s+(me\s+)?(falaram|disseram|falou|disse)\s+que\s+(eu\s+)?(tenho|tinha|tem)\b/,
+    // Simulação 2026-11-08 (D23): diagnóstico dado por OUTRO profissional, sem "já".
+    /\b(outro|outra)\s+(medico|medica|doutor|doutora|oftalmo|oftalmologista|oculista)\s+(me\s+)?(falou|disse|falaram|disseram)\s+que\s+(eu\s+)?(tenho|tinha|tem|tava|estava)\b/,
+    /\b(me\s+)?(falaram|disseram)\s+que\s+eu\s+(tenho|tinha|tava|estava)\b/,
+    // D22: laser/YAG em 1ª pessoa ou no passado ("já fiz laser", "fizeram laser no olho").
+    // "vamos fazer laser" (plano de hoje) fica de fora: infinitivo não casa.
+    /\b(fiz|fizeram|fez|feito|fizemos)\s+(um\s+|uma\s+|o\s+|a\s+)?(laser|lazer|yag|capsulotomia|fotocoagulacao|panfotocoagulacao)\b/,
     /\bja\s+(tenho|tinha|tive)\s+(diagnostico|glaucoma|catarata|pressao\s+alta\s+no\s+olho|pressao\s+ocular)/,
     /\b(descobriram|descobri|descobriu)\s+(o|a)\s+(glaucoma|catarata|pressao)/,
     /\bja\s+(operou|operei|operado|operada)\b/,

@@ -1092,6 +1092,31 @@ test('[DE-ANTEC-2] negativa cai quando a transcrição traz diagnóstico prévio
   expect(decision.clonedAIResponse.dados.antecedentes_oftalmologicos).toBe(null);
 });
 
+// Simulação 2026-11-08 (D22/D23): paráfrases que não derrubavam a negativa.
+test('[DE-ANTEC-LASER] "já fiz laser no olho" derruba a negativa', () => {
+  const raw = { tipo_consulta: 'primeira_consulta',
+    dados: { hda: 'Baixa de visão OE há ~1 ano', antecedentes_oftalmologicos: _NEG_ANTEC } };
+  const decision = DecisionEngine.buildDecision(raw, {
+    transcribedText: 'ja fiz laser no olho esquerdo faz uns dois anos', hookFlags: {} });
+  expect(decision.clonedAIResponse.dados.antecedentes_oftalmologicos).toBe(null);
+});
+
+test('[DE-ANTEC-OUTRO-MED] "o outro médico falou que eu tinha glaucoma" derruba a negativa', () => {
+  const raw = { tipo_consulta: 'primeira_consulta',
+    dados: { hda: 'Consulta de rotina', antecedentes_oftalmologicos: _NEG_ANTEC } };
+  const decision = DecisionEngine.buildDecision(raw, {
+    transcribedText: 'o outro medico falou que eu tinha glaucoma mas parei de pingar', hookFlags: {} });
+  expect(decision.clonedAIResponse.dados.antecedentes_oftalmologicos).toBe(null);
+});
+
+test('[DE-ANTEC-LASER-PLANO] "vamos fazer laser" (plano de hoje) NÃO derruba a negativa', () => {
+  const raw = { tipo_consulta: 'primeira_consulta',
+    dados: { hda: 'Moscas volantes há ~1 semana', antecedentes_oftalmologicos: _NEG_ANTEC } };
+  const decision = DecisionEngine.buildDecision(raw, {
+    transcribedText: 'tem um buraquinho na retina vamos fazer laser para fechar', hookFlags: {} });
+  expect(decision.clonedAIResponse.dados.antecedentes_oftalmologicos).toBe(_NEG_ANTEC);
+});
+
 test('[DE-ANTEC-3] negativa legítima é preservada (anamnese limpa, sem história prévia)', () => {
   const raw = {
     tipo_consulta: 'primeira_consulta',

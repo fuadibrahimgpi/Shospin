@@ -85,7 +85,16 @@ class GeminiInterviewAgent {
 
     if (triggers) {
       const norm = triggers.normalizeText(text);
-      const hasNormalExams = triggers.EXAMES_NORMAIS_COMMANDS.some(cmd => norm.includes(cmd));
+      // Ocorrência precedida de frase condicional ("vamos ver se os exames estão
+      // normais") é intenção de examinar, não resultado — mesma regra do hook.
+      const _condicional = (idx) => /\b(ver|saber|checar|conferir|verificar|confirmar|olhar|examinar)\s+se\b|\bsera\s+que\b|\bse\s+(os\s+|o\s+|seus\s+|suas\s+|a\s+|as\s+)?$/
+        .test(norm.slice(Math.max(0, idx - 25), idx));
+      const hasNormalExams = triggers.EXAMES_NORMAIS_COMMANDS.some(cmd => {
+        for (let i = norm.indexOf(cmd); i !== -1; i = norm.indexOf(cmd, i + cmd.length)) {
+          if (!_condicional(i)) return true;
+        }
+        return false;
+      });
       const hasBlefarite   = triggers.EXAME_BLEFARITE_COMMANDS.some(cmd => norm.includes(cmd));
       if (hasNormalExams) this.logger.info('Gatilho de exames normais detectado');
       if (hasBlefarite)   this.logger.info('Gatilho de blefarite detectado');

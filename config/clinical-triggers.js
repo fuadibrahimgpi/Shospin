@@ -664,6 +664,20 @@ const LIO_COMMANDS = [
   'fez cirurgia de catarata',
   'fez a cirurgia de catarata',
   'fez uma cirurgia de catarata',   // caso real 2026-07-17: "já que você fez uma cirurgia de catarata traumática"
+  // Fala do PRÓPRIO PACIENTE (1ª pessoa) — a transcrição é um stream único, médico e
+  // paciente misturados. Caso real 2026-08-03: "eu fiz a cirurgia de catarata tem um
+  // ano" não casava com nenhuma forma de 3ª pessoa e a lente saiu "cristalino
+  // transparente" em olho pseudofácico. Só formas de PASSADO entram (regra abaixo);
+  // 'operei' sozinho fica de fora — casaria com o médico falando de outro paciente.
+  'fiz cirurgia de catarata',
+  'fiz a cirurgia de catarata',
+  'fiz uma cirurgia de catarata',
+  'operei de catarata',
+  'operei a catarata',
+  'operei o olho',
+  'operei os olhos',
+  'fui operada de catarata',
+  'fui operado de catarata',
   // 'cirurgia de catarata' REMOVIDO: ambíguo — dispara quando médico *planeja* cirurgia futura
   // ("agora dá para pensar em mexer"), causando pseudofacia indevida em paciente fácico com catarata.
   // 'fez cirurgia de catarata' já cobre o caso passado com clareza.
@@ -717,6 +731,35 @@ const OPACIDADE_CAPSULA_COMMANDS = [
   'capsula opaca',
   'opacificacao de capsula',
   'opacificacao da capsula posterior',
+
+  // ── Linguagem leiga do médico ao paciente (2026-08-05) ────────────────────
+  // A consulta é fala médico→paciente, não laudo: a opacidade de cápsula é dita
+  // como "a lente tá um pouquinho embaçada", "tem uma sujeirinha na lente",
+  // "vai precisar dar uma limpada". Mesmo caso do log 2026-07-29 (blefarite leiga).
+  // REGRA para não repetir o falso positivo de 2026-06-18 ("fiz limpeza da lente",
+  // relato HISTÓRICO do paciente): toda frase de limpeza carrega o marcador de
+  // futuro/necessidade DENTRO da própria string. Substantivo solto ('limpeza da
+  // lente') continua PROIBIDO — casa o passado do paciente.
+  // Embaçamento/sujeira ficam ancorados na palavra "lente"/"capsula": "embaçado"
+  // solto é a queixa de visão do paciente, não a cápsula.
+  'lente esta embacada', 'lente ta embacada',
+  'lente esta embacando', 'lente ta embacando',
+  'lente meio embacada', 'lente esta meio embacada', 'lente ta meio embacada',
+  'lente um pouco embacada', 'lente esta um pouco embacada', 'lente ta um pouco embacada',
+  'lente um pouquinho embacada', 'lente esta um pouquinho embacada', 'lente ta um pouquinho embacada',
+  'embacamento na lente', 'embacamento da lente',
+  'capsula esta embacada', 'capsula ta embacada',
+  'lente esta suja', 'lente ta suja',
+  'sujeira na lente', 'sujeirinha na lente',
+  'lente com sujeira', 'lente com uma sujeira', 'lente com uma sujeirinha',
+  // "limpar/limpeza" SEM objeto explícito só entra com marcador de futuro: o passado
+  // ("já fiz a limpeza") é relato do paciente. 'limpar a lente' (acima) já cobre o
+  // objeto explícito, então aqui não há forma genérica de "limpar" sozinha.
+  'vai precisar fazer limpeza', 'vai precisar fazer uma limpeza',
+  'vai precisar fazer a limpeza',
+  'vai precisar de limpeza', 'vai precisar de uma limpeza',
+  'vai ter que fazer uma limpeza', 'vamos ter que fazer uma limpeza',
+  'dar uma limpada na lente', 'uma limpada na lente', 'uma limpadinha na lente',
 ];
 
 // ============================================================================
@@ -1110,6 +1153,34 @@ function checkCondutaTratamentoCaptados(text) {
  * @param {string} text - texto da transcrição (com ou sem acentos)
  * @returns {boolean}
  */
+/**
+ * A fala nomeia uma cirurgia ocular que NÃO é de catarata?
+ *
+ * Caso real 2026-09-02: a paciente disse que a cirurgia dos dois olhos foi de
+ * PTERÍGIO. As formas genéricas de LIO_COMMANDS ("operou o olho", "operei os
+ * olhos") não distinguem o tipo — sozinhas, escreveriam pseudofacia em olho
+ * fácico. Este veto exige que a fala NÃO tenha nomeado outra cirurgia: quando o
+ * tipo é dito e não é catarata, a lente não pode ser inferida.
+ *
+ * Só veta o que é AMBÍGUO: se a mesma fala cita catarata/lente/facectomia, o
+ * paciente pode ter as duas histórias (pterígio antigo + catarata) e a evidência
+ * específica prevalece.
+ *
+ * @param {string} text - texto normalizado (sem acentos, minúsculo)
+ * @returns {boolean}
+ */
+const CIRURGIA_NAO_CATARATA_RE = /\b(pterigio|terigio|pinguecula|glaucoma|trabeculectomia|valvula|retina|vitrectomia|descolamento|transplante|ceratoplastia|ceratocone|crosslinking|cross\s?linking|estrabismo|palpebra|palpebras|blefaroplastia|ptose|calazio|refrativa|lasik)\b|miopia\s+a\s+laser/;
+// "lente" SOLTA fica de fora, pelo mesmo motivo do guard equivalente no
+// DecisionEngine (_LENTE_EVIDENCIA_RE): é a mesma palavra da lente de contato e da
+// lente do óculos. Aceitá-la aqui cancelaria o veto justamente na consulta em que o
+// médico pergunta sobre lente de contato a um paciente operado de pterígio.
+const CIRURGIA_CATARATA_RE = /\b(catarat\w*|facectomia\w*|facoemulsifica\w*|lios?)\b|lente\s+intra|\b(?:a|as)\s+lentes?\s+(?:esta|estao|ta|tao|ficou|ficaram)\b|(?:coloc|bot|po[sô]|troc)\w*\s+(?:a|as|uma|duas|essa)?\s*lentes?/;
+
+function cirurgiaNomeadaNaoCatarata(text) {
+  const norm = normalizeText(text);
+  return CIRURGIA_NAO_CATARATA_RE.test(norm) && !CIRURGIA_CATARATA_RE.test(norm);
+}
+
 function detectaExameEmAndamento(text) {
   const norm = normalizeText(text);
   const tail = norm.slice(-300);
@@ -1148,6 +1219,8 @@ const ClinicalTriggers = {
   TRATAMENTO_FALA_MARKERS,
   TRATAMENTO_FALA_REGEXES,
   matchComboPair,
+  CIRURGIA_NAO_CATARATA_RE,
+  cirurgiaNomeadaNaoCatarata,
   detectaDilatacaoNaFala,
   detectaExameEmAndamento,
   detectaEncerramentoNaFala,

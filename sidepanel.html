@@ -149,6 +149,24 @@
       <div class="camera-section">
         <div class="video-container">
           <video id="cameraVideo" autoplay playsinline muted></video>
+          <!-- Guia de enquadramento (v5.5.0). O ticket é fotografado DEITADO na
+               mesa (as 14 fotos da pasta da câmera, sem exceção) — a moldura
+               acompanha isso em vez de brigar: deitado, a tira usa a largura
+               toda do quadro e os dígitos ficam maiores. De pé, o comprimento
+               seria limitado pela altura e se perderia ~40% de resolução linear,
+               justo onde a leitura já é marginal.
+               O que a moldura padroniza é o LADO DO CABEÇALHO — e é isso que
+               permite ao OCR partir de uma orientação conhecida. O lado marcado
+               (direita) é o que o médico JÁ usa: girar as fotos reais 270° é o
+               que deixa a REF.DATA legível.
+               ⚠ O lado marcado aqui precisa casar com PRE_ROTACAO_MOLDURA no
+               agente de OCR. -->
+          <div id="cameraFramingGuide" class="framing-guide hidden" aria-hidden="true">
+            <div class="framing-guide-box">
+              <span class="framing-guide-head">data / REF.DATA deste lado</span>
+            </div>
+            <div class="framing-guide-label">Ticket deitado, preenchendo a moldura</div>
+          </div>
           <div id="cameraOverlay" class="camera-overlay">
             <div class="camera-loading">
               <div class="spinner"></div>

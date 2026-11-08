@@ -48,12 +48,19 @@ function hideResults() {
 // INJEÇÃO PRINCIPAL — ORQUESTRAÇÃO
 // ============================================================================
 
-// Início de cadeia manual: zera o acumulador de CIDs recusados (não é recursão).
+// Início de cadeia: zera os acumuladores por cadeia — CIDs recusados (aviso de
+// fim de cadeia) e CIDs já reagendados (limite de uma retentativa por termo).
+function _startCidChain() {
+  handleSearchCid._failed = [];
+  handleSearchCid._requeued = new Set();
+}
+
+// Início de cadeia manual (não é recursão).
 if (btnSearchCid) {
-  btnSearchCid.addEventListener('click', () => { handleSearchCid._failed = []; handleSearchCid(diagnosticoField); });
+  btnSearchCid.addEventListener('click', () => { _startCidChain(); handleSearchCid(diagnosticoField); });
 }
 if (btnSearchCidRetorno) {
-  btnSearchCidRetorno.addEventListener('click', () => { handleSearchCid._failed = []; handleSearchCid(diagnosticoRetornoField); });
+  btnSearchCidRetorno.addEventListener('click', () => { _startCidChain(); handleSearchCid(diagnosticoRetornoField); });
 }
 
 // Remove CIDs duplicados pelo código (ex: H010 = H01.0) antes de iniciar a cadeia.
@@ -87,7 +94,9 @@ function _dropUnspecifiedRefraction(fieldValue) {
 const _CLINICAL_TERM_TO_CID = [
   [/presbiop/i,      'H524'],
   [/blefarite/i,     'H010'],
-  [/pterigio/i,      'H111'],
+  // H11.0 = pterígio. H11.1 (degenerações e depósitos conjuntivais) é outro sítio e
+  // era o que estava aqui — a ficha recebia "degeneração da conjuntiva" no lugar.
+  [/pterigio/i,      'H110'],
   [/catarata/i,      'H260'],  // fallback genérico; preferência para código específico se vier com dash
   [/glaucoma/i,      'H409'],
   // H52.x — erros refrativos: gerados pelo OCR (_inferCidRefracao) e frequentemente
@@ -309,9 +318,37 @@ async function handleSearchCid(field, opts = {}) {
       // S2: pular termo com falha e continuar a cadeia (não interromper por um CID inválido)
       const errMsg = resp?.error || 'Aba C.I.D. não encontrada na página';
       console.warn(`[CID] Falha ao buscar "${rawTerm}": ${errMsg}`);
+
+      // Falha AMBIENTAL (a seção C.I.D. ainda não estava visível) ≠ "o SHOSP não
+      // tem o código". Reagendar UMA vez no FIM da cadeia é o que o log de
+      // 2026-08-04 mostra que basta: naquele dia o H010 falhou assim e o H524,
+      // buscado 1,8s depois na mesma página, passou — a seção tinha acabado de
+      // montar. Sem o reagendamento, um CID legítimo (a presbiopia daquela
+      // consulta) simplesmente não entra no prontuário.
+      // Vai para o FIM, não para a frente: o próximo termo dá o tempo de
+      // assentamento de graça. `_requeued` limita a uma tentativa por termo, para
+      // que uma seção genuinamente inacessível não vire laço infinito.
+      const _rekey = _cidKey(rawTerm) || rawTerm;
+      const _requeued = handleSearchCid._requeued || (handleSearchCid._requeued = new Set());
+      if (resp?.code === 'CID_SECTION_HIDDEN' && !_requeued.has(_rekey)) {
+        _requeued.add(_rekey);
+        field.value = [...terms.slice(1), rawTerm].join('\n');
+        console.warn(`[CID] "${rawTerm}" reagendado para o fim da cadeia — seção C.I.D. ainda montando`);
+        successMessage.classList.remove('hidden');
+        successMessage.innerHTML = `<span>⏳ Aba C.I.D. abrindo — ${rawTerm} será tentado de novo</span>`;
+        successMessage.style.background = '#fef3c7';
+        successMessage.style.color = '#92400e';
+        setTimeout(() => { handleSearchCid._running = false; handleSearchCid(field, { _continuation: true }); }, 1800);
+        return;
+      }
+
       // Acumula para o aviso persistente de fim de cadeia (o toast some em 3s).
       (handleSearchCid._failed || (handleSearchCid._failed = [])).push(rawTerm);
-      showError(`CID não encontrado: ${rawTerm}`);
+      // Segunda falha por seção oculta não é "código inexistente" — dizer isso ao
+      // médico o mandaria procurar o CID errado.
+      showError(resp?.code === 'CID_SECTION_HIDDEN'
+        ? `Aba C.I.D. não abriu — lance ${rawTerm} manualmente`
+        : `CID não encontrado: ${rawTerm}`);
       field.value = terms.slice(1).join('\n');
       const stillHasCid = field.value.trim();
       if (stillHasCid) {
@@ -330,6 +367,7 @@ async function handleSearchCid(field, opts = {}) {
 }
 handleSearchCid._running = false;
 handleSearchCid._failed = []; // CIDs recusados pelo SHOSP na cadeia atual
+handleSearchCid._requeued = new Set(); // CIDs já reagendados nesta cadeia (1 tentativa cada)
 
 function _setRunningState(running) {
   injectAll._running = running;
@@ -589,6 +627,25 @@ async function injectAll(force = false) {
   const transcricaoNorm = normalizeText(recognizedText || '');
   const mencionouFundoNaFala = transcricaoNorm.includes('fundo') || transcricaoNorm.includes('fundoscop');
 
+  // Reconciliação de PSEUDOFACIA a partir dos dados do LLM (rede determinística).
+  // Origem (log 2026-08-03): paciente operada de catarata AO há 1 ano; nenhum gatilho
+  // de voz de LIO disparou (a fala era do PACIENTE — "eu fiz a cirurgia" — e
+  // LIO_COMMANDS só tinha a 3ª pessoa), então a biomicroscopia foi injetada com
+  // "cristalino transparente" num olho sem cristalino. O CID não salvava: a consulta
+  // não emitiu Z96.1; a cirurgia estava em antecedentes_oftalmologicos.
+  // Só liga a flag com o LADO conhecido — pseudofacia sem lado, aplicada em bloco,
+  // inventaria cirurgia no olho fácico de quem operou um olho só.
+  if (!SessionFlags.lioDetectada && !SessionFlags.opacidadeCapsulaDetectada) {
+    const _pf = parsePseudofaciaFromDados(audioData?.dados);
+    if (_pf.detected && _pf.lado) {
+      SessionFlags.lioDetectada = true;
+      SessionFlags.lioLado = _pf.lado;
+      console.log('[LIO] Flag derivada dos dados (gatilho de voz não disparou) — lado:', _pf.lado);
+    } else if (_pf.detected) {
+      console.warn('[LIO] Pseudofacia identificada nos dados, mas sem lado definido — lente NÃO substituída. Confira o cristalino na biomicroscopia.');
+    }
+  }
+
   // Reconciliação de catarata a partir do diagnóstico do LLM.
   // O cristalino dinâmico (getBiomicroscopiaComLente) depende de catarataDetectada,
   // ligada apenas pelos gatilhos de voz. Quando a fala do médico é embaralhada pelo
@@ -632,17 +689,42 @@ async function injectAll(force = false) {
 
   if (!SessionFlags.blefariteInjetada && !SessionFlags.examesNormaisInjetados) {
     if (!audioData?.dilatacaoDetectada && audioData?.injectExamesNormais && !_temTratamentoAtivo) {
+      // `injectExamesNormais` significa, por definição do prompt, que o médico
+      // afirmou que TODOS os exames estão normais — o fundo já está dentro da
+      // flag. Exigir aqui o token "fundo" na fala era desconfiar da própria
+      // entrada: em 2026-08-05 (consulta das 17:54) o médico declarou "o resto
+      // tá tudo tranquilo, ... normal" e o prontuário ficou sem fundoscopia
+      // porque a palavra "fundo" não apareceu (o ASR devolveu "produção normal"
+      // no lugar de "escavação normal"). Ampliar o léxico não resolveria: a
+      // palavra simplesmente não sobrevive ao reconhecimento.
+      // O risco que o gate protegia — laudar fundo não examinado no pós-dilatação
+      // — continua coberto duas vezes acima: pelo `!dilatacaoDetectada` desta
+      // mesma condição e pelo Guard 7 (_guardExamesNormaisFase2), que derruba a
+      // flag quando a fase 2 não fala dos exames. O achado real, quando existe,
+      // ainda prevalece via _fundoNormalSeguro().
       combinedData.examesNormais = {
         biomicroscopia: _bioNormalSeguro(),
-        fundoscopia: (SessionFlags.fundoscopiaDetectada || mencionouFundoNaFala) ? _fundoNormalSeguro() : null
+        fundoscopia: _fundoNormalSeguro()
       };
     } else if (!audioData?.dilatacaoDetectada && audioData?.injectBlefarite) {
       // Blefarite: se Gemini gerou biomicroscopia personalizada (ex: pterígio + blefarite),
       // usa ela; caso contrário usa o template padrão de blefarite.
       // Com dilatação pendente NÃO injeta — descrição de exames pertence à fase 2.
-      const _bioBase = audioData?.dados?.biomicroscopia || BIOMICROSCOPIA_BLEFARITE;
+      //
+      // O template descreve achados ("hiperemia e espessamento da margem palpebral,
+      // telangiectasias, disfunção de meibômio") e por isso NÃO é rotina: só entra quando o
+      // médico descreveu inflamação palpebral (blefariteDescritaNoExame). Blefarite
+      // inferida apenas do tratamento (shampoo/compressa/higiene) mantém conduta e
+      // medicação, mas deixa a biomicroscopia em branco para o médico redigir — o
+      // DecisionEngine emite o aviso correspondente (log 2026-08-04).
+      const _blefDescrita = audioData?.blefariteDescritaNoExame === true;
+      const _bioBase = audioData?.dados?.biomicroscopia ||
+        (_blefDescrita ? BIOMICROSCOPIA_BLEFARITE : null);
+      if (!_bioBase) {
+        console.warn('[Blefarite] Template de biomicroscopia SUPRIMIDO — nenhuma inflamação palpebral descrita na consulta. Campo deixado vazio para descrição manual.');
+      }
       combinedData.examesNormais = {
-        biomicroscopia: getBiomicroscopiaComLente(_bioBase),
+        biomicroscopia: _bioBase ? getBiomicroscopiaComLente(_bioBase) : null,
         // Blefarite é achado de segmento ANTERIOR — não implica fundo normal.
         // Se o médico discutiu achado posterior (ex.: escavação aumentada suspeita de
         // glaucoma), o Gemini preenche dados.fundoscopia e ela prevalece; o template
@@ -942,7 +1024,7 @@ async function injectAll(force = false) {
       const activeField = (cidField?.value?.trim() ? cidField : null)
         || (novosCids.length && cidTarget?.value?.trim() ? cidTarget : null);
       if (activeField) {
-        handleSearchCid._failed = []; // início de cadeia — zera CIDs recusados
+        _startCidChain(); // início de cadeia — zera recusados e reagendados
         setTimeout(() => handleSearchCid(activeField), 800);
       }
     }, 1500);
@@ -1025,6 +1107,7 @@ function clearAll(options = { clearAudio: true, clearCamera: true }) {
       SessionFlags.catarataDetectada = false;
       SessionFlags.catarataGrau = null;
       SessionFlags.lioDetectada = false;
+      SessionFlags.lioLado = null;
       SessionFlags.opacidadeCapsulaDetectada = false;
       SessionFlags.dilatacaoDetectada = false;
       SessionFlags.fase2DilatacaoAtiva = false;
@@ -1188,6 +1271,7 @@ function _formatFailedCidsMessage(failed) {
 function _surfaceFailedCids() {
   const msg = _formatFailedCidsMessage(handleSearchCid._failed);
   handleSearchCid._failed = [];
+  handleSearchCid._requeued = new Set(); // fim de cadeia — a próxima começa do zero
   if (!msg) return;
   if (successMessage._hideTimer) { clearTimeout(successMessage._hideTimer); successMessage._hideTimer = null; }
   successMessage.classList.remove('hidden');

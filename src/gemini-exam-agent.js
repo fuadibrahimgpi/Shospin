@@ -1,5 +1,187 @@
 /**
- * GEMINI SERVICE v5.3.6 — Agente de Exames (OCR) + Agente de Entrevista
+ * GEMINI SERVICE v5.5.0 — Agente de Exames (OCR) + Agente de Entrevista
+ *
+ * v5.5.0 (revisão de estabilidade — 2026-08-06):
+ *   1. APRESENTAÇÃO PADRONIZADA em vez de orientação adivinhada. As 14 fotos da
+ *      pasta da câmera estão TODAS deitadas: o médico apoia a tira na mesa e
+ *      fotografa de cima — nunca de pé. Duas conclusões:
+ *        a) A moldura do sidepanel é HORIZONTAL (nunca vertical: de pé, o
+ *           comprimento do ticket fica limitado pela altura do quadro e os
+ *           dígitos perdem ~40% de resolução linear — justamente o que
+ *           _cropAndZoom e o recorte da foto nativa existem para compensar).
+ *           Ela marca de que lado fica o cabeçalho, o que torna a orientação
+ *           uma CONSTANTE (PRE_ROTACAO_MOLDURA) em vez de uma inferência.
+ *        b) Um detector local de "deitado vs em pé" foi escrito, medido contra
+ *           as fotos reais e DESCARTADO: errou 2 das 5 conferidas à vista, e
+ *           seu único modo de erro perigoso (girar uma foto que estava boa)
+ *           passaria a acontecer justamente quando a moldura começasse a
+ *           funcionar. Não se calibra um detector numa distribuição que se está
+ *           tentando eliminar. Quem endireita segue sendo o modelo (v5.4.8),
+ *           agora partindo de uma apresentação previsível.
+ *   2. MAIS DE UM TICKET NA FOTO vira regra de prompt + aviso ao médico
+ *      (_ticketsMultiplos). Foto de 2026-08-06 08:57: tono/paqui grampeado POR
+ *      CIMA do ticket de refração — nada impedia misturar seções de papéis
+ *      diferentes, nem ancorar a rotação no cabeçalho do ticket errado.
+ *   3. TONOMETRIA GANHA CONFERÊNCIA. Toda a artilharia conferia só refração;
+ *      a PIO ia sem cross-check nenhum. O prompt agora pede as medições
+ *      individuais da linha TONO (_tonoMedicoes) e o pós-processamento avisa
+ *      quando o AVG não bate com nenhuma delas. E PIO > 21 mmHg gera aviso
+ *      clínico (pendência do log 2026-07-31: PIO 24 injetada sem alerta).
+ *   4. DESEMPATE DE CILINDRO NORMALIZA O SINAL (_parseCil). A 3ª leitura
+ *      devolvendo "0.50" sem sinal (convenção TOPCON documentada no próprio
+ *      prompt principal) era comparada crua com pCil/vCil negativos e virava
+ *      "3º valor diferente" — desempate certo, jogado fora.
+ *   5. TOLERÂNCIAS CENTRALIZADAS em OCR_TOL. 0.30/0.50/0.15/0.13/8° estavam
+ *      soltos no meio das funções — foi assim que um "0.25" virou exatamente
+ *      um passo dióptrico sem ninguém notar (regressão da v5.4.5).
+ *   6. ORÇAMENTO DE CHAMADAS por captura (contador + teto de referência em
+ *      OCR_MAX_CHAMADAS) e total no log ⏱ — o pior caso passava de 10
+ *      chamadas sem nenhum lugar onde isso aparecesse inteiro.
+ *   7. Laço de rotação extraído para _straightenTicket (primeiro passo da
+ *      fase 2 da reestruturação; o laço de disputa por olho fica para a fase).
+ *
+ * v5.4.8 (os DOIS sentidos de apresentação do ticket deitado):
+ *   Uma tira deitada admite duas correções — 90° e 270° — e de fora não há como
+ *   saber qual: o topo do ticket tanto pode estar à esquerda quanto à direita da
+ *   foto, e as duas apresentações acontecem (o papel sai da impressora e é
+ *   largado na mesa em qualquer sentido). Errado o sentido, a imagem girada fica
+ *   DE CABEÇA PARA BAIXO — e a v5.4.7 desistia exatamente aí, no caso mais comum
+ *   de erro, pedindo refoto de um ticket a um 180° de ser lido. Agora são até
+ *   duas correções (90 errado + 180 = 270 certo), girando SEMPRE a partir do
+ *   original pelo acumulado — girar o já girado empilha perda de JPEG. O
+ *   acumulado é rastreado para recusar o pedido que fecha a volta (90 seguido de
+ *   270 devolveria a foto original, que acabou de ser reprovada), e o prompt
+ *   ancora 90/270 na posição do TOPO do ticket (cabeçalho com a data vs rodapé
+ *   TOPCON/TONO.DATA), que é verificável na imagem — não na inclinação da cabeça.
+ *
+ * v5.4.7 (CAUSA RAIZ das trocas de coluna: o ticket estava DEITADO):
+ *   A foto de 2026-08-06 09:03 mostra a tira a 90° sobre a mesa. O pipeline só
+ *   sabia endireitar 180° (ticket grampeado, fotografado pelo verso) — 90°/270°
+ *   passavam direto, com `_ticketInvertido: false`. Lendo de lado, a coluna do
+ *   CILINDRO cai onde a mente espera a ESFERA: em 2 das 3 capturas do mesmo
+ *   ticket o OD saiu +1.25 (o cilindro) em vez de +2.50, cada uma com um S.E.
+ *   diferente e coerência interna suficiente para parecer certa. Nenhum veto a
+ *   jusante conserta isso — só custa refoto. Agora a 1ª chamada devolve
+ *   `_ticketRotacao` (0/90/180/270), o sistema gira a imagem (as fotos NATIVAS
+ *   do recorte giram junto) e relê uma vez. `_ticketInvertido: true` continua
+ *   aceito como 180 — o modelo às vezes responde no formato que memorizou.
+ *
+ * v5.4.6 (log 2026-08-06 — o olho bom morria antes mesmo de ser conferido):
+ *   1. CROSS-CHECK S+C/2≈S.E. PASSA A REPROVAR O OLHO, NÃO A REFRAÇÃO. A conta é
+ *      por olho e derrubava as duas: às 11:41 o OD saiu incoerente (S.E. +1.50
+ *      com S +1.25 e C -0.50) e levou junto um OE exato. E como esse bloqueio
+ *      acontece no pós-processamento, a refração zerada desligava `refracaoViva`
+ *      — a captura terminava em 12s sem 2ª chamada e sem leitura ampliada para
+ *      NENHUM dos dois olhos.
+ *
+ *   2. A LEITURA AMPLIADA VENCEDORA É A QUE CAIU NA LINHA CERTA. _signsUsable só
+ *      exigia um caractere "+/−" legível, e o recorte devolve sinal legível da
+ *      CÉLULA ERRADA com frequência (11:44: a magnitude do CILINDRO nos dois
+ *      olhos; 19:40 do dia anterior: idem). O ticket inteiro, que tinha lido a
+ *      esfera certa, era descartado — e uma captura CORRETA saía com dois avisos
+ *      de "sinal não confirmado". Aviso espúrio em captura boa é como o médico
+ *      aprende a ignorar aviso.
+ *
+ * v5.4.5 (FIX: a v5.4.4 deixou passar leitura alucinada — captura 19:40):
+ *   O afrouxamento da v5.4.4 abriu dois buracos, os dois no mesmo log:
+ *
+ *   1. UMA DIMENSÃO RESOLVIDA ESCONDIA AS OUTRAS. O comparador devolve UMA
+ *      divergência por olho; descartar essa (piso do CID, desempate, testemunha)
+ *      liberava o olho inteiro, incluindo o que nunca foi conferido. Às 19:40 o
+ *      OD teve a esfera liberada pelo piso (+0.25 vs -0.25) e injetou cilindro
+ *      -0.50 contra -1.50 da 2ª leitura E da leitura ampliada — 1.00D de
+ *      astigmatismo alucinado no prontuário. Agora cada descarte custa uma
+ *      releitura do comparador com a dimensão já julgada marcada (skipDims), e
+ *      um aviso 'soft' também não interrompe a conferência das demais.
+ *
+ *   2. TOLERÂNCIA DE MAGNITUDE DE UM PASSO DIÓPTRICO INTEIRO. A validação de
+ *      linha aceitava ±0.25D — exatamente o passo do TOPCON —, então o valor da
+ *      célula VIZINHA passava por "a mesma célula". Às 19:40 (OE) a ampliada
+ *      devolveu magnitude 0.50 (o cilindro) contra esfera +0.25 e virou voto
+ *      sobre o sinal da esfera. Número impresso se lê certo ou errado, não "por
+ *      perto": a folga caiu para 0.13D.
+ *
+ * v5.4.4 (FIX: bloqueio frequente demais — 6 de 11 capturas do log 2026-08-05):
+ *   Censo dos bloqueios da sessão: 3 por sinal de esfera de ±0.25D, 2 por
+ *   cilindro discordante, 1 por sinal onde as duas leituras ampliadas
+ *   discordavam ENTRE SI. Quatro correções, nenhuma delas baixando a barra de
+ *   uma leitura de fato não conferida:
+ *
+ *   1. CONFERÊNCIA POR OLHO. O comparador parava no primeiro mismatch e o
+ *      bloqueio zerava a refração inteira — em 4 das 6 capturas a disputa era
+ *      de um olho só, e o outro (confirmado pelas três leituras) ia junto.
+ *      Agora cada olho é comparado e bloqueado sozinho; só com os dois caídos a
+ *      refração inteira cai (tono/paqui seguem preservados, v5.4.0).
+ *
+ *   2. AS DUAS LEITURAS AMPLIADAS VALEM. getSigns() dispara recorte e ticket
+ *      inteiro em paralelo, mas só a vencedora era consultada: às 18:01 a 1ª, a
+ *      2ª e o ticket inteiro liam "+0.50" no OE e o bloqueio saiu pela voz do
+ *      recorte, sozinho. Discordância ENTRE as ampliadas é inconclusão.
+ *
+ *   3. PISO CLÍNICO TAMBÉM VALE PARA O BLOQUEIO. A mensagem justificava o veto
+ *      com "troca miopia por hipermetropia (H52.1 vs H52.0)" — mas
+ *      _inferCidRefracao só codifica a partir de |0.50D|. Em ±0.25D o sinal não
+ *      muda CID nenhum, e três capturas seguidas do mesmo ticket (18:00, 18:01,
+ *      18:02) foram perdidas por 0.5D que ninguém codifica. A neutralidade é
+ *      CALCULADA (roda o inferidor nos dois cenários), não presumida.
+ *
+ *   4. DESEMPATE DE CILINDRO USA AS TESTEMUNHAS QUE JÁ EXISTEM. A chamada
+ *      dedicada voltou ilegível em 2 de 2 (e o log chamava isso de "3º valor
+ *      diferente: null"). As leituras ampliadas já transcrevem o C da linha
+ *      MÉDIA; valem como voto, com a mesma exigência do eixo — unanimidade
+ *      entre linhas validadas, senão o bloqueio permanece.
+ *
+ * v5.4.1 (FIX: a 3ª leitura não tinha segunda chance — 2 capturas bloqueadas seguidas):
+ *   Log 2026-08-03 20:14: o mesmo ticket, duas capturas, as duas com a leitura
+ *   ampliada voltando sinal=null — e as duas refrações bloqueadas por disputa de
+ *   sinal que ninguém podia desempatar. _refDataBox é PALPITE do modelo, não
+ *   medição: a mesma folha rendeu [170,170,460,380] e depois [170,100,520,450],
+ *   e uma das leituras devolveu magnitude "0.77" — o EIXO do OE, prova de que o
+ *   recorte levou o olhar para outra célula. Caixa INVÁLIDA já caía para o ticket
+ *   inteiro; caixa VÁLIDA-E-ERRADA não tinha recurso nenhum. Agora:
+ *     a) leitura ampliada ilegível nos dois olhos ⇒ repete UMA vez no ticket
+ *        inteiro (1 chamada extra só no caminho de falha);
+ *     b) o log registra as métricas do recorte (origem/recorte/saída/escala) —
+ *        sem elas não dá para separar "caixa no lugar errado" de "resolução
+ *        insuficiente" na próxima captura ruim;
+ *     c) a 3ª chamada também transcreve C e A da linha MÉDIA (prova de linha) e
+ *        o motivo da ilegibilidade vai para o log (_describeSignMisread).
+ *
+ * v5.4.0 (FIX: pilha de vetos bloqueava mais capturas boas do que capturas ruins):
+ *   Diagnóstico do log 2026-08-03: 5 de 8 capturas bloqueadas; um paciente perdeu
+ *   as 3 tentativas (zero refração, zero tono, zero paqui). Cinco retificações:
+ *
+ *   1. THINKING BUDGET. Os prompts pedem ancoragem de linha ("ache o S.E., suba
+ *      uma linha") + duas checagens aritméticas, e rodavam com thinkingBudget:0.
+ *      Pedir deliberação com zero tokens de raciocínio é contradição — agora há
+ *      orçamento (EXAM_CONFIG/FOCUS_CONFIG).
+ *
+ *   2. LEITURAS FOCADAS RECEBEM PIXELS FOCADOS. _tiebreak* recebiam os mesmos 3
+ *      tickets inteiros em 3840px; "olhe de perto" sobre pixels idênticos não é
+ *      um olhar novo (17:48:03: o desempate de cilindro devolveu um 3º valor).
+ *      A 1ª chamada agora devolve _refDataBox e o sistema recorta+amplia a
+ *      REF.DATA antes de qualquer releitura. Sem chamada extra de localização.
+ *
+ *   3. POLÍTICA DE SINAL SIMÉTRICA. A v5.3.6 justificava o bloqueio permanente
+ *      dizendo que o erro do "+" é CORRELACIONADO entre leituras — e então usava
+ *      a concordância entre leituras como condição de liberação. A pilha só via
+ *      discordância, logo o erro correlacionado passava direto (capturas 1 e 2 de
+ *      +0.50 bloqueadas; a 3ª, com as duas chamadas concordando em -0.50, passou
+ *      e injetou H521-Miopia). Agora o sinal é lido SEMPRE numa 3ª leitura
+ *      AMPLIADA: ela contradizer a 1ª bloqueia (mesmo sem disputa — é o caso
+ *      correlacionado), e ela confirmar a 1ª com S+C/2≈S.E. libera a disputa.
+ *
+ *   4. FALHA POR SEÇÃO, NÃO POR CAPTURA. _captureFailed descartava o ticket
+ *      inteiro: às 17:46 tonometria (15/17) e paquimetria (517/515) sem conflito
+ *      nenhum foram jogadas fora por divergência no cilindro do OE. Refração
+ *      bloqueada agora zera só a refração (_refracaoBloqueada) e preserva
+ *      tono/paqui; _captureFailed só quando não sobra nada.
+ *
+ *   5. S.E. RECUPERA O CILINDRO NÃO LIDO. Com cil=null o cross-check calculava
+ *      seCalc=esf e qualquer astigmatismo real reprovava a captura (17:47:13: OD
+ *      -5.00, C não lido, S.E. -5.50 → bloqueio; as outras capturas do mesmo
+ *      ticket leram C=-1.00 = exatamente 2*(S.E.-S)). O S.E. impresso é o
+ *      discriminador do cilindro que faltou, não a prova de leitura errada.
  *
  * v5.3.6 (FIX: sinal de esfera invertido injetado por voto 2-de-3):
  *   - Flip puro de sinal da esfera (+5.25 ↔ -5.25) inverte miopia↔hipermetropia,
@@ -101,16 +283,138 @@
 //   Se ticket invertido 180° detectado pelo modelo: 1 rotação + 1 nova call.
 // ============================================================================
 
-const EXAM_CONFIG = { maxOutputTokens: 4096, thinkingBudget: 0 };
+// Orçamento de raciocínio (v5.4.0). Os prompts de OCR exigem deliberação real:
+// localizar a linha "S.E.", subir uma linha, conferir S+C/2≈S.E. e validar o
+// passo de 0.25D. Com thinkingBudget:0 nada disso acontece — o modelo responde
+// no primeiro palpite. Em Gemini 2.5 os tokens de thinking contam no
+// maxOutputTokens, por isso o teto de saída subiu junto.
+const EXAM_CONFIG  = { maxOutputTokens: 8192, thinkingBudget: 2048 };
+// Leituras hiperfocadas (sinal/cilindro/eixo): resposta minúscula, mas é onde a
+// atenção ao caractere mais importa — vale orçamento de raciocínio próprio.
+const FOCUS_CONFIG = { maxOutputTokens: 2048, thinkingBudget: 1024 };
+
+// ============================================================================
+// TOLERÂNCIAS DE COMPARAÇÃO (v5.5.0)
+// ============================================================================
+//
+// Estavam espalhadas como literais no meio das funções, e cada patch criou a
+// sua. Foi exatamente assim que a v5.4.4 escreveu "0.25" na validação de linha
+// sem notar que 0.25D é UM PASSO DIÓPTRICO INTEIRO — a célula vizinha passava
+// por "a mesma célula", e a v5.4.5 teve que corrigir depois de uma alucinação
+// chegar ao prontuário. Cada número aqui carrega a razão de ser o que é; mudar
+// um passa a ser uma decisão consciente, não um typo que ninguém revisa.
+const OCR_TOL = {
+  // Cross-check S+C/2 ≈ S.E. impresso, e discordância de esfera entre leituras.
+  // 0.30D = uma folga acima do passo (0.25D) para absorver arredondamento do
+  // próprio aparelho, sem deixar passar erro de célula.
+  ESFERA_DIFF: 0.30,
+  SE_CROSSCHECK: 0.30,
+  // Coerência interna de um olho (S+C/2 vs S.E. do MESMO olho). Mais apertada:
+  // aqui não há duas leituras, é aritmética sobre os três números já lidos.
+  MATH_CONSISTENT: 0.15,
+  // Cilindro entre 1ª e 2ª leitura: acima de HARD sempre bloqueia; entre SOFT e
+  // HARD só bloqueia se a 1ª não fechar a própria conta.
+  CIL_HARD: 0.50,
+  CIL_SOFT: 0.30,
+  // Testemunha de cilindro (leitura ampliada) confirmando 1ª ou 2ª: precisa ser
+  // o MESMO valor, folga só para ruído de formatação ("−0.50" vs "-.50").
+  CIL_TESTEMUNHA: 0.15,
+  // Validação de LINHA da leitura ampliada: a magnitude lida bate com |esfera|?
+  // ABAIXO do passo dióptrico de propósito (v5.4.5) — número impresso se lê
+  // certo ou errado, não "por perto". Com 0.25 aqui, o cilindro da linha certa
+  // passava por esfera.
+  LINHA_VALIDADA: 0.13,
+  // Eixo, em graus, com comparação circular (1° ≡ 180°).
+  EIXO_GRAUS: 8
+};
+
+// ============================================================================
+// APRESENTAÇÃO PADRONIZADA DO TICKET (v5.5.0)
+// ============================================================================
+//
+// As 14 fotos da pasta da câmera estão TODAS deitadas — o médico apoia a tira
+// na mesa e fotografa de cima. Em vez de adivinhar a orientação foto a foto
+// (um detector local foi medido e descartado: errou 2 de 5), a moldura do
+// sidepanel PADRONIZA a apresentação, e a orientação vira uma constante.
+//
+// O lado marcado NÃO é arbitrário: girando as fotos reais, 270° é o que deixa
+// a REF.DATA legível — ou seja, o médico já apoia o ticket com o cabeçalho à
+// DIREITA. A moldura confirma o hábito em vez de pedir que ele o inverta, o que
+// torna a conformidade gratuita e acerta a orientação na 1ª chamada.
+// "Topo do ticket à direita" é 270° pela definição do próprio _getExamPrompt.
+//
+// ⚠ ACOPLAMENTO: este valor e o lado marcado na moldura em sidepanel.html
+// (#cameraFramingGuide) precisam concordar. Trocar o lado na moldura sem trocar
+// este número faz TODA captura chegar de cabeça para baixo. O teste ORIENT-2
+// guarda os dois juntos.
+//
+// Errar não quebra nada, só custa uma chamada: com o cabeçalho à esquerda o
+// modelo vê a imagem invertida e pede 180 (270+180=90, a outra apresentação);
+// com o ticket em pé pede 90 e o alvo volta a 0. Os dois caminhos já são os da
+// v5.4.8 — ver _proximoAlvoRotacao e os testes ROT-11/12.
+const PRE_ROTACAO_MOLDURA = 270;
+
+// Teto de referência de chamadas à API por captura (v5.5.0). Não é um corte
+// rígido no meio do fluxo — abortar entre a verificação e a política de sinal
+// deixaria a refração meio conferida, que é pior do que demorar. Serve para o
+// log gritar quando o pior caso acontece: 1ª + 2 giros + verify + 2 sinais +
+// desempate de cilindro + desempate de eixo já passa de 8, e o auto-retry de
+// swap S↔C dobra tudo isso sem que nenhum log mostrasse o total.
+const OCR_MAX_CHAMADAS = 8;
 
 class GeminiExamAgent {
   constructor() {
     this.logger = new Logger('GeminiExamAgent');
+    // Contador de chamadas à API da captura em curso (v5.5.0). Zerado no início
+    // de cada extractExams de topo — o auto-retry de swap S↔C NÃO zera, senão o
+    // caminho mais caro do sistema (pipeline inteiro duas vezes) seria o único
+    // que o log mostraria pela metade.
+    this._chamadas = 0;
+  }
+
+  /**
+   * Toda chamada à API passa por aqui, para que o custo real de uma captura
+   * apareça em UM lugar. `label` identifica a etapa no log.
+   */
+  async _callApi(apiService, parts, config, label) {
+    this._chamadas++;
+    if (this._chamadas === OCR_MAX_CHAMADAS + 1) {
+      // Não interrompe: cortar entre a verificação e a política de sinal deixaria
+      // a refração meio conferida. O aviso existe para o próximo log de problema
+      // mostrar de cara que aquela captura estourou o orçamento.
+      this.logger.warn(
+        `[OCR] ⚠ Orçamento de chamadas excedido (${this._chamadas} > ${OCR_MAX_CHAMADAS}) — ` +
+        `captura cara; ver o resumo de chamadas ao final.`
+      );
+    }
+    this.logger.info(`[OCR] → chamada #${this._chamadas} (${label})`);
+    return apiService.callGeminiAPI(parts, config);
   }
 
   // --------------------------------------------------------------------------
   // Pré-processamento de imagem (contraste + grayscale)
   // --------------------------------------------------------------------------
+  /**
+   * Contraste padrão (c=60 → fator ≈ 1.6) + escala de cinza (ITU-R BT.601),
+   * in place no contexto. Aumenta a separação texto/fundo sem distorcer.
+   * Compartilhado por _preprocessImage (ticket inteiro) e _cropAndZoom (recorte
+   * vindo da foto nativa, que não passou pelo pré-processamento).
+   */
+  _applyContrastInPlace(ctx, width, height) {
+    const imageData = ctx.getImageData(0, 0, width, height);
+    const data = imageData.data;
+    const C = 60;
+    const factor = (259 * (C + 255)) / (255 * (259 - C));
+    for (let i = 0; i < data.length; i += 4) {
+      const gray = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+      const newGray = Math.max(0, Math.min(255, factor * (gray - 128) + 128));
+      data[i] = newGray;
+      data[i + 1] = newGray;
+      data[i + 2] = newGray;
+    }
+    ctx.putImageData(imageData, 0, 0);
+  }
+
   async _preprocessImage(base64Image) {
     return new Promise((resolve) => {
       const img = new Image();
@@ -121,23 +425,7 @@ class GeminiExamAgent {
         canvas.height = img.height;
         ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
 
-        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-        const data = imageData.data;
-
-        // Contraste padrão (c=60 → fator ≈ 1.6). Aumenta separação texto/fundo
-        // sem distorcer. Conversão para escala de cinza (pesos ITU-R BT.601).
-        const C = 60;
-        const factor = (259 * (C + 255)) / (255 * (259 - C));
-
-        for (let i = 0; i < data.length; i += 4) {
-          const gray = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
-          const newGray = Math.max(0, Math.min(255, factor * (gray - 128) + 128));
-          data[i] = newGray;
-          data[i + 1] = newGray;
-          data[i + 2] = newGray;
-        }
-
-        ctx.putImageData(imageData, 0, 0);
+        this._applyContrastInPlace(ctx, canvas.width, canvas.height);
         const processedBase64 = canvas.toDataURL('image/jpeg', 0.95);
         resolve(processedBase64.replace(/^data:image\/\w+;base64,/, ''));
       };
@@ -154,23 +442,37 @@ class GeminiExamAgent {
   }
 
   // --------------------------------------------------------------------------
-  // Rotação 180° (correção de ticket grampeado e fotografado pelo verso)
+  // Rotação de quarto de volta (v5.4.7)
   // --------------------------------------------------------------------------
-  async _rotateImage180(base64Image) {
+  //
+  // Só 180° era corrigido — o caso do ticket grampeado e fotografado pelo verso.
+  // Mas o ticket TOPCON é uma tira LONGA: fotografado sobre a mesa ele quase
+  // sempre sai DEITADO, e aí as colunas S/C/A viram linhas. Foto de
+  // 2026-08-06 09:03 (ticket a 90°): duas das três capturas leram o CILINDRO
+  // como esfera do OD (+1.25 no lugar de +2.50) — cada uma com um S.E. diferente
+  // e coerência interna suficiente para parecer certa. Ler de lado é a causa
+  // raiz das trocas de coluna; endireitar a imagem é mais barato do que
+  // qualquer veto a jusante.
+  //
+  // @param {number} deg 90 | 180 | 270, sentido horário.
+  async _rotateImage(base64Image, deg) {
+    const norm = ((Math.round(deg / 90) * 90) % 360 + 360) % 360;
+    if (norm === 0) return base64Image;
     return new Promise((resolve) => {
       const img = new Image();
       img.onload = () => {
         const canvas = document.createElement('canvas');
-        canvas.width  = img.width;
-        canvas.height = img.height;
+        const swap = norm === 90 || norm === 270;
+        canvas.width  = swap ? img.height : img.width;
+        canvas.height = swap ? img.width  : img.height;
         const ctx = canvas.getContext('2d');
         ctx.translate(canvas.width / 2, canvas.height / 2);
-        ctx.rotate(Math.PI);
+        ctx.rotate(norm * Math.PI / 180);
         ctx.drawImage(img, -img.width / 2, -img.height / 2);
         resolve(canvas.toDataURL('image/jpeg', 0.95).split(',')[1]);
       };
       img.onerror = () => {
-        this.logger.warn('[Rotate180] Falha — usando imagem original');
+        this.logger.warn(`[Rotate] Falha ao girar ${norm}° — usando imagem original`);
         resolve(base64Image);
       };
       img.src = base64Image.startsWith('data:')
@@ -179,64 +481,429 @@ class GeminiExamAgent {
     });
   }
 
+  /**
+   * Para qual orientação ABSOLUTA girar, dada a acumulada e o passo que o modelo
+   * pediu agora? `null` = não girar (passo inválido, ou o destino é uma
+   * orientação já reprovada).
+   *
+   * É aqui que mora o caso dos DOIS SENTIDOS: uma tira deitada pode estar a 90°
+   * ou a 270° e de fora não dá para saber. Errado o sentido, a imagem girada sai
+   * de cabeça para baixo e o modelo pede mais 180° — 90+180 = 270, a outra
+   * apresentação. Já 90 seguido de 270 fecha 360° e devolveria a foto original,
+   * que acabou de ser reprovada: esse é o pedido que se recusa.
+   */
+  _proximoAlvoRotacao(acumulada, passo, tentadas) {
+    const p = this._rotacaoPedida({ _ticketRotacao: passo });
+    if (!p) return null;
+    const alvo = (((acumulada + p) % 360) + 360) % 360;
+    if (tentadas && tentadas.has(alvo)) return null;
+    return alvo;
+  }
+
+  /** Compat: o caminho antigo (e os testes) chamavam a rotação de 180°. */
+  async _rotateImage180(base64Image) {
+    return this._rotateImage(base64Image, 180);
+  }
+
+  /**
+   * Quantos graus o modelo pediu para girar? Aceita o contrato novo
+   * (_ticketRotacao: 0|90|180|270) e o antigo (_ticketInvertido: true = 180),
+   * porque o modelo às vezes responde no formato do exemplo que memorizou.
+   * Qualquer valor fora dos quatro múltiplos de 90 vira 0 — girar por um número
+   * inventado estragaria uma imagem que estava boa.
+   */
+  _rotacaoPedida(raw) {
+    if (!raw) return 0;
+    if (raw._ticketInvertido === true && raw._ticketRotacao == null) return 180;
+    const n = Number(raw._ticketRotacao);
+    // Sem arredondar: 45 não é "quase 90". Um número que não é múltiplo exato de
+    // 90 é resposta inventada, e girar por ela estragaria uma imagem boa.
+    if (!Number.isInteger(n) || n % 90 !== 0) return 0;
+    const norm = ((n % 360) + 360) % 360;
+    return [90, 180, 270].includes(norm) ? norm : 0;
+  }
+
+  /**
+   * Endireita o ticket e devolve a 1ª leitura já na orientação correta (v5.5.0).
+   *
+   * Extraído de extractExams: era um bloco de ~60 linhas no meio de um método de
+   * 500, com quatro variáveis mutáveis (`raw`, `imageParts`, `cropSources`,
+   * `_rotAcumulada`) atravessando o resto da função. Aqui a rotação tem entrada
+   * e saída explícitas.
+   *
+   * Uma tira deitada admite duas correções — 90° e 270° — e do lado de fora não
+   * há como saber qual: o topo tanto pode estar à esquerda quanto à direita da
+   * foto, e as duas apresentações acontecem (o papel sai da impressora e é
+   * largado na mesa em qualquer sentido). Errado o sentido, a imagem girada fica
+   * DE CABEÇA PARA BAIXO — e a v5.4.7 desistia exatamente aí, no caso mais comum
+   * de erro. Duas correções, portanto, e no máximo duas: 90 errado + 180 = 270
+   * certo. O acumulado é rastreado para nunca repetir uma orientação já tentada.
+   *
+   * `preRot` é a orientação de partida que a moldura padroniza
+   * (PRE_ROTACAO_MOLDURA). Ela entra no acumulado e no conjunto de tentadas —
+   * mas a orientação 0 NÃO entra como "já reprovada" quando houve pré-rotação,
+   * porque o modelo nunca a viu: se ele pedir a volta (90 + 270 = 0), está
+   * corrigindo a nossa premissa (o médico apoiou o ticket de outro jeito), e
+   * essa correção precisa ser possível.
+   *
+   * @returns {{raw, imageParts, cropSources}|{erro: string}}
+   */
+  async _straightenTicket(prompt, processedImages, nativeImages, preRot, apiService) {
+    const _MAX_GIROS = 2;
+
+    // Gira SEMPRE a partir do original, pelo acumulado: girar o já girado
+    // empilharia perda de qualidade de JPEG a cada volta.
+    const aplicar = async (deg) => {
+      const proc = deg === 0
+        ? processedImages
+        : await Promise.all(processedImages.map(b => this._rotateImage(b, deg)));
+      // As fontes do recorte precisam girar junto, ou a caixa devolvida pelo
+      // modelo (medida sobre o ticket já rotacionado) apontaria para o lugar
+      // errado na foto nativa.
+      const crop = nativeImages
+        ? (deg === 0 ? nativeImages : await Promise.all(nativeImages.map(b => this._rotateImage(b, deg))))
+        : proc;
+      return {
+        cropSources: crop,
+        imageParts: proc.map(b64 => ({ inlineData: { mimeType: 'image/jpeg', data: b64 } }))
+      };
+    };
+
+    let rotAcumulada = preRot || 0;
+    const tentadas = new Set([rotAcumulada]);
+    let atual = await aplicar(rotAcumulada);
+    let raw;
+
+    const _tCall1 = Date.now();
+    try {
+      const { text } = await this._callApi(
+        apiService, [{ text: prompt }, ...atual.imageParts], EXAM_CONFIG, '1ª leitura'
+      );
+      raw = _parseGeminiJSON(text, 'exames');
+      this.logger.info(`[OCR] ⏱ 1ª chamada: ${Date.now() - _tCall1}ms`);
+    } catch (err) {
+      this.logger.error('[OCR] Falha na chamada à API:', err);
+      return { erro: 'Erro na comunicação com a IA. Tente novamente.' };
+    }
+
+    for (let giro = 0; giro < _MAX_GIROS; giro++) {
+      const passo = this._rotacaoPedida(raw);
+      if (!passo) break;
+
+      const alvo = this._proximoAlvoRotacao(rotAcumulada, passo, tentadas);
+      if (alvo === null) {
+        // O modelo está oscilando (pede 90, depois 270) — mais uma volta cairia
+        // numa orientação já reprovada. Parar aqui é honesto; insistir é loop.
+        this.logger.warn(`[OCR] Rotação pedida (${passo}°) levaria a uma orientação já tentada — parando de girar.`);
+        break;
+      }
+      this.logger.warn(`[OCR] Ticket torto: girando ${passo}° (acumulado ${alvo}°) e relendo`);
+      rotAcumulada = alvo;
+      tentadas.add(alvo);
+      atual = await aplicar(rotAcumulada);
+
+      try {
+        const { text } = await this._callApi(
+          apiService, [{ text: prompt }, ...atual.imageParts], EXAM_CONFIG, `releitura após girar ${alvo}°`
+        );
+        raw = _parseGeminiJSON(text, 'exames');
+      } catch (err) {
+        this.logger.error('[OCR] Falha após rotação:', err);
+        return { erro: 'Erro ao re-ler o ticket rotacionado.' };
+      }
+    }
+
+    // Esgotadas as tentativas com o modelo ainda vendo o ticket torto: devolver
+    // `raw` sem refração daria um "captura vazia" que não explica nada.
+    if (this._rotacaoPedida(raw)) {
+      this.logger.warn('[OCR] Após girar, o modelo continua vendo o ticket torto — desistindo da rotação automática.');
+      return { erro: 'Não foi possível endireitar o ticket automaticamente. Fotografe o ticket com o texto na horizontal.' };
+    }
+
+    // A marca vale para QUALQUER rotação aplicada, inclusive a nossa pré-rotação
+    // local — o consumidor usa isso para saber que a imagem lida não é a foto
+    // como ela saiu da câmera.
+    if (raw && rotAcumulada !== 0) raw._ticketFoiRotacionado = true;
+
+    return { raw, imageParts: atual.imageParts, cropSources: atual.cropSources };
+  }
+
+  // --------------------------------------------------------------------------
+  // Recorte + ampliação da REF.DATA (v5.4.0)
+  // --------------------------------------------------------------------------
+  //
+  // As releituras "hiperfocadas" (sinal, cilindro, eixo) recebiam exatamente os
+  // mesmos 3 tickets inteiros em 3840px que a 1ª chamada. Um prompt que diz
+  // "olhe de perto" sobre pixels idênticos não produz um olhar novo — produz a
+  // mesma leitura com instrução mais curta (log 2026-08-03 17:48:03: o desempate
+  // de cilindro devolveu um TERCEIRO valor, 3.25, quando a disputa era
+  // -1.25 vs -3.25). Recortar a REF.DATA e ampliá-la dá pixels de verdade para
+  // a releitura decidir.
+  //
+  // A caixa vem da própria 1ª chamada (_refDataBox), evitando um round-trip de
+  // localização. É relativa à PRIMEIRA imagem; como as 3 fotos são um burst de
+  // 200ms com enquadramento praticamente igual, a mesma caixa serve para todas
+  // desde que haja folga — daí o padding generoso.
+
+  /** Valida e aplica folga à caixa [ymin,xmin,ymax,xmax] normalizada 0-1000. */
+  // padPct 0.30 (era 0.12): a caixa é palpite do modelo e erra de lado. Na mesma
+  // folha, três capturas do log 2026-08-05 renderam xmin 680, 680 e 580 e ymin
+  // 100, 170 e 200 — variação maior que a folga que existia, e o recorte saía
+  // sem a coluna do sinal. Folga generosa custa alguns pixels de ampliação e
+  // compra tolerância a um palpite torto.
+  _normalizeBox(box, padPct = 0.30) {
+    if (!Array.isArray(box) || box.length !== 4) return null;
+    const [ymin, xmin, ymax, xmax] = box.map(Number);
+    if ([ymin, xmin, ymax, xmax].some(v => isNaN(v) || v < 0 || v > 1000)) return null;
+    const h = ymax - ymin, w = xmax - xmin;
+    // Caixa degenerada ou "ticket inteiro" não agrega ampliação — descarta.
+    if (h < 50 || w < 50) return null;
+    if (h > 950 && w > 950) return null;
+    const padY = h * padPct, padX = w * padPct;
+    return {
+      ymin: Math.max(0, ymin - padY), xmin: Math.max(0, xmin - padX),
+      ymax: Math.min(1000, ymax + padY), xmax: Math.min(1000, xmax + padX)
+    };
+  }
+
+  /**
+   * Recorta a região e reamostra para cima (até 3×, alvo ~2400px no maior lado).
+   *
+   * `applyContrast` existe porque a fonte do recorte mudou: quando recortamos da
+   * FOTO NATIVA (crua, colorida), o realce de contraste do _preprocessImage não
+   * passou por ali — precisa ser aplicado aqui, no recorte, ou a região volta
+   * mais fiel em pixels e pior em separação texto/fundo. Quando a fonte é a
+   * imagem já pré-processada, o realce não se repete (dobraria o efeito).
+   */
+  async _cropAndZoom(base64Image, norm, applyContrast = false) {
+    return new Promise((resolve) => {
+      const img = new Image();
+      img.onload = () => {
+        try {
+          const sx = Math.round((norm.xmin / 1000) * img.width);
+          const sy = Math.round((norm.ymin / 1000) * img.height);
+          const sw = Math.max(1, Math.round(((norm.xmax - norm.xmin) / 1000) * img.width));
+          const sh = Math.max(1, Math.round(((norm.ymax - norm.ymin) / 1000) * img.height));
+
+          const TARGET = 2400;
+          const scale = Math.max(1, Math.min(3, TARGET / Math.max(sw, sh)));
+          const canvas = document.createElement('canvas');
+          canvas.width  = Math.round(sw * scale);
+          canvas.height = Math.round(sh * scale);
+          const ctx = canvas.getContext('2d');
+          ctx.imageSmoothingEnabled = true;
+          ctx.imageSmoothingQuality = 'high';
+          ctx.drawImage(img, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
+          if (applyContrast) this._applyContrastInPlace(ctx, canvas.width, canvas.height);
+          resolve({
+            data: canvas.toDataURL('image/jpeg', 0.95).split(',')[1],
+            // Métricas do recorte — sem elas não dá para distinguir "caixa no
+            // lugar errado" de "caixa certa, resolução insuficiente" quando a
+            // releitura ampliada volta ilegível (log 2026-08-03 20:14).
+            src: `${img.width}x${img.height}`,
+            crop: `${sw}x${sh}@${sx},${sy}`,
+            out: `${canvas.width}x${canvas.height}`,
+            scale: scale.toFixed(2)
+          });
+        } catch (e) {
+          resolve(null);
+        }
+      };
+      img.onerror = () => resolve(null);
+      img.src = base64Image.startsWith('data:')
+        ? base64Image
+        : `data:image/jpeg;base64,${base64Image}`;
+    });
+  }
+
+  /**
+   * Monta os imageParts recortados. Retorna null quando não há caixa utilizável
+   * — o caller então cai de volta no ticket inteiro (comportamento pré-v5.4.0).
+   */
+  async _buildFocusedParts(images, box, fromNative = false) {
+    const norm = this._normalizeBox(box);
+    if (!norm) {
+      this.logger.warn('[OCR] _refDataBox ausente/inválido — releituras usarão o ticket inteiro');
+      return null;
+    }
+    try {
+      const crops = (await Promise.all(images.map(b64 => this._cropAndZoom(b64, norm, fromNative))))
+        .filter(c => c && c.data);
+      if (crops.length === 0) {
+        this.logger.warn('[OCR] Recorte da REF.DATA falhou — releituras usarão o ticket inteiro');
+        return null;
+      }
+      const m = crops[0];
+      this.logger.info(
+        `[OCR] REF.DATA recortada e ampliada em ${crops.length} imagem(ns) — ` +
+        `fonte=${fromNative ? 'FOTO NATIVA' : 'imagem do payload'} ` +
+        `caixa=[${box}] origem=${m.src} recorte=${m.crop} saída=${m.out} (${m.scale}×)`
+      );
+      return crops.map(c => ({ inlineData: { mimeType: 'image/jpeg', data: c.data } }));
+    } catch (err) {
+      this.logger.warn('[OCR] Erro ao recortar REF.DATA:', err.message);
+      return null;
+    }
+  }
+
   // --------------------------------------------------------------------------
   // Extração principal
   // --------------------------------------------------------------------------
-  async extractExams(imagesBase64, onProgress, _isRetry = false) {
+  //
+  // fullResImages: as fotos NATIVAS da mesma captura, na resolução em que
+  // saíram da câmera. Não vão para o payload da API (3 fotos full-res estouram
+  // o limite de inline data) — servem só de fonte para o recorte da REF.DATA,
+  // que é uma região pequena e portanto cabe. Sem elas o recorte saía da imagem
+  // já reduzida a 3840 e já reencodada duas vezes, e o "zoom" era interpolação
+  // de pixel perdido. Opcional: ausente, o recorte volta ao comportamento antigo.
+  async extractExams(imagesBase64, onProgress, _isRetry = false, fullResImages = null) {
     const images = Array.isArray(imagesBase64) ? imagesBase64 : [imagesBase64];
-    this.logger.info(`[OCR] Analisando ${images.length} imagem(ns)`);
+    const nativeImages = Array.isArray(fullResImages) && fullResImages.length === images.length
+      ? fullResImages
+      : null;
+    // O auto-retry de swap S↔C reentra aqui: só a captura de topo zera o
+    // contador, para que o caminho mais caro do sistema (pipeline inteiro duas
+    // vezes) apareça inteiro no log em vez de pela metade.
+    if (!_isRetry) this._chamadas = 0;
+    this.logger.info(
+      `[OCR] Analisando ${images.length} imagem(ns)` +
+      (nativeImages ? ' (com fotos nativas para o recorte)' : '')
+    );
 
     if (onProgress) onProgress('reading');
+
+    // Cronometragem por fase. Os logs só carimbam o INÍCIO de cada etapa, então
+    // o custo do pré-processamento (loop por pixel em 3 imagens de 8 MP) ficava
+    // embutido no tempo da 1ª chamada e não dava para saber quanto era de rede
+    // e quanto era de canvas.
+    const _t0 = Date.now();
+    const _ms = () => Date.now() - _t0;
 
     this.logger.info('[OCR] Pré-processando imagens...');
     const processedImages = await Promise.all(
       images.map(img => this._preprocessImage(img))
     );
+    this.logger.info(`[OCR] ⏱ pré-processamento: ${_ms()}ms`);
 
-    let imageParts = processedImages.map(b64 => ({
-      inlineData: { mimeType: 'image/jpeg', data: b64 }
-    }));
     const prompt = this._getExamPrompt();
+    const endireitado = await this._straightenTicket(
+      prompt, processedImages, nativeImages, PRE_ROTACAO_MOLDURA, apiService
+    );
+    if (endireitado.erro) return this._captureFailed(endireitado.erro);
 
-    // 1ª chamada
-    let raw;
-    try {
-      const { text } = await apiService.callGeminiAPI(
-        [{ text: prompt }, ...imageParts],
-        EXAM_CONFIG
-      );
-      raw = _parseGeminiJSON(text, 'exames');
-    } catch (err) {
-      this.logger.error('[OCR] Falha na chamada à API:', err);
-      return this._captureFailed('Erro na comunicação com a IA. Tente novamente.');
-    }
-
-    // Ticket invertido 180° → rotacionar e reenviar (uma vez só)
-    if (raw && raw._ticketInvertido === true) {
-      this.logger.warn('[OCR] Ticket invertido 180° detectado — rotacionando');
-      const rotated = await Promise.all(
-        processedImages.map(b64 => this._rotateImage180(b64))
-      );
-      imageParts = rotated.map(b64 => ({
-        inlineData: { mimeType: 'image/jpeg', data: b64 }
-      }));
-      try {
-        const { text } = await apiService.callGeminiAPI(
-          [{ text: prompt }, ...imageParts],
-          EXAM_CONFIG
-        );
-        raw = _parseGeminiJSON(text, 'exames');
-        if (raw) raw._ticketFoiRotacionado = true;
-      } catch (err) {
-        this.logger.error('[OCR] Falha após rotação:', err);
-        return this._captureFailed('Erro ao re-ler o ticket rotacionado.');
-      }
-    }
+    // cropSources acompanha imageParts (a rotação troca as duas juntas), para
+    // que o recorte da REF.DATA use o MESMO enquadramento que o modelo viu. A
+    // caixa vem em coordenadas normalizadas 0-1000, então serve igualmente à
+    // foto nativa e à imagem reduzida — desde que a orientação seja a mesma.
+    // `const` porque a orientação está RESOLVIDA aqui: antes da v5.5.0 estas
+    // quatro variáveis eram reatribuídas pelo laço de rotação no meio da função,
+    // e o leitor tinha de rastrear 500 linhas para saber qual imagem valia.
+    const raw = endireitado.raw;
+    const imageParts = endireitado.imageParts;
+    const cropSources = endireitado.cropSources;
+    const cropFromNative = !!nativeImages;
 
     this.logger.info('[OCR] Resposta bruta do modelo:\n' + JSON.stringify(raw, null, 2));
 
     // Pós-processamento determinístico
     const processed = this._postProcessRefraction(raw);
+
+    // Recorte ampliado da REF.DATA — memoizado como PROMESSA (não como valor),
+    // para que a leitura de sinal possa ser DISPARADA cedo e correr em paralelo
+    // com a verificação, em vez de esperar a verificação terminar.
+    let _focusedPromise;
+    const getFocusedParts = () => {
+      if (!_focusedPromise) {
+        _focusedPromise = this._buildFocusedParts(cropSources, raw?._refDataBox, cropFromNative)
+          .then(parts => parts || imageParts)
+          .catch(() => imageParts);
+      }
+      return _focusedPromise;
+    };
+
+    // Leitura ampliada do sinal da esfera — memoizada: roda uma vez por captura
+    // e serve tanto à checagem sempre-ativa quanto ao desempate de flip.
+    //
+    // v5.4.1 — SEGUNDA CHANCE NO TICKET INTEIRO. _refDataBox é um palpite do
+    // modelo, não uma medição: no log 2026-08-03 20:14 a MESMA folha rendeu
+    // [170,170,460,380] numa captura e [170,100,520,450] na seguinte. Uma caixa
+    // inválida já caía para o ticket inteiro (_buildFocusedParts → null), mas uma
+    // caixa VÁLIDA-E-ERRADA não tinha recurso: as duas capturas voltaram com
+    // sinal=null (uma delas com magnitude "0.77" — o EIXO do OE, prova de que o
+    // recorte levou o olhar para outra célula) e as duas refrações foram
+    // bloqueadas. Custo de 1 chamada extra apenas no caminho de falha.
+    //
+    // v5.4.2 — AS DUAS LEITURAS CORREM EM PARALELO. Em série, a "segunda chance"
+    // só começava depois de o recorte falhar: no log 2026-08-05 o recorte voltou
+    // ilegível em 3 de 3 capturas e o ticket inteiro leu certo em 2 de 2, ou seja,
+    // ~5s eram queimados antes de começarem os ~7s que de fato resolvem — e esse
+    // era o caminho NORMAL, não o de exceção. Em paralelo o custo de parede é o do
+    // mais lento em vez da soma, e o recorte mantém a preferência quando serve.
+    // v5.4.3 — AS DUAS LEITURAS FICAM GUARDADAS COMO TESTEMUNHAS. O prompt do
+    // sinal já manda transcrever C e A da MESMA linha MÉDIA ("servem para provar
+    // que você está na linha certa"). Essa prova era jogada fora: só o campo
+    // `sinal` era lido, e disputas de cilindro/eixo eram decididas (ou não) sem
+    // ela. No log 2026-08-05 as três capturas do mesmo ticket foram bloqueadas
+    // com a resposta certa dentro da própria leitura ampliada — ver
+    // _rowWitnesses e o uso em extractExams.
+    const _signsCandidates = [];
+    let _signsPromise;
+    const getSigns = () => {
+      if (!_signsPromise) {
+        _signsPromise = (async () => {
+          const focused = await getFocusedParts();
+          // Sem recorte utilizável, a leitura no ticket inteiro é a única —
+          // disparar duas iguais só desperdiçaria chamada.
+          if (focused === imageParts) {
+            const only = await this._readSphereSigns(imageParts, apiService);
+            if (only) _signsCandidates.push(only);
+            return only;
+          }
+
+          const [cropSigns, fullSigns] = await Promise.all([
+            this._readSphereSigns(focused, apiService).catch(() => null),
+            this._readSphereSigns(imageParts, apiService).catch(() => null)
+          ]);
+          if (cropSigns) _signsCandidates.push(cropSigns);
+          if (fullSigns) _signsCandidates.push(fullSigns);
+
+          // v5.4.6 — VENCE QUEM ESTÁ NA LINHA CERTA, não quem tem um sinal
+          // legível. "Utilizável" só exigia o caractere +/−, e o recorte devolve
+          // um sinal legível da CÉLULA ERRADA com frequência: no log 2026-08-06
+          // 11:44 as duas leituras do recorte devolveram a magnitude do CILINDRO
+          // nos dois olhos, e o ticket inteiro — que tinha lido a esfera certa —
+          // foi descartado. Resultado: dois avisos de "sinal não confirmado"
+          // numa captura correta, com a confirmação parada em _signsCandidates.
+          // Aviso espúrio em captura boa é como o médico aprende a ignorar aviso.
+          const ref = processed.refracao;
+          if (this._signsUsable(cropSigns, ref)) return cropSigns;
+          if (this._signsUsable(fullSigns, ref)) {
+            this.logger.warn('[OCR] Leitura ampliada do recorte não caiu na linha da esfera — usando a leitura paralela do ticket inteiro.');
+            return fullSigns;
+          }
+          // Nenhuma das duas na linha certa: mantém a preferência antiga (sinal
+          // legível), para não trocar um voto ruim por nenhum voto.
+          if (this._signsUsable(cropSigns)) return cropSigns;
+          if (this._signsUsable(fullSigns)) {
+            this.logger.warn('[OCR] Sinal ilegível no recorte — usando a leitura paralela do ticket inteiro.');
+            return fullSigns;
+          }
+          return cropSigns || fullSigns;
+        })();
+      }
+      return _signsPromise;
+    };
+
+    // Dispara a leitura de sinal AGORA. Ela depende só de raw._refDataBox e das
+    // imagens — nada do resultado da verificação — mas era iniciada depois dela,
+    // somando ~12s de verificação com ~7s de sinal quando os dois podiam correr
+    // juntos. Condicionado à refração ter sobrevivido ao pós-processamento: uma
+    // captura já bloqueada não deve gastar chamadas que ninguém vai ler.
+    // O .catch() aqui só evita "unhandled rejection" do disparo solto — quem
+    // consome getSigns() continua recebendo a rejeição e tratando no try de lá.
+    const refracaoViva = !processed._captureFailed && processed.refracao &&
+      (processed.refracao.od || processed.refracao.oe);
+    if (refracaoViva) getSigns().catch(() => {});
 
     // ── DEFESA: 2ª chamada independente para verificar refração ────────────
     // Se a 1ª call produziu refração válida, fazer uma 2ª call com prompt
@@ -246,119 +913,262 @@ class GeminiExamAgent {
     //
     // Custo: 1 call extra (~5-10s). Valor: bloqueia o caso de hoje (OE com
     // S e C trocados, onde a 1ª call mostrou consistência interna falsa).
-    if (!processed._captureFailed && processed.refracao &&
-        (processed.refracao.od || processed.refracao.oe)) {
+    if (refracaoViva) {
+      // A 2ª chamada tem try PRÓPRIO e estreito: falhar aqui (rede, JSON
+      // malformado) não pode arrastar consigo a política de sinal, que é
+      // independente dela. Antes da v5.4.0 tudo vivia num try só — um erro de
+      // rede na verificação pulava silenciosamente TODA a conferência e a
+      // refração era injetada sem que nenhuma leitura confirmasse o sinal.
+      let mismatchByEye = { od: null, oe: null };
+      let verifyData = null;
+      let verifyOk = false;
+      const _tV = Date.now();
       try {
         this.logger.info('[OCR] Verificação independente (2ª chamada)...');
         const verifyPrompt = this._getRefractionVerifyPrompt();
-        const { text: verifyText } = await apiService.callGeminiAPI(
-          [{ text: verifyPrompt }, ...imageParts],
-          EXAM_CONFIG
+        const { text: verifyText } = await this._callApi(
+          apiService, [{ text: verifyPrompt }, ...imageParts], EXAM_CONFIG, 'verificação de refração'
         );
         const verify = _parseGeminiJSON(verifyText, 'verify');
         this.logger.info('[OCR] Verificação retornou:\n' + JSON.stringify(verify, null, 2));
-
-        let mismatch = this._compareRefractionAgainstVerify(processed.refracao, verify);
-
-        // ── Sinal de esfera discordante → NUNCA auto-liberar (fail-safe) ──
-        // Flip puro de sinal (+5.25 ↔ -5.25) é o erro de OCR de MAIOR
-        // consequência clínica: inverte miopia↔hipermetropia, o CID (H52.1 vs
-        // H52.0) e o sinal da lente. As três leituras compartilham o mesmo modo
-        // de falha físico — em impressão térmica o traço vertical do "+" sai
-        // fraco e é lido como "−" — então um voto 2-de-3 é ERRO CORRELACIONADO,
-        // não confirmação independente. Por isso o desempate 2-de-3 (usado para
-        // eixo/cilindro) não é confiável aqui: um "confirmou a 1ª" pode ser a
-        // mesma alucinação vista 2×. Política: qualquer discordância de sinal
-        // força recaptura, como o eixo já faz — "não consigo confirmar o sinal"
-        // ⇒ "não injeta". A 3ª chamada roda apenas para enriquecer a mensagem
-        // ao médico (nunca para liberar). Caso real: 2026-07-24, OD lido +5.25
-        // por 2-de-3 num paciente cuja captura pós-dilatação leu esfera
-        // negativa — o sistema não tinha como decidir e não deveria ter injetado.
-        if (mismatch && mismatch.severity === 'hard' && mismatch.signFlip) {
-          const veredito = await this._tiebreakSphereSign(mismatch, imageParts, apiService);
-          mismatch.message = veredito === 'segunda'
-            ? `${mismatch.eye.toUpperCase()}: sinal da esfera da 1ª leitura provavelmente invertido — 3ª leitura concordou com a 2ª ("${mismatch.vEsfStr}"). Refaça a captura.`
-            : veredito === 'primeira'
-            ? `${mismatch.eye.toUpperCase()}: sinal da esfera discordante (1ª="${mismatch.pEsfStr}" vs 2ª="${mismatch.vEsfStr}"); a 3ª leitura concordou com a 1ª, mas flip de sinal nunca é liberado por voto (erro térmico do "+" é correlacionado entre leituras). Refaça a captura para confirmar.`
-            : `${mismatch.eye.toUpperCase()}: sinal da esfera discordante entre leituras (1ª="${mismatch.pEsfStr}" vs 2ª="${mismatch.vEsfStr}") e a 3ª leitura não desempatou. Refaça a captura.`;
-          // mismatch permanece 'hard' e não-nulo → _captureFailed bloqueia a injeção.
-        }
-
-        // ── Desempate de Cilindro (3ª chamada focada) ──────────────
-        // Ocorre quando há confusão/pulo de linha entre Média e Medições.
-        // A 3ª chamada foca apenas na coluna central (C) da linha MÉDIA.
-        if (mismatch && mismatch.isCylinderMismatch && mismatch.pCil !== null && mismatch.vCil !== null) {
-          const eyeData = processed.refracao[mismatch.eye];
-          const mathConsistent = this._isEyeMathConsistent(eyeData);
-          if (mathConsistent || mismatch.severity === 'hard') {
-            const vereditoCil = await this._tiebreakCylinder(mismatch, imageParts, apiService);
-            if (vereditoCil === 'primeira') {
-              processed._avisos = processed._avisos || [];
-              processed._avisos.push(`${mismatch.eye.toUpperCase()}: 2ª chamada leu cilindro diferente (1ª="${mismatch.pCil}" vs 2ª="${mismatch.vCil}"); desempate por 3ª leitura confirmou a 1ª. Confira manualmente.`);
-              mismatch = null;
-            } else if (vereditoCil === 'segunda') {
-              mismatch.message = `${mismatch.eye.toUpperCase()}: erro na 1ª leitura do cilindro — desempate (3ª leitura) concordou com a 2ª ("${mismatch.vCil}"). Refaça a captura.`;
-            }
-            // veredito nulo → mantém o bloqueio original
-          }
-        }
-
-        // ── Desempate de Eixo (3ª chamada focada) ──────────────
-        // Eixo discordante é 'soft', mas a math-consistency (S+C/2≈SE) NÃO
-        // envolve o eixo — então soft+math-ok jamais bloqueava e o eixo ia
-        // NÃO-CONFERIDO ao prontuário (3 de 4 capturas, log 2026-07-21). Uma
-        // 3ª leitura focada só na 3ª coluna (A) da MÉDIA desempata 2-de-3, como
-        // já se faz para sinal e cilindro. Diferença crucial: quando o desempate
-        // confirma a 2ª OU é inconclusivo, FORÇA bloqueio (severity='hard') — ao
-        // contrário de S/C, o eixo não tem corroboração matemática que o resgate,
-        // então "não pude confirmar" ⇒ "não injeta".
-        if (mismatch && mismatch.isAxisMismatch && mismatch.pEixo != null && mismatch.vEixo != null) {
-          const vereditoEixo = await this._tiebreakAxis(mismatch, imageParts, apiService);
-          if (vereditoEixo === 'primeira') {
-            processed._avisos = processed._avisos || [];
-            processed._avisos.push(`${mismatch.eye.toUpperCase()}: 2ª chamada leu eixo diferente (1ª=${mismatch.pEixo}° vs 2ª=${mismatch.vEixo}°); desempate por 3ª leitura confirmou a 1ª. Confira manualmente.`);
-            mismatch = null;
-          } else {
-            mismatch.severity = 'hard';
-            mismatch.message = vereditoEixo === 'segunda'
-              ? `${mismatch.eye.toUpperCase()}: eixo da 1ª leitura provavelmente errado — desempate (3ª leitura) concordou com a 2ª (${mismatch.vEixo}°). Refaça a captura.`
-              : `${mismatch.eye.toUpperCase()}: eixo discordante entre leituras (1ª=${mismatch.pEixo}° vs 2ª=${mismatch.vEixo}°) e 3ª leitura não desempatou. Refaça a captura.`;
-          }
-        }
-
-        if (mismatch) {
-          // Política: se a discordância é 'soft' (numérica) E o olho da 1ª
-          // leitura é matematicamente autoconsistente (S+C/2 ≈ S.E. com diff
-          // ≤ 0.15D), trate como aviso — confia-se na 1ª leitura porque
-          // alucinar 3 valores simultaneamente coerentes com a matemática é
-          // raríssimo. Discordâncias 'hard' (null vs valor, olho ausente)
-          // bloqueiam sempre.
-          const eyeData = processed.refracao[mismatch.eye];
-          const mathConsistent = this._isEyeMathConsistent(eyeData);
-          const shouldBlock = mismatch.severity === 'hard' || !mathConsistent;
-
-          processed._avisos = processed._avisos || [];
-          if (shouldBlock) {
-            processed._captureFailed = true;
-            processed._blockAutoInject = true;
-            processed._reason = mismatch.message;
-            processed._validationWarnings = [mismatch.message];
-            processed._avisos.push(mismatch.message);
-          } else {
-            const aviso = `${mismatch.message} (1ª leitura matematicamente consistente — não bloqueado, confira manualmente)`;
-            processed._avisos.push(aviso);
-          }
-        } else {
-          processed._avisos = processed._avisos || [];
-          processed._avisos.push('Verificação independente concorda com a 1ª leitura.');
-        }
+        this.logger.info(`[OCR] ⏱ verificação: ${Date.now() - _tV}ms`);
+        verifyData = verify;
+        mismatchByEye = this._compareEyesAgainstVerify(processed.refracao, verify);
+        verifyOk = true;
       } catch (err) {
         this.logger.warn('[OCR] Verificação 2ª chamada falhou:', err.message);
-        // Não bloqueia — registra aviso e segue. Falhar a verificação é diferente
-        // de detectar discordância: pode ser erro de rede.
         processed._avisos = processed._avisos || [];
         processed._avisos.push('Verificação independente da refração não pôde ser realizada — confira manualmente.');
       }
+
+      try {
+        // ── Política de sinal da esfera (v5.4.0) ────────────────────────────
+        // Roda SEMPRE: com ou sem disputa, com ou sem a 2ª chamada.
+        // Ver _applySignPolicy.
+        // Se o paralelismo pegou, esta espera é ~0ms: a leitura de sinal já
+        // rodou junto com a verificação acima. Um valor alto aqui significa que
+        // a leitura de sinal está mais lenta que a verificação — nesse caso ela
+        // virou o gargalo e é ela que precisa encolher.
+        const _tS = Date.now();
+        // Uma disputa RESOLVIDA (desempate, testemunha, correção) não é o mesmo
+        // que uma captura em que ninguém discordou: "Leituras independentes
+        // concordam com a 1ª" ao lado de "eixo corrigido de 75° para 50°" desmente
+        // o aviso que pede conferência. Só o caminho sem disputa nenhuma o merece.
+        let resolvidoPorConferencia = false;
+        const _signs = await getSigns();
+        this.logger.info(`[OCR] ⏱ espera pelo sinal: ${Date.now() - _tS}ms`);
+        const _preSinal = { od: mismatchByEye.od, oe: mismatchByEye.oe };
+        mismatchByEye = await this._applySignPolicy(processed, mismatchByEye, _signs, _signsCandidates);
+
+        // Conferência POR OLHO (v5.4.4): cada olho é julgado e, se for o caso,
+        // bloqueado sozinho. Antes o comparador parava no primeiro mismatch e o
+        // bloqueio zerava os dois olhos — o olho conferido ia junto.
+        //
+        // v5.4.5 — E POR DIMENSÃO. O comparador devolve UMA divergência por vez;
+        // quando o caller descartava essa (desempate, testemunha, piso do CID),
+        // as dimensões seguintes do mesmo olho nunca eram conferidas. Log
+        // 2026-08-05 19:40: a esfera do OD foi liberada pelo piso do CID e o
+        // cilindro (1ª=-0.50 vs 2ª=-1.50) entrou no prontuário sem conferência.
+        // Cada descarte agora custa uma releitura do comparador com a dimensão
+        // resolvida marcada — até acabarem as dimensões ou algo bloquear.
+        let houveDisputa = false;
+        for (const lado of ['od', 'oe']) {
+          const dimsResolvidas = [];
+          let mismatch = mismatchByEye[lado];
+          // A política de sinal descartou a disputa de esfera deste olho? Então
+          // a esfera está julgada, mas as outras dimensões continuam pendentes.
+          if (!mismatch && _preSinal[lado]) {
+            houveDisputa = true;
+            dimsResolvidas.push(_preSinal[lado].dim || 'esfera');
+            mismatch = this._compareEye(lado, processed.refracao?.[lado], verifyData?.[lado], dimsResolvidas);
+          }
+          let _guard = 0;
+          let bloqueou = false;
+          while (mismatch && _guard++ < 4) {
+          houveDisputa = true;
+          const _dimAtual = mismatch.dim || 'esfera';
+
+          // ── Desempate de Cilindro (3ª chamada focada) ──────────────
+          // Ocorre quando há confusão/pulo de linha entre Média e Medições.
+          // A 3ª chamada foca apenas na coluna central (C) da linha MÉDIA.
+          if (mismatch && mismatch.isCylinderMismatch && mismatch.pCil !== null && mismatch.vCil !== null) {
+            const eyeData = processed.refracao[mismatch.eye];
+            const mathConsistent = this._isEyeMathConsistent(eyeData);
+            if (mathConsistent || mismatch.severity === 'hard') {
+              let vereditoCil = await this._tiebreakCylinder(mismatch, await getFocusedParts(), apiService);
+              // A chamada dedicada volta ilegível com frequência (2 de 2 nesta
+              // sessão) — e as leituras ampliadas do sinal já transcreveram o C da
+              // linha MÉDIA. Mesmo desempate de graça, com a mesma exigência do
+              // eixo: só vale se as testemunhas de linha validada forem UNÂNIMES.
+              if (!vereditoCil) vereditoCil = this._cylinderWitnessVerdict(mismatch, eyeData, _signsCandidates);
+              if (vereditoCil === 'primeira') {
+                processed._avisos = processed._avisos || [];
+                processed._avisos.push(`${mismatch.eye.toUpperCase()}: 2ª chamada leu cilindro diferente (1ª="${mismatch.pCil}" vs 2ª="${mismatch.vCil}"); desempate por 3ª leitura confirmou a 1ª. Confira manualmente.`);
+                resolvidoPorConferencia = true;
+                mismatch = null;
+              } else if (vereditoCil === 'segunda') {
+                mismatch.message = `${mismatch.eye.toUpperCase()}: erro na 1ª leitura do cilindro — desempate (3ª leitura) concordou com a 2ª ("${mismatch.vCil}"). Refaça a captura.`;
+              }
+              // veredito nulo → mantém o bloqueio original
+            }
+          }
+
+          // ── Cilindro que só a 2ª leitura não viu ───────────────────────────
+          // 'hard' incondicional: uma verificação que devolve C=null derrubava a
+          // 1ª mesmo com o cilindro impresso no ticket. É o modo de falha inverso
+          // do já tratado logo abaixo (pCil null, vCil presente), e não tinha
+          // recurso nenhum — nem o desempate de cilindro roda, porque ele exige
+          // os DOIS valores. Log 2026-08-05 13:38: 1ª leu OD C=-1.25 x50 nas três
+          // medições E na média, a leitura ampliada leu C=-1.25 x50 na mesma
+          // linha, a 2ª não achou cilindro — captura bloqueada.
+          // Testemunha da linha validada confirmando o C da 1ª ⇒ 2 contra 1.
+          //
+          // (A limitação de "só o primeiro olho era comparado" caiu na v5.4.4 —
+          // o comparador agora devolve um veredito por olho e este laço passa
+          // pelos dois.)
+          if (mismatch && mismatch.isCylinderMissingInVerify) {
+            const eyeData = processed.refracao[mismatch.eye];
+            const conf = this._rowWitnesses(mismatch.eye, eyeData, _signsCandidates)
+              .find(w => w.cil !== null && Math.abs(w.cil - mismatch.pCil) <= OCR_TOL.CIL_SOFT);
+            if (conf) {
+              const aviso = `${mismatch.eye.toUpperCase()}: 2ª chamada não encontrou cilindro, mas a leitura ampliada leu C=${conf.cil} na mesma linha e confirmou a 1ª (C=${mismatch.pCil}). Liberado — confira manualmente.`;
+              this.logger.info('[OCR] ' + aviso);
+              processed._avisos = processed._avisos || [];
+              processed._avisos.push(aviso);
+              resolvidoPorConferencia = true;
+              mismatch = null;
+            }
+          }
+
+          // ── Desempate de Eixo (3ª chamada focada) ──────────────
+          // Eixo discordante é 'soft', mas a math-consistency (S+C/2≈SE) NÃO
+          // envolve o eixo — então soft+math-ok jamais bloqueava e o eixo ia
+          // NÃO-CONFERIDO ao prontuário (3 de 4 capturas, log 2026-07-21). Uma
+          // 3ª leitura focada só na 3ª coluna (A) da MÉDIA desempata 2-de-3, como
+          // já se faz para sinal e cilindro. Diferença crucial: quando o desempate
+          // confirma a 2ª OU é inconclusivo, FORÇA bloqueio (severity='hard') — ao
+          // contrário de S/C, o eixo não tem corroboração matemática que o resgate,
+          // então "não pude confirmar" ⇒ "não injeta".
+          if (mismatch && mismatch.isAxisMismatch && mismatch.pEixo != null && mismatch.vEixo != null) {
+            const circ = (a, b) => { const d = Math.abs(a - b); return Math.min(d, 180 - d); };
+            const eyeData = processed.refracao[mismatch.eye];
+            let vereditoEixo = await this._tiebreakAxis(mismatch, await getFocusedParts(), apiService);
+
+            // A chamada dedicada volta ilegível com frequência (3 de 3 no log
+            // 2026-08-05). As leituras ampliadas do sinal já transcreveram A da
+            // linha MÉDIA na mesma captura — quando a linha delas foi validada,
+            // elas são o mesmo voto, de graça.
+            if (!vereditoEixo) {
+              for (const w of this._rowWitnesses(mismatch.eye, eyeData, _signsCandidates)) {
+                if (w.eixo === null) continue;
+                if (circ(w.eixo, mismatch.pEixo) <= OCR_TOL.EIXO_GRAUS) { vereditoEixo = 'primeira'; break; }
+                if (circ(w.eixo, mismatch.vEixo) <= OCR_TOL.EIXO_GRAUS) { vereditoEixo = 'segunda'; break; }
+              }
+              if (vereditoEixo) this.logger.info(`[OCR] Eixo desempatado pela leitura ampliada — confirmou a ${vereditoEixo === 'primeira' ? '1ª' : '2ª'}.`);
+            }
+
+            // A MÉDIA da 1ª leitura é corroborada pelas MEDIÇÕES do próprio olho?
+            // O TOPCON imprime a média das 3 medições: uma "média" que discorda de
+            // 2 delas foi lida errado. Log 2026-08-05 13:33: OD medições 80/50/49
+            // com "média" 75 — enquanto a 2ª leitura e a leitura ampliada liam 50.
+            const medicoes = Array.isArray(eyeData?._eixoMedicoes) ? eyeData._eixoMedicoes : [];
+            const apoiam = alvo => medicoes.filter(a => circ(a, alvo) <= OCR_TOL.EIXO_GRAUS).length;
+            // vEixo vem de um parseInt cru da 2ª leitura — a faixa 1-180 que
+            // _processEye impõe à 1ª precisa valer também para o valor adotado.
+            const vEixoValido = mismatch.vEixo >= 1 && mismatch.vEixo <= 180;
+            const mediaContradita = vEixoValido && medicoes.length >= 2 &&
+              apoiam(mismatch.pEixo) < 2 && apoiam(mismatch.vEixo) >= 2;
+
+            processed._avisos = processed._avisos || [];
+            if (vereditoEixo === 'primeira') {
+              processed._avisos.push(`${mismatch.eye.toUpperCase()}: 2ª chamada leu eixo diferente (1ª=${mismatch.pEixo}° vs 2ª=${mismatch.vEixo}°); desempate por 3ª leitura confirmou a 1ª. Confira manualmente.`);
+              resolvidoPorConferencia = true;
+              mismatch = null;
+            } else if (vereditoEixo === 'segunda' && mediaContradita) {
+              // Duas leituras independentes E as medições do próprio olho apontam
+              // o mesmo eixo contra uma única fonte (a média da 1ª). Bloquear aqui
+              // custa uma recaptura que tende a repetir o mesmo erro; corrigir tem
+              // três testemunhas. O aviso registra a troca — não é injeção silenciosa.
+              const aviso = `${mismatch.eye.toUpperCase()}: eixo corrigido de ${mismatch.pEixo}° para ${mismatch.vEixo}° — a 2ª leitura, a 3ª leitura e ${apoiam(mismatch.vEixo)} das ${medicoes.length} medições do ticket leem ${mismatch.vEixo}°. Confira manualmente.`;
+              this.logger.warn('[OCR] ' + aviso);
+              eyeData.eixo = mismatch.vEixo;
+              processed._avisos.push(aviso);
+              resolvidoPorConferencia = true;
+              mismatch = null;
+            } else {
+              mismatch.severity = 'hard';
+              mismatch.message = vereditoEixo === 'segunda'
+                ? `${mismatch.eye.toUpperCase()}: eixo da 1ª leitura provavelmente errado — desempate (3ª leitura) concordou com a 2ª (${mismatch.vEixo}°). Refaça a captura.`
+                : `${mismatch.eye.toUpperCase()}: eixo discordante entre leituras (1ª=${mismatch.pEixo}° vs 2ª=${mismatch.vEixo}°) e 3ª leitura não desempatou. Refaça a captura.`;
+            }
+          }
+
+          if (mismatch) {
+            // Política: se a discordância é 'soft' (numérica) E o olho da 1ª
+            // leitura é matematicamente autoconsistente (S+C/2 ≈ S.E. com diff
+            // ≤ 0.15D), trate como aviso — confia-se na 1ª leitura porque
+            // alucinar 3 valores simultaneamente coerentes com a matemática é
+            // raríssimo. Discordâncias 'hard' (null vs valor, olho ausente)
+            // bloqueiam sempre.
+            const eyeData = processed.refracao[mismatch.eye];
+            const mathConsistent = this._isEyeMathConsistent(eyeData);
+            const shouldBlock = mismatch.severity === 'hard' || !mathConsistent;
+
+            processed._avisos = processed._avisos || [];
+            if (shouldBlock) {
+              // v5.4.0: bloqueia a REFRAÇÃO, não a captura. Tonometria e
+              // paquimetria são outras seções do ticket e não têm relação com a
+              // divergência de S/C/A (log 17:46: tono 15/17 e paqui 517/515 sem
+              // conflito nenhum foram descartadas por causa do cilindro do OE).
+              // v5.4.4: e bloqueia o OLHO, não os dois.
+              this._failEye(processed, lado, mismatch.message);
+              processed._avisos.push(mismatch.message);
+              mismatchByEye[lado] = mismatch;
+              bloqueou = true;
+              break; // olho fora — as demais dimensões não têm mais o que salvar
+            }
+            const aviso = `${mismatch.message} (1ª leitura matematicamente consistente — não bloqueado, confira manualmente)`;
+            processed._avisos.push(aviso);
+          }
+          // Divergência resolvida (descartada ou rebaixada a aviso): as demais
+          // dimensões deste olho ainda não foram conferidas — v5.4.5.
+          dimsResolvidas.push(_dimAtual);
+          mismatch = this._compareEye(lado, processed.refracao?.[lado], verifyData?.[lado], dimsResolvidas);
+          }
+          // Guarda estourada com disputa viva: FALHA FECHADA. Sair daqui com
+          // `mismatch` truthy e nada bloqueado injetaria um olho não conferido —
+          // exatamente a classe de erro que este laço veio corrigir.
+          if (!bloqueou && mismatch) {
+            const motivo = `${lado.toUpperCase()}: a conferência não terminou (dimensões demais em disputa). Refaça a captura.`;
+            this.logger.warn('[OCR] ' + motivo);
+            this._failEye(processed, lado, motivo);
+            processed._avisos.push(motivo);
+            bloqueou = true;
+            mismatchByEye[lado] = mismatch;
+          }
+          if (!bloqueou) mismatchByEye[lado] = null;
+        }
+
+        if (!houveDisputa && verifyOk && !resolvidoPorConferencia) {
+          // Só afirma concordância se a 2ª chamada realmente respondeu — senão o
+          // aviso de "não pôde ser concluída" (já empilhado) é o que vale.
+          processed._avisos = processed._avisos || [];
+          processed._avisos.push('Leituras independentes concordam com a 1ª.');
+        }
+      } catch (err) {
+        this.logger.warn('[OCR] Conferência da refração falhou:', err.message);
+        // Não bloqueia — registra aviso e segue. Falhar a conferência é diferente
+        // de detectar discordância: pode ser erro de rede.
+        processed._avisos = processed._avisos || [];
+        processed._avisos.push('Conferência da refração não pôde ser concluída — confira manualmente.');
+      }
+
+      // Reconcilia o que ficou bloqueado nesta etapa: zera só a refração se
+      // tono/paqui sobreviveram, ou marca a captura inteira se não sobrou nada.
+      this._resolveBlocking(processed);
+      processed.cid_refracao = (!processed._captureFailed && processed.refracao)
+        ? this._inferCidRefracao(processed.refracao)
+        : [];
     }
 
     // ── AUTO-RETRY: swap S↔C na 1ª leitura ──────────────────────────────
@@ -368,15 +1178,17 @@ class GeminiExamAgent {
     // de duas leituras independentes sem baixar a barra de segurança.
     // _isRetry previne recursão infinita se a 2ª tentativa também falhar.
     if (!_isRetry) {
-      const _todosDescartados = processed.refracao &&
-          !processed.refracao.od && !processed.refracao.oe;
+      // Lê a marca gravada em _postProcessRefraction, não `processed.refracao`:
+      // desde a v5.4.0 um bloqueio de refração zera esse objeto, o que apagaria
+      // o gatilho da releitura automática.
+      const _todosDescartados = processed._todosOlhosDescartados === true;
       const _rawTemCilSemEsfera = ['od', 'oe'].some(l => {
         const e = raw?.refracao?.[l];
         return e && e.media?.s == null && e.media?.c != null;
       });
       if (_todosDescartados && _rawTemCilSemEsfera) {
         this.logger.warn('[OCR] Swap S↔C detectado (s=null, c presente) — repetindo pipeline automaticamente...');
-        const retry = await this.extractExams(imagesBase64, null, true);
+        const retry = await this.extractExams(imagesBase64, null, true, fullResImages);
         if (!retry._captureFailed && (retry.refracao?.od || retry.refracao?.oe)) {
           retry._avisos = retry._avisos || [];
           retry._avisos.unshift('Releitura automática (1ª chamada confundiu S↔C). Confira manualmente.');
@@ -386,12 +1198,18 @@ class GeminiExamAgent {
       }
     }
 
+    this.logger.info(
+      `[OCR] ⏱ TOTAL da captura: ${_ms()}ms em ${this._chamadas} chamada(s) à API` +
+      (this._chamadas > OCR_MAX_CHAMADAS ? ` ⚠ acima do orçamento de ${OCR_MAX_CHAMADAS}` : '')
+    );
     this.logger.info('[OCR] Resultado final:\n' + JSON.stringify({
       refracao: processed.refracao,
       tonometria: processed.tonometria,
       paquimetria: processed.paquimetria,
       _avisos: processed._avisos,
       _captureFailed: processed._captureFailed,
+      _refracaoBloqueada: processed._refracaoBloqueada === true,
+      _refracaoReason: processed._refracaoReason || null,
       _reason: processed._reason
     }, null, 2));
 
@@ -461,51 +1279,319 @@ Retorne JSON PURO (sem markdown, sem comentários):
   }
 
   /**
-   * Desempate de sinal de esfera — 3ª chamada hiperfocada.
+   * Leitura AMPLIADA do sinal da esfera dos dois olhos — 3ª chamada.
    *
-   * Disparada pelo caller quando 1ª e 2ª leituras discordam da esfera por
-   * flip puro de sinal. Pergunta APENAS o caractere de sinal e a magnitude
-   * da coluna S da linha MÉDIA. A magnitude serve de guarda: se não bater
-   * com a magnitude em disputa, a 3ª leu outra célula e o desempate é
-   * descartado (retorna null → bloqueio original mantido).
-   *
-   * Retorna 'primeira' | 'segunda' | null.
+   * v5.4.0: roda em TODA captura (não só em disputa) e sobre o recorte
+   * ampliado da REF.DATA. Devolve o JSON cru {od:{sinal,magnitude}, oe:{...}}
+   * ou null se a chamada falhar. A interpretação fica em _sphereSignVerdict.
    */
-  async _tiebreakSphereSign(mismatch, imageParts, apiService) {
+  async _readSphereSigns(imageParts, apiService) {
     try {
-      this.logger.info(`[OCR] Desempate de sinal da esfera (3ª chamada) para ${mismatch.eye.toUpperCase()}...`);
-      const { text } = await apiService.callGeminiAPI(
-        [{ text: this._getSphereSignTiebreakPrompt() }, ...imageParts],
-        EXAM_CONFIG
+      this.logger.info('[OCR] Leitura ampliada do sinal da esfera (3ª chamada)...');
+      const { text } = await this._callApi(
+        apiService, [{ text: this._getSphereSignTiebreakPrompt() }, ...imageParts],
+        FOCUS_CONFIG, 'leitura ampliada do sinal'
       );
-      const tie = _parseGeminiJSON(text, 'tiebreak');
-      const t = tie?.[mismatch.eye];
-      if (!t || (t.sinal !== '+' && t.sinal !== '-')) {
-        this.logger.warn('[OCR] Desempate não retornou sinal legível:', JSON.stringify(tie));
-        return null;
-      }
-      const mag = parseFloat(t.magnitude);
-      if (isNaN(mag) || Math.abs(mag - Math.abs(mismatch.pEsf)) > 0.25) {
-        this.logger.warn(`[OCR] Desempate leu magnitude ${t.magnitude}, incompatível com a disputa (|${mismatch.pEsf}|) — descartado`);
-        return null;
-      }
-      const sinal1 = mismatch.pEsf >= 0 ? '+' : '-';
-      this.logger.info(`[OCR] Desempate retornou "${t.sinal}${t.magnitude}" (1ª leu sinal "${sinal1}")`);
-      return t.sinal === sinal1 ? 'primeira' : 'segunda';
+      const tie = _parseGeminiJSON(text, 'sinal_esfera');
+      this.logger.info('[OCR] Sinal ampliado retornou: ' + JSON.stringify(tie));
+      return (tie && typeof tie === 'object') ? tie : null;
     } catch (err) {
-      this.logger.warn('[OCR] Desempate de sinal falhou:', err.message);
+      this.logger.warn('[OCR] Leitura ampliada do sinal falhou:', err.message);
       return null;
     }
   }
 
-  _getSphereSignTiebreakPrompt() {
-    return `DESEMPATE DE SINAL DE ESFERA — TAREFA ÚNICA E MÍNIMA.
+  /**
+   * A leitura ampliada serviu para alguma coisa? Basta UM olho com sinal legível
+   * — o outro pode estar genuinamente ilegível no papel. Sem nenhum, a chamada
+   * não produziu evidência e vale repetir com outros pixels (ticket inteiro).
+   */
+  /**
+   * A leitura ampliada serve como voto?
+   *
+   * Sem `refracao`: critério histórico — basta um olho com o caractere +/−.
+   * Com `refracao`: exige que esse olho esteja na LINHA CERTA (a magnitude bate
+   * com a esfera da 1ª leitura). Um sinal legível da célula errada não é voto
+   * sobre a esfera — ver _sphereSignVerdict.
+   */
+  _signsUsable(signs, refracao) {
+    if (!signs || typeof signs !== 'object') return false;
+    const temSinal = l => signs[l] && (signs[l].sinal === '+' || signs[l].sinal === '-');
+    if (!refracao) return ['od', 'oe'].some(temSinal);
+    return ['od', 'oe'].some(l =>
+      temSinal(l) && this._sphereSignVerdict(refracao[l], signs[l]) !== 'ilegivel');
+  }
 
-Você vê um ticket TOPCON. Na seção REF.DATA há dois blocos: <R> (olho direito) e <L> (olho esquerdo).
+  /**
+   * Confronta a leitura ampliada do sinal com a esfera da 1ª leitura.
+   * Retorna 'confirma' | 'contradiz' | 'ilegivel' | 'na' (não aplicável).
+   *
+   * A magnitude é guarda de sanidade: se a 3ª leitura reporta um número que não
+   * é o mesmo em disputa, ela olhou outra célula e seu voto não vale.
+   *
+   * v5.4.5 — a tolerância era 0.25D, que é EXATAMENTE um passo dióptrico: o
+   * valor da célula vizinha passava por "a mesma". Log 2026-08-05 19:40 (OE): a
+   * leitura ampliada devolveu magnitude 0.50 (o cilindro -0.50) contra uma
+   * esfera de +0.25 e foi aceita como voto sobre a esfera. Número impresso se lê
+   * certo ou errado — não "por perto". Agora exige o mesmo valor (folga só para
+   * ruído de formatação).
+   */
+  _sphereSignVerdict(eye, sign) {
+    if (!eye || eye.esf == null) return 'na';
+    const esfStr = String(eye.esf).toLowerCase();
+    if (esfStr === 'plano') return 'na';           // esfera 0.00 não tem sinal
+    const esf = parseFloat(esfStr);
+    if (isNaN(esf) || esf === 0) return 'na';
+    if (!sign || (sign.sinal !== '+' && sign.sinal !== '-')) return 'ilegivel';
+    const mag = parseFloat(sign.magnitude);
+    if (isNaN(mag) || Math.abs(mag - Math.abs(esf)) > OCR_TOL.LINHA_VALIDADA) return 'ilegivel';
+    return sign.sinal === (esf >= 0 ? '+' : '-') ? 'confirma' : 'contradiz';
+  }
+
+  /**
+   * Testemunhas de C e A extraídas das leituras ampliadas do sinal (v5.4.3).
+   *
+   * O prompt do sinal pede C e A da MESMA linha MÉDIA justamente como prova de
+   * que o modelo está na linha certa. Aqui essa prova vira voto — mas só depois
+   * de a linha ser VALIDADA: a magnitude da esfera precisa bater com a esfera da
+   * 1ª leitura (±0.25D). Sem isso a leitura olhou outra célula e seus C/A não
+   * valem nada (ver _describeSignMisread).
+   *
+   * Descarta ainda o lixo que a leitura ampliada às vezes devolve com a linha
+   * certa — eixo "0.00"/fora de 1-180 e cilindro zero — porque um autorrefrator
+   * não imprime nenhum dos dois. O voto precisa ser um NÚMERO LIDO, não um
+   * preenchimento de campo.
+   *
+   * Retorna [{ cil, eixo }] — uma entrada por leitura cuja linha foi validada.
+   */
+  _rowWitnesses(lado, eye, candidates) {
+    if (!eye || eye.esf == null || !Array.isArray(candidates)) return [];
+    const esfStr = String(eye.esf).toLowerCase();
+    const esfAbs = esfStr === 'plano' ? 0 : Math.abs(parseFloat(esfStr));
+    if (isNaN(esfAbs)) return [];
+
+    const out = [];
+    for (const cand of candidates) {
+      const s = cand?.[lado];
+      if (!s || typeof s !== 'object') continue;
+      const mag = parseFloat(s.magnitude);
+      if (isNaN(mag) || Math.abs(mag - esfAbs) > OCR_TOL.LINHA_VALIDADA) continue;  // outra linha/célula (v5.4.5: 0.25 era um passo dióptrico inteiro)
+      // Resposta de preenchimento, não leitura: no log 2026-08-05 uma das
+      // chamadas devolveu {magnitude:"0.25", c:"0.25", a:"0.25"} — a mesma
+      // string nas três colunas. Não é voto sobre nada.
+      if (String(s.c) === String(s.magnitude) && String(s.a) === String(s.magnitude)) continue;
+      const cil = this._parseCil(s.c);
+      const eixoNum = this._parseEixo(s.a);
+      const eixo = (eixoNum !== null && eixoNum >= 1 && eixoNum <= 180) ? eixoNum : null;
+      out.push({ cil, eixo });
+    }
+    return out;
+  }
+
+  /**
+   * Diagnóstico (só para o log) de POR QUE a 3ª leitura não valeu como voto.
+   * "sinal ausente" pede pixels melhores; "magnitude = o eixo" prova que o
+   * recorte apontou o olhar para a coluna errada — são consertos diferentes.
+   */
+  /**
+   * Veredito de cilindro pelas testemunhas de linha validada (v5.4.4).
+   *
+   * Exige UNANIMIDADE: se uma testemunha confirma a 1ª e outra confirma a 2ª,
+   * não há veredito — liberar contra uma testemunha de linha validada seria a
+   * mesma assimetria que a v5.4.0 removeu da política de sinal. Caso real
+   * 2026-08-05 18:30 (OD): recorte lê C=-0.50, ticket inteiro lê C=-1.25 →
+   * empate → o bloqueio original permanece.
+   */
+  _cylinderWitnessVerdict(mismatch, eyeData, candidates) {
+    let p = 0, s = 0;
+    for (const w of this._rowWitnesses(mismatch.eye, eyeData, candidates)) {
+      if (w.cil === null) continue;
+      if (Math.abs(w.cil - mismatch.pCil) <= OCR_TOL.CIL_TESTEMUNHA) p++;
+      else if (Math.abs(w.cil - mismatch.vCil) <= OCR_TOL.CIL_TESTEMUNHA) s++;
+    }
+    if (p > 0 && s === 0) {
+      this.logger.info('[OCR] Cilindro desempatado pela leitura ampliada — confirmou a 1ª.');
+      return 'primeira';
+    }
+    if (s > 0 && p === 0) {
+      this.logger.info('[OCR] Cilindro desempatado pela leitura ampliada — confirmou a 2ª.');
+      return 'segunda';
+    }
+    return null;
+  }
+
+  _describeSignMisread(eye, sign) {
+    if (!sign || typeof sign !== 'object') return 'a 3ª leitura não devolveu este olho';
+    if (sign.sinal !== '+' && sign.sinal !== '-') return `sinal ausente/ambíguo (magnitude lida: ${sign.magnitude ?? 'null'})`;
+    const mag = parseFloat(sign.magnitude);
+    if (isNaN(mag)) return 'magnitude não numérica';
+    const esf = parseFloat(String(eye?.esf));
+    const eixo = Number(eye?.eixo);
+    const cil = Number(eye?.cil);
+    if (!isNaN(eixo) && Math.abs(mag * 100 - eixo) < 1) return `magnitude "${sign.magnitude}" é o EIXO (${eixo}) — leu a 3ª coluna`;
+    if (!isNaN(cil) && Math.abs(mag - Math.abs(cil)) <= 0.05) return `magnitude "${sign.magnitude}" é o CILINDRO (${cil}) — leu a 2ª coluna`;
+    return `magnitude "${sign.magnitude}" ≠ esfera da 1ª leitura (${isNaN(esf) ? eye?.esf : esf}) — outra célula`;
+  }
+
+  /**
+   * Política de sinal da esfera (v5.4.0) — substitui o fail-safe da v5.3.6.
+   *
+   * O QUE ESTAVA ERRADO: a v5.3.6 justificava "flip de sinal nunca é liberado
+   * por voto" argumentando que o erro do "+" térmico é CORRELACIONADO entre
+   * leituras — e, ao mesmo tempo, deixava passar sem checagem alguma toda
+   * captura em que as duas chamadas CONCORDAVAM. Ou seja: usava como condição
+   * de liberação exatamente a evidência que declarava não valer. A pilha só
+   * enxergava discordância, então o erro correlacionado era invisível.
+   * Log 2026-08-03: OD "+0.50" (S+C/2 = -0.125 = S.E. impresso -0.13) bloqueado
+   * duas vezes; na 3ª captura as duas chamadas leram "-0.50", ninguém checou, e
+   * H521-Miopia foi para a ficha. Qual das duas é a verdadeira não se decide
+   * pelo log — a assimetria é que era o defeito.
+   *
+   * POLÍTICA NOVA (simétrica, sempre-ativa):
+   *   1. A leitura AMPLIADA contradiz a 1ª em qualquer olho → bloqueia, haja
+   *      disputa ou não. É isto que fecha o buraco do erro correlacionado.
+   *   2. Havendo disputa 1ª vs 2ª (flip puro), libera SOMENTE se a ampliada
+   *      confirmar a 1ª E a 1ª fechar S+C/2 ≈ S.E. impresso. Duas evidências
+   *      independentes — uma óptica (pixels ampliados), outra aritmética.
+   *   3. Ampliada ilegível + disputa → bloqueia (como antes).
+   */
+  async _applySignPolicy(processed, mismatchByEye, signs, signsCandidates) {
+    processed._avisos = processed._avisos || [];
+    mismatchByEye = mismatchByEye || { od: null, oe: null };
+
+    // (1) Contradição direta da leitura ampliada — inclusive sem disputa.
+    for (const lado of ['od', 'oe']) {
+      const eye = processed.refracao?.[lado];
+      const veredito = this._sphereSignVerdict(eye, signs?.[lado]);
+      // Ilegível NÃO bloqueia por si só: bloquear a cada leitura ampliada
+      // ruim recriaria a enxurrada de recapturas que a v5.4.0 veio corrigir.
+      // Mas o médico precisa saber que o sinal ficou sem 3ª confirmação.
+      if (veredito === 'ilegivel') {
+        // Por que ficou ilegível não aparecia em lugar nenhum — e é a diferença
+        // entre "o papel está ruim" e "o recorte levou o olhar para outra célula".
+        this.logger.warn(`[OCR] ${lado.toUpperCase()}: 3ª leitura não confirmou o sinal — ${this._describeSignMisread(eye, signs?.[lado])}`);
+        processed._avisos.push(`${lado.toUpperCase()}: a leitura ampliada não confirmou o sinal da esfera (${eye.esf}) — confira o "+/−" no ticket.`);
+      }
+      if (veredito === 'contradiz') {
+        // v5.4.4 — A LEITURA AMPLIADA NÃO É UMA SÓ. getSigns() dispara DUAS
+        // (recorte e ticket inteiro) e devolve uma vencedora; a perdedora era
+        // descartada mesmo quando confirmava a 1ª. Log 2026-08-05 18:01, OE: a
+        // 1ª, a 2ª e a leitura do ticket inteiro liam "+0.50"; só o recorte leu
+        // "−", e o bloqueio saiu pela voz do dissidente solitário. Discordância
+        // ENTRE as ampliadas é inconclusão, não contradição.
+        if (this._signWitnessesConfirm(lado, eye, signsCandidates)) {
+          const aviso = `${lado.toUpperCase()}: as duas leituras ampliadas discordaram entre si sobre o sinal da esfera (${eye.esf}) — uma confirmou a 1ª leitura. Não bloqueado; confira o "+/−" no ticket.`;
+          this.logger.warn('[OCR] ' + aviso);
+          processed._avisos.push(aviso);
+          continue;
+        }
+        // Abaixo do piso clínico do CID determinístico (|0.50D|), inverter o
+        // sinal não troca hipermetropia por miopia — não troca CID nenhum. A
+        // justificativa do bloqueio ("H52.1 vs H52.0") simplesmente não se
+        // aplica, e o preço era jogar fora cilindro, eixo, tono e paqui
+        // conferidos (18:00/18:01/18:02: três capturas do mesmo ticket
+        // bloqueadas por ±0.25D).
+        if (this._signFlipIsCidNeutral(processed.refracao, lado)) {
+          const aviso = `${lado.toUpperCase()}: leitura ampliada leu o sinal oposto da esfera (${eye.esf}), mas nesta magnitude o sinal não muda nenhum CID (piso de 0.50D). Não bloqueado; confira o "+/−" no ticket.`;
+          this.logger.warn('[OCR] ' + aviso);
+          processed._avisos.push(aviso);
+          continue;
+        }
+        const msg = `${lado.toUpperCase()}: a leitura ampliada leu o sinal da esfera como "${signs[lado].sinal}" e a 1ª leitura registrou "${eye.esf}". Sinal invertido troca miopia por hipermetropia (H52.1 vs H52.0) — refaça a captura.`;
+        this.logger.warn('[OCR] ' + msg);
+        mismatchByEye[lado] = { eye: lado, severity: 'hard', signFlip: true, message: msg };
+      }
+    }
+
+    // (2)/(3) Disputa de sinal entre 1ª e 2ª leituras.
+    for (const lado of ['od', 'oe']) {
+      const mismatch = mismatchByEye[lado];
+      // pEsfStr só existe na disputa 1ª vs 2ª; mismatches criados pela regra (1)
+      // acima já passaram pelos mesmos testes e não são reprocessados aqui.
+      if (!mismatch || !mismatch.signFlip || mismatch.pEsfStr == null) continue;
+      const eye = processed.refracao?.[lado];
+      const veredito = this._sphereSignVerdict(eye, signs?.[lado]);
+      const mathOk = this._isEyeMathConsistent(eye);
+
+      if (veredito === 'confirma' && mathOk) {
+        processed._avisos.push(
+          `${lado.toUpperCase()}: 2ª chamada leu sinal oposto (1ª="${mismatch.pEsfStr}" vs 2ª="${mismatch.vEsfStr}"); a leitura ampliada confirmou a 1ª e S+C/2 fecha com o S.E. impresso. Liberado — confira o sinal no ticket.`
+        );
+        mismatchByEye[lado] = null;
+        continue;
+      }
+      // Mesmo raciocínio do piso clínico, agora na disputa 1ª vs 2ª: sem CID em
+      // jogo, a recaptura obrigatória cobra caro por 0.5D que ninguém codifica.
+      if (this._signFlipIsCidNeutral(processed.refracao, lado)) {
+        const aviso = `${lado.toUpperCase()}: sinal da esfera discordante (1ª="${mismatch.pEsfStr}" vs 2ª="${mismatch.vEsfStr}"), mas nesta magnitude o sinal não muda nenhum CID (piso de 0.50D). Não bloqueado; confira o "+/−" no ticket.`;
+        this.logger.warn('[OCR] ' + aviso);
+        processed._avisos.push(aviso);
+        mismatchByEye[lado] = null;
+        continue;
+      }
+      mismatch.message = veredito === 'confirma'
+        ? `${lado.toUpperCase()}: sinal da esfera discordante (1ª="${mismatch.pEsfStr}" vs 2ª="${mismatch.vEsfStr}"); a leitura ampliada confirmou a 1ª, mas S+C/2 não fecha com o S.E. impresso — sem a segunda evidência, refaça a captura.`
+        : `${lado.toUpperCase()}: sinal da esfera discordante (1ª="${mismatch.pEsfStr}" vs 2ª="${mismatch.vEsfStr}") e a leitura ampliada não foi legível. Refaça a captura.`;
+    }
+
+    return mismatchByEye;
+  }
+
+  /**
+   * Alguma das leituras ampliadas (recorte E ticket inteiro) confirma o sinal
+   * da 1ª leitura, na linha validada? Ver _rowWitnesses para o critério de
+   * validação da linha (magnitude ≈ |esfera| ±0.25D).
+   */
+  _signWitnessesConfirm(lado, eye, candidates) {
+    if (!Array.isArray(candidates)) return false;
+    return candidates.some(c => this._sphereSignVerdict(eye, c?.[lado]) === 'confirma');
+  }
+
+  /**
+   * Inverter o sinal da esfera deste olho mudaria algum CID determinístico?
+   *
+   * _inferCidRefracao só codifica H52.0/H52.1 a partir de |0.50D| (piso clínico
+   * da v5.4.0) — abaixo disso o sinal é indiferente ao diagnóstico. A resposta
+   * é calculada, não estimada: roda o inferidor nos dois cenários e compara,
+   * o que também cobre a anisometropia (H52.3), cuja fronteira de 1.50D o
+   * deslocamento de S.E. poderia atravessar.
+   */
+  _signFlipIsCidNeutral(refracao, lado) {
+    const eye = refracao?.[lado];
+    if (!eye) return false;
+    const esfStr = String(eye.esf ?? '').toLowerCase();
+    const esf = esfStr === 'plano' ? 0 : parseFloat(esfStr);
+    if (isNaN(esf) || esf === 0) return false;
+    const cil = eye.cil != null ? parseFloat(eye.cil) : 0;
+    const flipped = {
+      ...refracao,
+      [lado]: {
+        ...eye,
+        esf: (-esf).toFixed(2),
+        se: (-esf + (isNaN(cil) ? 0 : cil) / 2).toFixed(2)
+      }
+    };
+    const antes = this._inferCidRefracao(refracao).slice().sort().join('|');
+    const depois = this._inferCidRefracao(flipped).slice().sort().join('|');
+    return antes === depois;
+  }
+
+  _getSphereSignTiebreakPrompt() {
+    return `LEITURA DO SINAL DA ESFERA — TAREFA ÚNICA E MÍNIMA.
+
+Você vê um ticket TOPCON — possivelmente um RECORTE AMPLIADO da seção REF.DATA,
+onde o cabeçalho "REF.DATA" e as demais seções podem não aparecer. Isso é
+esperado: oriente-se pelos marcadores <R> (olho direito) e <L> (olho esquerdo)
+e pelas linhas "S.E.".
 Em cada bloco, localize a linha MÉDIA: a linha em negrito imediatamente ACIMA da linha "S.E.".
 
-Sua ÚNICA tarefa: para cada olho, transcrever o PRIMEIRO valor dessa linha MÉDIA
+Sua tarefa PRINCIPAL: para cada olho, transcrever o PRIMEIRO valor dessa linha MÉDIA
 (coluna S, a mais à esquerda), separando o CARACTERE DE SINAL da MAGNITUDE.
+
+Transcreva TAMBÉM, da MESMA linha MÉDIA, a 2ª coluna (C, cilindro) e a 3ª coluna
+(A, eixo). Elas não são o objetivo — servem para provar que você está na linha
+certa. Se não conseguir lê-las, retorne null nelas; NÃO troque de linha para
+preenchê-las e NUNCA use o eixo (número inteiro, 0-180) como magnitude da esfera.
 
 Examine o caractere de sinal com máxima atenção:
   • "+" tem um traço VERTICAL e um horizontal.
@@ -516,7 +1602,8 @@ Examine o caractere de sinal com máxima atenção:
 Se o sinal estiver ilegível ou ambíguo, retorne null no campo "sinal". Não chute.
 
 Responda APENAS JSON puro (sem markdown):
-{"od": {"sinal": "+", "magnitude": "1.00"}, "oe": {"sinal": "-", "magnitude": "0.75"}}
+{"od": {"sinal": "+", "magnitude": "1.00", "c": "-0.50", "a": "139"},
+ "oe": {"sinal": "-", "magnitude": "0.75", "c": "-2.50", "a": "77"}}
 `;
   }
 
@@ -526,9 +1613,9 @@ Responda APENAS JSON puro (sem markdown):
   async _tiebreakCylinder(mismatch, imageParts, apiService) {
     try {
       this.logger.info(`[OCR] Desempate de Cilindro (3ª chamada) para ${mismatch.eye.toUpperCase()}...`);
-      const { text } = await apiService.callGeminiAPI(
-        [{ text: this._getCylinderTiebreakPrompt() }, ...imageParts],
-        EXAM_CONFIG
+      const { text } = await this._callApi(
+        apiService, [{ text: this._getCylinderTiebreakPrompt() }, ...imageParts],
+        FOCUS_CONFIG, `desempate de cilindro (${mismatch.eye.toUpperCase()})`
       );
       const tie = _parseGeminiJSON(text, 'tiebreak_cil');
       const t = tie?.[mismatch.eye];
@@ -537,8 +1624,27 @@ Responda APENAS JSON puro (sem markdown):
         return null;
       }
       
-      const vCil = t === "null" ? null : parseFloat(t);
-      if (vCil !== null && isNaN(vCil)) return null;
+      // v5.5.0 — NORMALIZAR O SINAL antes de comparar. `pCil`/`vCil` já passaram
+      // por _parseCil (convenção negativa do TOPCON), mas aqui a leitura entrava
+      // crua: uma 3ª leitura devolvendo "0.50" — formato que o PRÓPRIO prompt
+      // principal documenta como válido ("se imprime 0.50 sem sinal, é -0.50") —
+      // era comparada contra -0.50 e virava "3º valor diferente". Desempate
+      // certo, chamada gasta, disputa registrada como inconclusiva.
+      //
+      // A normalização é feita aqui em vez de por _parseCil porque este ponto
+      // precisa preservar o ZERO: nesta disputa os dois lados têm cilindro, então
+      // um "0.00" lido é um terceiro valor (inconclusivo), não "sem cilindro".
+      const bruto = t === "null" ? null : parseFloat(t);
+      if (bruto !== null && isNaN(bruto)) return null;
+      const vCil = bruto === null ? null : (bruto > 0 ? -bruto : bruto);
+      // Ilegível, não "terceiro valor": a disputa só chega aqui com pCil e vCil
+      // presentes, então um null é o modelo dizendo que não leu — o log dizia
+      // "retornou um 3º valor diferente: null" e mandava procurar um valor que
+      // não existe.
+      if (vCil === null) {
+        this.logger.warn('[OCR] Desempate de Cilindro não legível (o recorte é o mesmo que já falhou na leitura do sinal)');
+        return null;
+      }
 
       // Se leu igual a pCil, a primeira estava certa
       if (vCil === mismatch.pCil || (vCil !== null && mismatch.pCil !== null && Math.abs(vCil - mismatch.pCil) < 0.01)) {
@@ -563,7 +1669,8 @@ Responda APENAS JSON puro (sem markdown):
   _getCylinderTiebreakPrompt() {
     return `DESEMPATE DE CILINDRO — TAREFA ÚNICA E MÍNIMA.
 
-Você vê um ticket TOPCON. Na seção REF.DATA há dois blocos: <R> (olho direito) e <L> (olho esquerdo).
+Você vê um ticket TOPCON — possivelmente um RECORTE AMPLIADO da seção REF.DATA.
+Oriente-se pelos marcadores <R> (olho direito) e <L> (olho esquerdo).
 
 Sua ÚNICA tarefa: para cada olho, identificar a linha da MÉDIA e ler EXCLUSIVAMENTE O SEGUNDO NÚMERO (Coluna do Meio - Cilindro).
 NÃO conte as linhas de cima para baixo. A linha MÉDIA é a linha em negrito que fica IMEDIATAMENTE ACIMA da linha que diz "S.E.".
@@ -586,9 +1693,9 @@ Responda APENAS JSON puro (sem markdown). Exemplo de formato:
   async _tiebreakAxis(mismatch, imageParts, apiService) {
     try {
       this.logger.info(`[OCR] Desempate de Eixo (3ª chamada) para ${mismatch.eye.toUpperCase()}...`);
-      const { text } = await apiService.callGeminiAPI(
-        [{ text: this._getAxisTiebreakPrompt() }, ...imageParts],
-        EXAM_CONFIG
+      const { text } = await this._callApi(
+        apiService, [{ text: this._getAxisTiebreakPrompt() }, ...imageParts],
+        FOCUS_CONFIG, `desempate de eixo (${mismatch.eye.toUpperCase()})`
       );
       const tie = _parseGeminiJSON(text, 'tiebreak_eixo');
       const t = tie?.[mismatch.eye];
@@ -599,11 +1706,11 @@ Responda APENAS JSON puro (sem markdown). Exemplo de formato:
       const tEixo = parseInt(t, 10);
       if (isNaN(tEixo)) return null;
       const circ = (a, b) => { const d = Math.abs(a - b); return Math.min(d, 180 - d); };
-      if (circ(tEixo, mismatch.pEixo) <= 8) {
+      if (circ(tEixo, mismatch.pEixo) <= OCR_TOL.EIXO_GRAUS) {
         this.logger.info(`[OCR] Desempate de Eixo retornou ${tEixo}° (confirmou a 1ª)`);
         return 'primeira';
       }
-      if (circ(tEixo, mismatch.vEixo) <= 8) {
+      if (circ(tEixo, mismatch.vEixo) <= OCR_TOL.EIXO_GRAUS) {
         this.logger.info(`[OCR] Desempate de Eixo retornou ${tEixo}° (confirmou a 2ª)`);
         return 'segunda';
       }
@@ -618,7 +1725,8 @@ Responda APENAS JSON puro (sem markdown). Exemplo de formato:
   _getAxisTiebreakPrompt() {
     return `DESEMPATE DE EIXO — TAREFA ÚNICA E MÍNIMA.
 
-Você vê um ticket TOPCON. Na seção REF.DATA há dois blocos: <R> (olho direito) e <L> (olho esquerdo).
+Você vê um ticket TOPCON — possivelmente um RECORTE AMPLIADO da seção REF.DATA.
+Oriente-se pelos marcadores <R> (olho direito) e <L> (olho esquerdo).
 
 Sua ÚNICA tarefa: para cada olho, identificar a linha da MÉDIA e ler EXCLUSIVAMENTE O TERCEIRO NÚMERO (Coluna da Direita — Eixo/A).
 NÃO conte as linhas de cima para baixo. A linha MÉDIA é a linha em negrito que fica IMEDIATAMENTE ACIMA da linha que diz "S.E.".
@@ -647,7 +1755,7 @@ Responda APENAS JSON puro (sem markdown). Exemplo de formato:
     const se = parseFloat(eye.se);
     if (isNaN(esf) || isNaN(se)) return false;
     const seCalc = esf + cil / 2;
-    return Math.abs(seCalc - se) <= 0.15;
+    return Math.abs(seCalc - se) <= OCR_TOL.MATH_CONSISTENT;
   }
 
   /**
@@ -672,20 +1780,47 @@ Responda APENAS JSON puro (sem markdown). Exemplo de formato:
    *   - Eixo: ±8° (com tratamento circular: 1° e 180° são adjacentes)
    */
   _compareRefractionAgainstVerify(processed, verify) {
-    if (!verify || typeof verify !== 'object') return null; // sem verificação válida — não bloqueia
+    const porOlho = this._compareEyesAgainstVerify(processed, verify);
+    return porOlho.od || porOlho.oe || null;
+  }
 
+  /**
+   * Conferência POR OLHO (v5.4.4).
+   *
+   * _compareRefractionAgainstVerify devolvia só o PRIMEIRO mismatch e o bloqueio
+   * zerava a refração inteira — então uma divergência no OD levava junto um OE
+   * que as duas leituras (e a ampliada) tinham confirmado. Log 2026-08-05: em 4
+   * das 6 capturas bloqueadas a disputa era de um olho só. Comparar os dois
+   * sempre é o que permite bloquear só o olho culpado.
+   */
+  _compareEyesAgainstVerify(processed, verify) {
+    const out = { od: null, oe: null };
+    if (!verify || typeof verify !== 'object') return out; // sem verificação válida — não bloqueia
+    if (!processed) return out;
     for (const lado of ['od', 'oe']) {
-      const p = processed[lado];
-      const v = verify[lado];
+      out[lado] = this._compareEye(lado, processed[lado], verify[lado]);
+    }
+    return out;
+  }
 
+  /**
+   * @param {string[]} skipDims dimensões já julgadas neste olho ('esfera',
+   *   'cilindro', 'eixo'). Existe porque um veredito devolvido — e depois
+   *   descartado pelo caller — ESCONDIA as dimensões seguintes: o comparador
+   *   devolve uma por vez. Log 2026-08-05 19:40 (OD): a esfera foi liberada pelo
+   *   piso do CID e o cilindro (1ª=-0.50 vs 2ª=-1.50, Δ=1.00D) nunca chegou a
+   *   ser conferido — a leitura da 1ª foi injetada com o cilindro alucinado.
+   */
+  _compareEye(lado, p, v, skipDims = []) {
+    {
       // Ambos null: tudo bem
-      if (!p && !v) continue;
+      if (!p && !v) return null;
 
       // Discordância de presença/ausência do olho
       if (!p && v && (v.s != null || v.c != null)) {
-        return { eye: lado, severity: 'hard', message: `${lado.toUpperCase()}: 1ª leitura disse "olho ausente" mas verificação encontrou valores (${JSON.stringify(v)}). Refaça a captura.` };
+        return { eye: lado, dim: 'presenca', severity: 'hard', message: `${lado.toUpperCase()}: 1ª leitura disse "olho ausente" mas verificação encontrou valores (${JSON.stringify(v)}). Refaça a captura.` };
       }
-      if (p && !v) continue; // verificação não conseguiu — não é evidência de erro na 1ª
+      if (p && !v) return null; // verificação não conseguiu — não é evidência de erro na 1ª
 
       // ── Esfera ──
       // Discordância de esfera é 'hard' por padrão: quando o modelo alucina S
@@ -704,8 +1839,8 @@ Responda APENAS JSON puro (sem markdown). Exemplo de formato:
       const vEsfStr = v?.s != null ? String(v.s).toLowerCase() : v?.s;
       const pEsf = pEsfStr === 'plano' ? 0 : parseFloat(pEsfStr);
       const vEsf = vEsfStr === 'plano' ? 0 : parseFloat(vEsfStr);
-      if (!isNaN(pEsf) && !isNaN(vEsf)) {
-        if (Math.abs(pEsf - vEsf) > 0.30) {
+      if (!isNaN(pEsf) && !isNaN(vEsf) && !skipDims.includes('esfera')) {
+        if (Math.abs(pEsf - vEsf) > OCR_TOL.ESFERA_DIFF) {
           const pSeStr = p.se != null ? String(p.se).toLowerCase() : p.se;
           const vSeStr = v?.se != null ? String(v.se).toLowerCase() : v?.se;
           const pSe = pSeStr === 'plano' ? 0 : (pSeStr != null ? parseFloat(pSeStr) : NaN);
@@ -714,9 +1849,9 @@ Responda APENAS JSON puro (sem markdown). Exemplo de formato:
           // (a) esfera e SE da 1ª são distinguíveis (cilindro significativo)
           const esfSeDistinguivel = !isNaN(pSe) && Math.abs(pEsf - pSe) > 0.20;
           // (b) verify.s bate com SE da 1ª (verify leu uma linha abaixo)
-          const verifyBateComSe1 = !isNaN(pSe) && Math.abs(vEsf - pSe) <= 0.15;
+          const verifyBateComSe1 = !isNaN(pSe) && Math.abs(vEsf - pSe) <= OCR_TOL.MATH_CONSISTENT;
           // (c) verify se auto-contradiz: reportou s == se (leu mesma célula 2x)
-          const verifyAutoConfuso = !isNaN(vSe) && Math.abs(vEsf - vSe) <= 0.15;
+          const verifyAutoConfuso = !isNaN(vSe) && Math.abs(vEsf - vSe) <= OCR_TOL.MATH_CONSISTENT;
           // (d) a 1ª leitura é matematicamente coerente
           const mathOk = this._isEyeMathConsistent(p);
 
@@ -726,7 +1861,7 @@ Responda APENAS JSON puro (sem markdown). Exemplo de formato:
             const evidencia = [];
             if (verifyBateComSe1) evidencia.push(`s da 2ª (${vEsfStr}) bate com S.E. da 1ª (${pSeStr})`);
             if (verifyAutoConfuso) evidencia.push(`2ª reportou s=${vEsfStr} e se=${vSeStr} (iguais)`);
-            return { eye: lado, severity: 'soft', message: `${lado.toUpperCase()}: 2ª chamada provavelmente leu linha S.E. como esfera (${evidencia.join('; ')}); 1ª leitura é internamente coerente (S+C/2≈S.E.). Confira manualmente.` };
+            return { eye: lado, dim: 'esfera', severity: 'soft', message: `${lado.toUpperCase()}: 2ª chamada provavelmente leu linha S.E. como esfera (${evidencia.join('; ')}); 1ª leitura é internamente coerente (S+C/2≈S.E.). Confira manualmente.` };
           }
 
           // Flip puro de sinal (+1.00 vs -1.00): mesma magnitude, sinais
@@ -759,16 +1894,16 @@ Responda APENAS JSON puro (sem markdown). Exemplo de formato:
             if (!isNaN(vSe) && !isNaN(vCilNum)) {
               const vSeCalc = vEsf + vCilNum / 2;
               const vDiff = Math.abs(vSe - vSeCalc);
-              if (vDiff > 0.30) {
-                return { eye: lado, severity: 'soft', message: `${lado.toUpperCase()}: 2ª leitura é internamente incoerente (s=${vEsfStr}, c=${vCilNum} ⇒ S.E. esperado ${vSeCalc.toFixed(2)}, mas reportou ${vSeStr} — erro de ${vDiff.toFixed(2)}D); 1ª leitura fecha S+C/2≈S.E. Confira manualmente.` };
+              if (vDiff > OCR_TOL.SE_CROSSCHECK) {
+                return { eye: lado, dim: 'esfera', severity: 'soft', message: `${lado.toUpperCase()}: 2ª leitura é internamente incoerente (s=${vEsfStr}, c=${vCilNum} ⇒ S.E. esperado ${vSeCalc.toFixed(2)}, mas reportou ${vSeStr} — erro de ${vDiff.toFixed(2)}D); 1ª leitura fecha S+C/2≈S.E. Confira manualmente.` };
               }
             }
           }
 
-          return { eye: lado, severity: 'hard', signFlip, pEsf, vEsf, pEsfStr, vEsfStr, message: `${lado.toUpperCase()}: esfera discordante entre leituras (1ª="${pEsfStr}" vs 2ª="${vEsfStr}"). Refaça a captura.` };
+          return { eye: lado, dim: 'esfera', severity: 'hard', signFlip, pEsf, vEsf, pEsfStr, vEsfStr, message: `${lado.toUpperCase()}: esfera discordante entre leituras (1ª="${pEsfStr}" vs 2ª="${vEsfStr}"). Refaça a captura.` };
         }
-      } else if (!isNaN(pEsf) && isNaN(vEsf) && vEsfStr != null) {
-        return { eye: lado, severity: 'hard', message: `${lado.toUpperCase()}: esfera da 2ª leitura não pôde ser interpretada ("${vEsfStr}"). Refaça a captura.` };
+      } else if (!isNaN(pEsf) && isNaN(vEsf) && vEsfStr != null && !skipDims.includes('esfera')) {
+        return { eye: lado, dim: 'esfera', severity: 'hard', message: `${lado.toUpperCase()}: esfera da 2ª leitura não pôde ser interpretada ("${vEsfStr}"). Refaça a captura.` };
       }
 
       // ── Cilindro descartado por eixo ausente na 1ª leitura ──
@@ -776,50 +1911,68 @@ Responda APENAS JSON puro (sem markdown). Exemplo de formato:
       // cilindro/eixo com a verificação é esperada (a 2ª leitura pode até achar
       // o cilindro), mas não deve bloquear: ambas concordam na esfera e só o
       // astigmatismo — sem eixo — é não-injetável. A esfera já foi conferida.
-      if (p._cilDescartadoPorEixo) continue;
+      if (p._cilDescartadoPorEixo) return null;
 
       // ── Cilindro ──
       const pCil = p?.cil != null ? parseFloat(p.cil) : null;
       const vCil = v?.c != null ? parseFloat(v.c) : null;
+      const pulaCil = skipDims.includes('cilindro');
       // null vs valor significativo (>0.30D) → soft: deixa math-consistency decidir.
       // Quando 1ª leu sem cilindro e S≈SE (math-consistent), a verificação
       // provavelmente alucionou o cilindro — modo de falha documentado em tickets
       // sem astigmatismo. Hard bloquearia injeções corretas sistematicamente.
-      if (pCil === null && vCil !== null && !isNaN(vCil) && Math.abs(vCil) > 0.30) {
-        return { eye: lado, severity: 'soft', message: `${lado.toUpperCase()}: 1ª leitura disse "sem cilindro" mas verificação leu C=${vCil}. Refaça a captura.` };
+      if (!pulaCil && pCil === null && vCil !== null && !isNaN(vCil) && Math.abs(vCil) > OCR_TOL.CIL_SOFT) {
+        return { eye: lado, dim: 'cilindro', severity: 'soft', message: `${lado.toUpperCase()}: 1ª leitura disse "sem cilindro" mas verificação leu C=${vCil}. Refaça a captura.` };
       }
-      if (pCil !== null && (vCil === null || isNaN(vCil)) && Math.abs(pCil) > 0.30) {
-        return { eye: lado, severity: 'hard', message: `${lado.toUpperCase()}: 1ª leitura disse C=${pCil} mas verificação não encontrou cilindro. Refaça a captura.` };
+      if (!pulaCil && pCil !== null && (vCil === null || isNaN(vCil)) && Math.abs(pCil) > OCR_TOL.CIL_SOFT) {
+        return { eye: lado, dim: 'cilindro', severity: 'hard', isCylinderMissingInVerify: true, pCil, message: `${lado.toUpperCase()}: 1ª leitura disse C=${pCil} mas verificação não encontrou cilindro. Refaça a captura.` };
       }
       // Ambos valores: divergência >0.50D é hard (sempre bloqueia);
       // divergência 0.30-0.50D é soft (bloqueia se não math-consistent).
       // Razão: o Gemini pode alucinar cilindro E SE coerente entre si,
       // enganando a math-consistency. Divergência grande entre chamadas
       // é evidência externa que não pode ser ignorada.
-      if (pCil !== null && vCil !== null && !isNaN(vCil)) {
+      if (!pulaCil && pCil !== null && vCil !== null && !isNaN(vCil)) {
         const cilDiff = Math.abs(pCil - vCil);
-        if (cilDiff > 0.50) {
-          return { eye: lado, severity: 'hard', isCylinderMismatch: true, pCil, vCil, message: `${lado.toUpperCase()}: cilindro muito discordante entre leituras (1ª=${pCil} vs 2ª=${vCil}, Δ=${cilDiff.toFixed(2)}D). Refaça a captura.` };
+        if (cilDiff > OCR_TOL.CIL_HARD) {
+          return { eye: lado, dim: 'cilindro', severity: 'hard', isCylinderMismatch: true, pCil, vCil, message: `${lado.toUpperCase()}: cilindro muito discordante entre leituras (1ª=${pCil} vs 2ª=${vCil}, Δ=${cilDiff.toFixed(2)}D). Refaça a captura.` };
         }
-        if (cilDiff > 0.30) {
-          return { eye: lado, severity: 'soft', isCylinderMismatch: true, pCil, vCil, message: `${lado.toUpperCase()}: cilindro discordante entre leituras (1ª=${pCil} vs 2ª=${vCil}, Δ=${cilDiff.toFixed(2)}D). Refaça a captura.` };
+        if (cilDiff > OCR_TOL.CIL_SOFT) {
+          return { eye: lado, dim: 'cilindro', severity: 'soft', isCylinderMismatch: true, pCil, vCil, message: `${lado.toUpperCase()}: cilindro discordante entre leituras (1ª=${pCil} vs 2ª=${vCil}, Δ=${cilDiff.toFixed(2)}D). Refaça a captura.` };
         }
       }
 
       // ── Eixo (só se ambos têm cilindro presente) ──
-      if (pCil !== null && vCil !== null && p?.eixo != null && v?.a != null) {
+      if (!skipDims.includes('eixo') && pCil !== null && vCil !== null && p?.eixo != null && v?.a != null) {
         const pEixo = parseInt(p.eixo, 10);
         const vEixo = parseInt(v.a, 10);
         if (!isNaN(pEixo) && !isNaN(vEixo)) {
           const diff = Math.abs(pEixo - vEixo);
           const circularDiff = Math.min(diff, 180 - diff); // 1° ≡ 180°
-          if (circularDiff > 8) {
-            return { eye: lado, severity: 'soft', isAxisMismatch: true, pEixo, vEixo, message: `${lado.toUpperCase()}: eixo discordante entre leituras (1ª=${pEixo}° vs 2ª=${vEixo}°). Refaça a captura.` };
+          if (circularDiff > OCR_TOL.EIXO_GRAUS) {
+            return { eye: lado, dim: 'eixo', severity: 'soft', isAxisMismatch: true, pEixo, vEixo, message: `${lado.toUpperCase()}: eixo discordante entre leituras (1ª=${pEixo}° vs 2ª=${vEixo}°). Refaça a captura.` };
           }
         }
       }
     }
     return null;
+  }
+
+  /**
+   * Bloqueia UM olho, não a refração inteira (v5.4.4).
+   *
+   * O olho bloqueado vai como null para a injeção — fillRefractionFields já
+   * trata olho null LIMPANDO os campos daquele olho, então nada de consulta
+   * antiga fica residual na tela. Só quando os DOIS olhos caem é que a refração
+   * inteira é dada como bloqueada (e aí tono/paqui seguem preservados, v5.4.0).
+   */
+  _failEye(result, lado, reason) {
+    if (!result.refracao) return;
+    result._olhosBloqueados = result._olhosBloqueados || {};
+    result._olhosBloqueados[lado] = reason;
+    result.refracao[lado] = null;
+    const outro = lado === 'od' ? 'oe' : 'od';
+    if (!result.refracao[outro]) this._failRefraction(result, reason);
   }
 
   _captureFailed(reason) {
@@ -883,9 +2036,43 @@ Responda APENAS JSON puro (sem markdown). Exemplo de formato:
 ╚══════════════════════════════════════════════════════════════════════╝
 
 ━━━━ ORIENTAÇÃO ━━━━
-Se o texto está de cabeça para baixo (palavras como "REF.DATA" aparecem como "ATAD.FER", marcadores ">R<" em vez de "<R>", "TOPCON" parece "NOCTPOT"), pare imediatamente e responda APENAS:
-  {"_ticketInvertido": true}
-NÃO transcreva nada se o ticket estiver invertido — o sistema rotaciona automaticamente.
+O ticket só pode ser transcrito com o texto NA HORIZONTAL, lido da esquerda para
+a direita. Antes de qualquer coisa, decida quantos graus a IMAGEM precisa girar
+no sentido HORÁRIO para que "REF.DATA" fique legível na horizontal:
+
+Use como referência ONDE está o TOPO do ticket — o cabeçalho com a data
+("06_AUG_2026"), "REF.DATA" e "VD:". O RODAPÉ é o lado de "TOPCON",
+"TONO.DATA" e "PACH.DATA". Deitado, o ticket aparece nos dois sentidos: o papel
+sai da impressora e é largado na mesa de qualquer jeito.
+
+  • 0   — topo do ticket EM CIMA: já está legível na horizontal.
+  • 90  — topo do ticket à ESQUERDA da foto.
+  • 180 — topo EMBAIXO, texto de cabeça para baixo ("REF.DATA" vira "ATAD.FER",
+          ">R<" em vez de "<R>", "TOPCON" parece "NOCTPOT").
+  • 270 — topo do ticket à DIREITA da foto.
+
+Se a resposta NÃO for 0, pare imediatamente e responda APENAS:
+  {"_ticketRotacao": 270}
+Não tem problema errar entre 90 e 270: o sistema percebe pelo resultado e tenta
+o outro sentido. O que NÃO pode é transcrever com o ticket torto.
+NÃO transcreva nada com o ticket torto — o sistema gira a imagem e pede de novo.
+Ticket deitado é a causa nº 1 de troca de colunas: lendo de lado, a coluna do
+CILINDRO fica onde a mente espera a ESFERA, e o valor sai trocado com aparência
+perfeitamente plausível.
+
+━━━━ MAIS DE UM TICKET NA MESMA FOTO ━━━━
+Acontece de dois ou mais tickets aparecerem juntos (grampeados, sobrepostos, ou
+lado a lado) — por exemplo um ticket com REF.DATA e outro, impresso em outro
+horário, com TONO.DATA/PACH.DATA por cima dele. Cada ticket tem seu próprio
+cabeçalho com DATA e HORA no topo.
+
+  • NUNCA misture seções de tickets diferentes como se fossem do mesmo exame.
+  • Transcreva cada seção lendo os números que estão IMPRESSOS NAQUELE ticket.
+  • Se um ticket cobre parte do outro e você não tem certeza de a qual papel uma
+    seção pertence, retorne null para essa seção. Não deduza.
+  • Se você vir mais de um ticket, informe "_ticketsMultiplos": true (o médico
+    é avisado para conferir). Um ticket só → false.
+  • Para decidir a ROTAÇÃO, use o ticket que contém a seção REF.DATA.
 
 ━━━━ ESTRUTURA DO TICKET ━━━━
 O ticket TOPCON imprime, na vertical, de cima para baixo:
@@ -1024,6 +2211,13 @@ Use o valor da coluna AVG. Se não houver AVG, use o último número da linha.
 "ERR 17" ou "(17)" = use o número.
 Faixa esperada: 8-25 mmHg.
 
+Transcreva TAMBÉM, em "_tonoMedicoes", as medições INDIVIDUAIS impressas na
+linha de cada olho — os números que aparecem ANTES da coluna AVG, inclusive os
+que estão entre parênteses (transcreva só o número, sem os parênteses). Elas
+servem de conferência do AVG. Exemplo: a linha "R 13 (14)(14) 13" dá
+tonometria.od = 13 (a coluna AVG) e "_tonoMedicoes": {"od": [13, 14, 14]}.
+"ERR" não é número: não entra na lista. Se não conseguir lê-las, use [].
+
 ━━━━ PAQUIMETRIA (PACH.DATA) ━━━━
 Uma linha "R" (= OD) e uma linha "L" (= OE), em mm.
 Use a coluna AVG. Multiplique por 1000 para µm (ex: 0.504 → 504).
@@ -1032,9 +2226,24 @@ Faixa esperada: 420-650 µm.
 ━━━━ KRT.DATA (CERATOMETRIA) ━━━━
 IGNORAR COMPLETAMENTE. Os valores de R1, R2, AVE, CYL ceratométrico, MM1, MM2 NÃO são refração. Não use NADA da seção KRT em nenhum dos campos de saída.
 
+━━━━ LOCALIZAÇÃO DA SEÇÃO REF.DATA ━━━━
+Além dos valores, informe ONDE a seção REF.DATA está na PRIMEIRA imagem. O
+sistema usa essa caixa para recortar e ampliar a região quando precisar reler
+um dígito duvidoso.
+
+  "_refDataBox": [ymin, xmin, ymax, xmax]
+
+Coordenadas NORMALIZADAS de 0 a 1000 (0,0 = canto superior esquerdo da imagem;
+1000,1000 = canto inferior direito). A caixa deve cobrir do cabeçalho
+"REF.DATA" até a última linha "S.E." do bloco <L>, com uma folga pequena.
+NÃO devolva o ticket inteiro — uma caixa que cobre tudo não amplia nada.
+Se não conseguir determinar a região, use null.
+
 ━━━━ FORMATO DE SAÍDA — JSON PURO (sem markdown) ━━━━
 {
-  "_ticketInvertido": false,
+  "_ticketRotacao": 0,
+  "_ticketsMultiplos": false,
+  "_refDataBox": [180, 40, 520, 960],
   "refracao": {
     "od": {
       "medicoes": [
@@ -1056,6 +2265,7 @@ IGNORAR COMPLETAMENTE. Os valores de R1, R2, AVE, CYL ceratométrico, MM1, MM2 N
     }
   },
   "tonometria":  {"od": 15, "oe": 14},
+  "_tonoMedicoes": {"od": [15, 15, 16], "oe": [14, 14]},
   "paquimetria": {"od": 504, "oe": 526}
 }
 
@@ -1107,13 +2317,17 @@ Responda APENAS com o JSON. Sem texto antes, sem texto depois, sem markdown.
       // e geralmente significa cópia. Bloquear se acontecer com cilindro presente.
       const od = result.refracao.od;
       const oe = result.refracao.oe;
+
+      // Marca preservada para o auto-retry de swap S↔C: um bloqueio de refração
+      // zera result.refracao, e sem esta marca o gatilho da releitura sumiria.
+      result._todosOlhosDescartados = !od && !oe;
+
       if (od && oe && od.cil != null && oe.cil != null) {
         const esfIgual = String(od.esf) === String(oe.esf);
         const cilIgual = Math.abs(od.cil - oe.cil) < 0.01;
         const eixoIgual = od.eixo != null && oe.eixo != null && Math.abs(od.eixo - oe.eixo) < 1;
         if (esfIgual && cilIgual && eixoIgual) {
-          result._captureFailed = true;
-          result._reason = 'OD e OE saíram idênticos em esfera, cilindro e eixo — provável duplicação. Refaça a captura.';
+          this._failRefraction(result, 'OD e OE saíram idênticos em esfera, cilindro e eixo — provável duplicação. Refaça a captura.');
         }
       }
 
@@ -1129,6 +2343,13 @@ Responda APENAS com o JSON. Sem texto antes, sem texto depois, sem markdown.
       // discrepância e peça nova foto. Confiar em S.E. para corrigir CIL
       // (ou vice-versa) já se mostrou perigoso porque o modelo às vezes
       // alucina o S.E. junto.
+      //
+      // v5.4.6 — REPROVA O OLHO, NÃO A REFRAÇÃO. Esta conta é POR OLHO e
+      // derrubava os dois: log 2026-08-06 11:41, o OD saiu incoerente (S.E.
+      // +1.50 com S +1.25 e C -0.50) e levou junto um OE perfeito. Pior: com a
+      // refração zerada aqui, `refracaoViva` fica falso e a captura termina sem
+      // 2ª chamada e sem leitura ampliada — o olho bom perde também a segunda
+      // opinião (12.6s de captura, nenhuma conferência).
       for (const lado of ['od', 'oe']) {
         const eye = result.refracao[lado];
         if (!eye) continue;
@@ -1137,19 +2358,54 @@ Responda APENAS com o JSON. Sem texto antes, sem texto depois, sem markdown.
         const seNum = parseFloat(seReportado);
         if (isNaN(seNum)) continue;
         const esfNum = String(eye.esf).toLowerCase() === 'plano' ? 0 : parseFloat(eye.esf);
-        const cilNum = eye.cil != null ? parseFloat(eye.cil) : 0;
         if (isNaN(esfNum)) continue;
+
+        // ── Cilindro não lido: o S.E. impresso é o DISCRIMINADOR, não o réu ──
+        // Com cil=null o cálculo virava seCalc=esf, e aí QUALQUER astigmatismo
+        // real reprovava a captura inteira. Caso 2026-08-03 17:47:13: OD -5.00
+        // com C não lido e S.E. impresso -5.50 → bloqueio por "leitura
+        // incorreta"; as outras duas capturas do mesmo ticket leram C=-1.00 —
+        // exatamente o 2*(S.E.-S) que o próprio S.E. já implicava. Isso é
+        // leitura PARCIAL (faltou uma célula), não leitura errada: a esfera
+        // conferida pelo S.E. continua válida.
+        // O cilindro implícito NÃO é injetado: sem eixo ele não é prescritível
+        // (mesma regra de _processEye) — vira aviso para conferência.
+        if (eye.cil == null) {
+          const cilImplicito = 2 * (seNum - esfNum);
+          if (Math.abs(cilImplicito) <= OCR_TOL.SE_CROSSCHECK) continue; // coerente: sem cilindro mesmo
+          const plausivel = cilImplicito < 0
+            && Math.abs(cilImplicito) <= 8
+            && this._isValidDiopterStep(cilImplicito);
+          if (plausivel) {
+            result._avisos.push(`${lado.toUpperCase()}: cilindro não foi lido, mas o S.E. impresso (${seNum.toFixed(2)}) com a esfera (${esfNum.toFixed(2)}) implica C≈${cilImplicito.toFixed(2)} — esfera preservada; confira cilindro e eixo no ticket.`);
+            continue;
+          }
+          this._failEye(result, lado, `${lado.toUpperCase()}: S.E. lido (${seNum.toFixed(2)}) não bate com a esfera (${esfNum.toFixed(2)}) e a diferença não corresponde a um cilindro plausível. Refaça a captura.`);
+          continue;
+        }
+
+        const cilNum = parseFloat(eye.cil);
         const seCalculado = esfNum + cilNum / 2;
         const diff = Math.abs(seNum - seCalculado);
-        if (diff > 0.30) {
-          result._captureFailed = true;
-          result._reason = `${lado.toUpperCase()}: S.E. lido (${seNum.toFixed(2)}) não bate com S+C/2 calculado (${seCalculado.toFixed(2)}) — diferença ${diff.toFixed(2)}D indica leitura incorreta. Refaça a captura.`;
-          break;
+        if (diff > OCR_TOL.SE_CROSSCHECK) {
+          // A conta do próprio ticket aponta qual cilindro fecharia — informação
+          // que o médico usa para decidir se vale refazer a foto ou digitar.
+          const cilImplicito = 2 * (seNum - esfNum);
+          result._avisos.push(`${lado.toUpperCase()}: com o S.E. impresso (${seNum.toFixed(2)}) e a esfera (${esfNum.toFixed(2)}), o cilindro que fecharia a conta seria C≈${cilImplicito.toFixed(2)} (lido: ${cilNum.toFixed(2)}).`);
+          this._failEye(result, lado, `${lado.toUpperCase()}: S.E. lido (${seNum.toFixed(2)}) não bate com S+C/2 calculado (${seCalculado.toFixed(2)}) — diferença ${diff.toFixed(2)}D indica leitura incorreta. Refaça a captura.`);
+          continue;
         }
       }
     }
 
-    // ===== Sanity sobre tonometria =====
+    // ===== Tonometria: sanity + conferência + alerta clínico (v5.5.0) =====
+    //
+    // Até aqui a PIO só passava por uma faixa de plausibilidade: toda a
+    // artilharia de conferência (2ª chamada, leitura ampliada, desempates)
+    // protegia apenas a refração, e um "13" lido como "18" entrava no prontuário
+    // sem que nada olhasse duas vezes. O ticket imprime as medições individuais
+    // ao lado do AVG — é uma conferência que já está no papel e custa zero
+    // chamada, exatamente como o cross-check médias-vs-média da refração.
     if (result.tonometria) {
       for (const lado of ['od', 'oe']) {
         const v = result.tonometria[lado];
@@ -1158,8 +2414,39 @@ Responda APENAS com o JSON. Sem texto antes, sem texto depois, sem markdown.
         if (isNaN(num) || num < 5 || num > 40) {
           result._avisos.push(`Tonometria ${lado.toUpperCase()} (${v}) fora da faixa 5-40 mmHg — descartada`);
           result.tonometria[lado] = null;
-        } else {
-          result.tonometria[lado] = num;
+          continue;
+        }
+        result.tonometria[lado] = num;
+
+        // Distância ao valor IMPRESSO mais próximo — não à faixa [min,max].
+        //
+        // O AVG do TOPCON não é a média do que está visível: leituras entre
+        // parênteses são excluídas da conta. Prova nas fotos reais:
+        //   2026-08-06  R  13 (14) (14)  AVG 13   ← média de 13,14,14 seria 14
+        //   2026-05-21  L  ERR (16) (18) AVG 19   ← nem a média, nem um dos dois
+        // Uma regra de faixa reprovaria a segunda linha por 1 mmHg. Este arquivo
+        // inteiro é a história de avisos espúrios ensinando o médico a ignorar
+        // avisos — a checagem só vale se pegar erro de DÍGITO (13 lido como 18),
+        // que é o que a folga de 3 mmHg separa de qualquer efeito de parênteses.
+        const medicoes = this._tonoMedicoes(raw, lado);
+        if (medicoes.length >= 1) {
+          const distancia = Math.min(...medicoes.map(m => Math.abs(num - m)));
+          if (distancia > 3) {
+            result._avisos.push(
+              `Tonometria ${lado.toUpperCase()}: o AVG lido (${num}) não bate com nenhuma medição do próprio ` +
+              `ticket (${medicoes.join(', ')}) — confira a PIO no papel.`
+            );
+          }
+        }
+
+        // Pendência do log 2026-07-31: PIO 24 mmHg foi injetada sem nenhum
+        // sinalizador. O valor está dentro da faixa de plausibilidade do
+        // aparelho, então nada o marcava — mas é hipertensão ocular e o motivo
+        // clínico de a tonometria estar sendo feita.
+        if (num > 21) {
+          result._avisos.push(
+            `PIO ${lado.toUpperCase()} = ${num} mmHg — acima de 21. Considere avaliação de hipertensão ocular/glaucoma.`
+          );
         }
       }
     }
@@ -1185,12 +2472,18 @@ Responda APENAS com o JSON. Sem texto antes, sem texto depois, sem markdown.
     }
 
     // ===== Metadados de propagação =====
-    if (result._captureFailed) {
-      result._blockAutoInject = true;
-      result._validationWarnings = [result._reason];
-    } else if (result._avisos.length > 0) {
-      result._validationWarnings = result._avisos.slice();
+    //
+    // Mais de um ticket na foto (v5.5.0): não bloqueia — o modelo pode ter lido
+    // tudo do papel certo —, mas o médico precisa saber que a foto tinha dois
+    // exames, possivelmente de horários diferentes. Caso real na foto de
+    // 2026-08-06 08:57: tono/paqui grampeado por cima do ticket de refração.
+    if (raw._ticketsMultiplos === true) {
+      const aviso = 'A foto tem mais de um ticket — confira se refração, tonometria e paquimetria vieram todas do exame de hoje.';
+      this.logger.warn('[OCR] ' + aviso);
+      if (!result._avisos.includes(aviso)) result._avisos.push(aviso);
     }
+
+    this._resolveBlocking(result);
     if (raw._ticketFoiRotacionado) result._ticketInvertido = true;
 
     // CIDs de refração inferidos deterministicamente (só quando captura válida)
@@ -1199,6 +2492,79 @@ Responda APENAS com o JSON. Sem texto antes, sem texto depois, sem markdown.
       : [];
 
     return result;
+  }
+
+  /**
+   * Marca a REFRAÇÃO como não-injetável, sem condenar a captura (v5.4.0).
+   *
+   * Antes, toda divergência de S/C/A setava _captureFailed e o consumidor
+   * descartava o ticket inteiro. Tonometria e paquimetria são outras seções do
+   * papel, lidas de outros números, e não têm relação alguma com a divergência
+   * — no log 2026-08-03 às 17:46 tono 15/17 e paqui 517/515, sem conflito
+   * nenhum entre as leituras, foram jogadas fora por causa do cilindro do OE.
+   * A primeira razão registrada prevalece (é a que descreve a causa raiz).
+   */
+  _failRefraction(result, reason) {
+    result._refracaoBloqueada = true;
+    if (!result._refracaoReason) result._refracaoReason = reason;
+  }
+
+  /**
+   * Converte o estado de bloqueio no contrato que o consumidor entende.
+   *
+   * _captureFailed mantém o significado histórico "não há NADA aproveitável
+   * nesta captura" — todos os consumidores existentes continuam corretos.
+   * Refração bloqueada com tono/paqui vivos vira injeção parcial + aviso.
+   * Idempotente: extractExams chama de novo após a etapa de verificação.
+   */
+  _resolveBlocking(result) {
+    result._avisos = result._avisos || [];
+
+    // Bloqueio de um olho só (v5.4.4): o outro olho é injetado normalmente e o
+    // olho bloqueado vai como null — fillRefractionFields limpa os campos dele,
+    // então não sobra grau de consulta antiga na tela.
+    if (!result._refracaoBloqueada && result._olhosBloqueados && result.refracao) {
+      for (const [lado, motivo] of Object.entries(result._olhosBloqueados)) {
+        // "preservado", não "conferido": este aviso também é montado no
+        // pós-processamento, ANTES da 2ª chamada — dizer que o outro olho já foi
+        // conferido seria falso metade das vezes.
+        const aviso = `Refração do ${lado.toUpperCase()} NÃO injetada — ${motivo} O outro olho foi preservado.`;
+        if (!result._avisos.includes(aviso)) result._avisos.push(aviso);
+      }
+      result._validationWarnings = result._avisos.slice();
+    }
+
+    if (result._refracaoBloqueada) {
+      result.refracao = null;
+      result.cid_refracao = [];
+
+      const temTono = !!(result.tonometria &&
+        (result.tonometria.od != null || result.tonometria.oe != null));
+      const temPaqui = !!(result.paquimetria &&
+        (result.paquimetria.od != null || result.paquimetria.oe != null));
+
+      if (temTono || temPaqui) {
+        result._captureFailed = false;
+        result._blockAutoInject = false;
+        result._reason = null;
+        const aviso = `Refração NÃO injetada — ${result._refracaoReason} Tonometria/paquimetria desta captura foram preservadas.`;
+        if (!result._avisos.includes(aviso)) result._avisos.push(aviso);
+        result._validationWarnings = result._avisos.slice();
+      } else {
+        result._captureFailed = true;
+        result._blockAutoInject = true;
+        result._reason = result._refracaoReason;
+        result._validationWarnings = [result._reason];
+      }
+      return;
+    }
+
+    if (result._captureFailed) {
+      result._blockAutoInject = true;
+      result._validationWarnings = [result._reason];
+    } else if (result._avisos.length > 0) {
+      result._validationWarnings = result._avisos.slice();
+    }
   }
 
   /**
@@ -1282,10 +2648,12 @@ Responda APENAS com o JSON. Sem texto antes, sem texto depois, sem markdown.
 
     // EIXO: depende de CIL. Se CIL é null, EIXO é null obrigatoriamente.
     let eixo = null;
+    let eixoMedicoesValidos = [];
     if (cil !== null) {
       const eixoMedia = this._parseEixo(media?.a);
       const eixoMedicoes = medicoes.map(m => this._parseEixo(m?.a));
       const eixoValidos = eixoMedicoes.filter(v => v !== null);
+      eixoMedicoesValidos = eixoValidos.slice();
 
       const eixoUnanime = eixoValidos.length === 3 && eixoValidos.every(v => v === eixoValidos[0]);
       if (eixoMedia !== null && eixoUnanime && eixoValidos[0] !== eixoMedia) {
@@ -1334,7 +2702,10 @@ Responda APENAS com o JSON. Sem texto antes, sem texto depois, sem markdown.
     }
 
     if (esf != null) esf = String(esf).toLowerCase();
-    return { esf, cil, eixo, se, _cilDescartadoPorEixo: cilDescartadoPorEixo };
+    // `_eixoMedicoes` não é dado de prontuário: fica disponível para a etapa de
+    // conferência decidir se a MÉDIA de A é corroborada pelas próprias medições
+    // do olho (ver correção de eixo por 2-de-3 em extractExams).
+    return { esf, cil, eixo, se, _cilDescartadoPorEixo: cilDescartadoPorEixo, _eixoMedicoes: eixoMedicoesValidos };
   }
 
   /**
@@ -1356,6 +2727,24 @@ Responda APENAS com o JSON. Sem texto antes, sem texto depois, sem markdown.
     const num = parseInt(v, 10);
     if (isNaN(num)) return null;
     return num;
+  }
+
+  /**
+   * Medições individuais da linha TONO de um olho (v5.5.0).
+   *
+   * O TOPCON imprime algo como `R 13 (14)(14) AVG 13` — as medições e a média
+   * na MESMA linha. Isso é uma testemunha gratuita do AVG, do mesmo tipo que a
+   * refração já usa (média vs 3 medições), e estava sendo ignorada.
+   *
+   * Descarta o que não é medição de PIO: fora de 5-40 mmHg é ruído de OCR
+   * (número de série, horário, o "(14)" de uma leitura com ERR).
+   */
+  _tonoMedicoes(raw, lado) {
+    const brutas = raw?._tonoMedicoes?.[lado];
+    if (!Array.isArray(brutas)) return [];
+    return brutas
+      .map(v => parseFloat(v))
+      .filter(n => !isNaN(n) && n >= 5 && n <= 40);
   }
 
   /**

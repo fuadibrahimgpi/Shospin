@@ -134,6 +134,12 @@ const FIELD_INDICES = {
 
 const TAB_LOAD_DELAY = 800;
 
+// Prazo do 1º clique de recuperação da seção C.I.D. (ver o bloco de recuperação
+// em `searchCid`). Separado de TAB_LOAD_DELAY porque não é a montagem de uma aba
+// de prontuário: é o AJAX do menu da ficha, medido em 2026-08-04 como mais lento
+// que 1,6s pelo menos uma vez em cada duas cadeias de CID.
+const CID_SECTION_WAIT_MS = 5000;
+
 // Helper robust para extrair número da aba (ID do serviço do banco de dados do SHOSP)
 function extractTabNumber(tabId) {
   if (!tabId) return '';
@@ -1587,6 +1593,46 @@ function _isProntuarioOpen(doc) {
   return markers.some(sel => doc.querySelector(sel) !== null);
 }
 
+// Candidatos a "aba C.I.D." do menu lateral da ficha, em ordem de preferência.
+//
+// A busca de CID do SHOSP só roda com a seção VISÍVEL (medido em 2026-07-30), e
+// o caminho de recuperação escrito naquele dia clicava em `#tdCadastro-cid` — um
+// ID INVENTADO: todas as abas reais da ficha são `tdCadastro-<número>`
+// (TAB_IDS: 78073, 78074, 78726...). Com o elemento inexistente, o `if` inteiro
+// era no-op e a busca falhava direto na checagem seguinte. Foi o que aconteceu
+// com o H527 no log de 2026-07-31: a 1ª rodada de CIDs passou (seção ainda
+// visível), o injectAll navegou para outras abas e a 2ª rodada não conseguiu
+// voltar.
+//
+// Como o ID verdadeiro não é conhecido, a âncora aqui é o RÓTULO: o menu mostra
+// "C.I.D.". A comparação é por IGUALDADE do rótulo normalizado ("c.i.d." → "cid")
+// — nunca `includes`, senão "CIDADE" (presente em todo cadastro de paciente)
+// casaria e o clique navegaria a ficha para longe no meio da injeção.
+// Autocontida (só args + literais) para ser exercitada por _extractFn nos testes.
+function _findCidTabCandidates(doc) {
+  const d = doc || document;
+  // Só letras: "C.I.D." → "cid"; pontos, espaços e nbsp somem, e "CIDADE" segue
+  // sendo "cidade" (≠ "cid"), que é a comparação que importa.
+  const norm = (s) => String(s || '').toLowerCase().replace(/[^a-z]/g, '');
+  const out = [];
+  const push = (el) => { if (el && out.indexOf(el) === -1 && out.length < 5) out.push(el); };
+
+  // 1) O ID historicamente tentado — mantido como primeiro palpite, caso exista.
+  push(d.querySelector('#tdCadastro-cid'));
+  // 2) Itens do menu lateral da ficha (mesma família das demais abas).
+  // 3) Qualquer outro clicável rotulado exatamente "C.I.D.".
+  for (const sel of ['[id*="tdCadastro"]', 'a, li, td, th, span, button']) {
+    for (const el of d.querySelectorAll(sel)) {
+      const texto = (el.textContent || '').trim();
+      if (!texto || texto.length > 12) continue; // rótulo de aba é curto
+      if (norm(texto) !== 'cid') continue;
+      push(el);
+    }
+    if (out.length >= 5) break;
+  }
+  return out;
+}
+
 window.__shospMessageListener = (message, _sender, sendResponse) => {
   contentLogger.info('Mensagem recebida:', message.action);
 
@@ -1857,16 +1903,42 @@ window.__shospMessageListener = (message, _sender, sendResponse) => {
           // "Montada no DOM" não é o mesmo que "visível": a premissa anterior
           // ("quando este handler roda, a seção C.I.D. já está montada") era
           // verdadeira e ainda assim insuficiente.
-          let input = document.querySelector('#formCadProntuario #nomeCid')
+          const getCidInput = () => document.querySelector('#formCadProntuario #nomeCid')
             || document.getElementById('nomeCid');
-          if (input && input.offsetParent === null) {
-            const abaCid = document.getElementById('tdCadastro-cid');
-            if (abaCid) {
-              contentLogger.info('[searchCid] Seção C.I.D. oculta — ativando a aba antes de buscar');
-              abaCid.click();
-              await new Promise(r => setTimeout(r, TAB_LOAD_DELAY));
-              input = document.querySelector('#formCadProntuario #nomeCid')
-                || document.getElementById('nomeCid');
+          let input = getCidInput();
+          // Oculta OU nem montada: nos dois casos o caminho é o mesmo — clicar no
+          // item "C.I.D." do menu da ficha. A 2ª rodada de CIDs de uma consulta
+          // chega SEMPRE aqui, porque o injectAll navegou para outras abas entre
+          // as rodadas (log 2026-07-31: H520/H522 entraram, H527 não).
+          if (!input || input.offsetParent === null) {
+            const candidatos = _findCidTabCandidates(document);
+            contentLogger.info(`[searchCid] Seção C.I.D. oculta — ativando a aba antes de buscar (${candidatos.length} candidato(s))`);
+            for (let i = 0; i < candidatos.length; i++) {
+              const cand = candidatos[i];
+              cand.click();
+              // Espera ATIVA pela visibilidade: o menu monta a seção por AJAX e o
+              // delay fixo anterior era um chute. Teto generoso porque só se paga
+              // quando a seção está mesmo fechada.
+              //
+              // 2026-08-04: TAB_LOAD_DELAY*2 (1,6s) era CURTO DEMAIS para o 1º
+              // clique. Prova no log do dia: numa cadeia de dois CIDs, o H010
+              // falhou aqui com "não ficou visível" e o H524 — buscado 1,8s depois,
+              // na MESMA página, sem nenhum clique novo — passou. Ou seja: o clique
+              // funcionou e a seção só terminou de montar depois do prazo. O 1º
+              // candidato (o palpite bom) ganha um prazo maior; os seguintes ficam
+              // no prazo curto para não empilhar espera quando o rótulo casado não
+              // é a aba certa.
+              const espera = i === 0 ? CID_SECTION_WAIT_MS : TAB_LOAD_DELAY * 2;
+              const deadline = Date.now() + espera;
+              while (Date.now() < deadline) {
+                input = getCidInput();
+                if (input && input.offsetParent !== null) break;
+                await new Promise(r => setTimeout(r, 100));
+              }
+              if (input && input.offsetParent !== null) {
+                contentLogger.success(`[searchCid] Seção C.I.D. ativada via ${cand.tagName}#${cand.id || '(sem id)'} (${Date.now() - (deadline - espera)}ms)`);
+                break;
+              }
             }
           }
           if (!input) {
@@ -1878,7 +1950,39 @@ window.__shospMessageListener = (message, _sender, sendResponse) => {
             // Sem visibilidade a busca não roda: falhar explicitamente é melhor que
             // ler o histórico e lançar o CID errado (ou reportar sucesso falso).
             contentLogger.error('[searchCid] Seção C.I.D. permanece oculta — busca não roda');
-            sendResponse({ success: false, error: `CID ${term}: seção C.I.D. não ficou visível — a busca do SHOSP não executa oculta` });
+            // DUMP do menu da ficha, UMA LINHA POR ITEM. Sem acesso ao DOM real,
+            // é ele que torna o ID/rótulo verdadeiro da aba C.I.D. conhecível na
+            // próxima sessão — em vez de adivinhado, como foi `#tdCadastro-cid`.
+            // Uma linha por item porque um JSON.stringify único é truncado pelo
+            // console do Chrome (ver a nota do dump da refração estática).
+            const linha = (el, origem) => {
+              const t = (el.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 40);
+              contentLogger.info(`[searchCid] DUMP menu: ${origem} | id=${el.id || '(sem id)'} | ${el.tagName} | "${t}" | visivel=${el.offsetParent !== null}`);
+            };
+            for (const el of Array.from(document.querySelectorAll('[id*="tdCadastro"]')).slice(0, 20)) {
+              linha(el, 'aba');
+            }
+            // 2ª passada: qualquer rótulo curto que MENCIONE "cid" — cobre o caso
+            // de a seção não ser um `tdCadastro` (é a hipótese que sobra se a 1ª
+            // passada não mostrar nenhum item "C.I.D.").
+            let n = 0;
+            for (const el of document.querySelectorAll('a, li, td, th, span, button')) {
+              if (n >= 15) break;
+              const t = (el.textContent || '').trim();
+              if (!t || t.length > 40) continue;
+              if (!/cid/i.test(t) || (el.id && el.id.includes('tdCadastro'))) continue;
+              linha(el, 'rotulo');
+              n++;
+            }
+            // `code` é o contrato com o painel: a falha é AMBIENTAL (a seção não
+            // terminou de montar), não "o SHOSP não tem esse código". O painel
+            // reagenda o termo uma vez no fim da cadeia em cima deste código —
+            // casar a prosa em português entre os dois arquivos apodreceria.
+            sendResponse({
+              success: false,
+              code: 'CID_SECTION_HIDDEN',
+              error: `CID ${term}: seção C.I.D. não ficou visível — a busca do SHOSP não executa oculta`
+            });
             return;
           }
 

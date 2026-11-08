@@ -44,6 +44,79 @@ function openPermissionPage() {
 }
 
 // ============================================================================
+// SAÚDE DO MICROFONE
+// ============================================================================
+//
+// A falha mais cara desta extensão não gera erro: a track de áudio fica MUDA
+// (o SO/driver reconfigura o grafo de dispositivos — abrir a câmera em 4K é
+// um gatilho comum no Windows) e tudo segue "normal". MediaRecorder grava
+// silêncio, a Web Speech API não recebe áudio e não dispara `onerror`, o
+// status continua mostrando "Gravando...", e a consulta inteira se perde.
+// Caso real 2026-08-07: um único `onstart`, nenhum `onend` por 70s, nenhum
+// resultado, nenhuma linha de log — o `readyState` da track o tempo todo
+// dizendo 'live'.
+//
+// `muted` é a evidência que existe e nunca era lida. Ela é observável em dois
+// pontos: antes de reutilizar o stream, e ao vivo pelos eventos da track.
+
+/** Uma track que terminou OU que está muda não serve para gravar. */
+function _micTrackSaudavel(stream) {
+  const track = stream?.getAudioTracks?.()[0];
+  return !!track && track.readyState !== 'ended' && !track.muted;
+}
+
+/**
+ * Liga os eventos de saúde da track de áudio. Idempotente: os handlers são
+ * atribuídos (não acumulados com addEventListener), então re-observar o mesmo
+ * stream a cada gravação não empilha listeners.
+ */
+function _watchMicTrack(stream) {
+  const track = stream?.getAudioTracks?.()[0];
+  if (!track) return;
+
+  track.onmute = () => {
+    micMudoDetectado = true;
+    console.warn('[Mic] ⚠️ Track de áudio MUDA — o microfone parou de entregar som (nenhum erro é emitido pelo navegador).');
+    if (isRecording) _avisarMicMorto('⚠️ Microfone mudo — o áudio NÃO está sendo capturado');
+  };
+
+  track.onunmute = () => {
+    micMudoDetectado = false;
+    console.log('[Mic] Track de áudio voltou a entregar som.');
+    if (isRecording && !stopCommandTimeout) {
+      statusText.textContent = 'Gravando...';
+      statusText.style.color = '#ef4444';
+      // A Web Speech API perde a sessão quando o áudio some; sem esta sonda ela
+      // ficaria parada até o fim da consulta.
+      _probeSpeechAlive();
+    }
+  };
+
+  track.onended = () => {
+    micMudoDetectado = true;
+    console.warn('[Mic] ⚠️ Track de áudio ENCERRADA durante a sessão.');
+    if (isRecording) _avisarMicMorto('⚠️ Microfone perdido — reinicie a gravação');
+  };
+}
+
+/** Solta os handlers de uma track que vai ser descartada. */
+function _unwatchMicTrack(stream) {
+  const track = stream?.getAudioTracks?.()[0];
+  if (!track) return;
+  track.onmute = null;
+  track.onunmute = null;
+  track.onended = null;
+}
+
+/** Aviso visível de captura morta. O médico precisa VER antes da despedida. */
+function _avisarMicMorto(msg) {
+  semFalaAvisoAtivo = true;
+  statusText.textContent = msg;
+  statusText.style.color = '#dc2626';
+  statusText.style.fontWeight = 'bold';
+}
+
+// ============================================================================
 // GRAVAÇÃO
 // ============================================================================
 
@@ -68,10 +141,26 @@ async function toggleRecording() {
 
 async function startRecording() {
   try {
-    // Reutilizar stream existente ou criar novo
-    if (!persistentStream || persistentStream.getTracks()[0].readyState === 'ended') {
+    // Reutilizar stream existente ou criar novo.
+    // `muted` conta como inválido: uma track MUDA passa em `readyState` como se
+    // estivesse saudável (readyState só vira 'ended' quando ela termina de vez),
+    // e o stream reutilizado carrega o mudo para a sessão seguinte — a gravação
+    // roda inteira sem capturar nada. Caso real 2026-08-07: 70s de consulta,
+    // zero texto, zero erro no console.
+    if (!persistentStream || !_micTrackSaudavel(persistentStream)) {
+      if (persistentStream) {
+        console.warn('[Mic] Stream anterior inutilizável (encerrado ou mudo) — readquirindo microfone.');
+        // Desligar os handlers ANTES do stop(): `stop()` dispara `ended` na track
+        // antiga, e o handler pintaria "Microfone perdido" em vermelho no meio de
+        // uma reaquisição que está dando certo. Hoje `isRecording` ainda é false
+        // aqui e o aviso não sairia — mas isso é posição, não intenção.
+        _unwatchMicTrack(persistentStream);
+        try { persistentStream.getTracks().forEach(t => t.stop()); } catch (_e) { /* já parado */ }
+      }
       persistentStream = await navigator.mediaDevices.getUserMedia({ audio: true });
     }
+    micMudoDetectado = false;
+    _watchMicTrack(persistentStream);
     permissionChecked = true;
 
     mediaRecorder = new MediaRecorder(persistentStream);
@@ -116,6 +205,8 @@ async function startRecording() {
     // Timestamp de início — usado para calcular duração mínima da sessão
     sessionStartTime = Date.now();
     lastSpeechTime = Date.now();
+    ultimoRecicloSpeech = Date.now();
+    reciclosSpeechNaSessao = 0;
     semFalaAvisoAtivo = false;
     if (silenceCheckInterval) clearInterval(silenceCheckInterval);
     silenceCheckInterval = setInterval(_checkSilence, 10_000);
@@ -181,7 +272,10 @@ async function startRecording() {
           }
         }
       } else {
-        console.log('[Audio] Nenhum som/fala detectado na sessão, pulando espera.');
+        // "Sem TEXTO", não "sem som": hasSpeech vem de recognizedText, não de
+        // nível de áudio. A mensagem antiga afirmava um silêncio que ninguém
+        // mediu e mandava procurar o problema no lugar errado.
+        console.log('[Audio] Nenhum texto reconhecido na sessão, pulando espera.');
       }
 
       // Parar de vez e limpar
@@ -192,7 +286,8 @@ async function startRecording() {
         const words = capturedText.trim().split(/\s+/).length;
         console.log(`[Audio] Texto capturado para processamento (${words} palavras):`, capturedText.substring(0, 120) + (capturedText.length > 120 ? '…' : ''));
       } else {
-        console.warn('[Audio] ⚠️ recognizedText está VAZIO ao parar — Speech API não produziu resultados finais nesta sessão.');
+        const _micState = persistentStream && !_micTrackSaudavel(persistentStream) ? 'MUDA/encerrada' : 'ok';
+        console.warn(`[Audio] ⚠️ recognizedText está VAZIO ao parar — Speech API não produziu resultados finais nesta sessão. Track de áudio: ${_micState}${micMudoDetectado ? ' (mudo detectado durante a sessão)' : ''}.`);
       }
 
       // Fallbacks de segurança: se o médico parou manualmente ANTES do Speech API
@@ -399,13 +494,23 @@ async function processAudioInBackground(audioBlob, capturedText) {
       } else {
         console.log('[Audio] Nenhum texto capturado — sessão encerrada sem dados.');
         processingStatus.textContent = '';
-        statusText.textContent = '⚠️ Nenhuma fala detectada — sessão descartada';
-        statusText.style.color = '#eab308';
-        statusText.style.fontWeight = 'normal';
+        // Distinguir "ninguém falou" de "o microfone estava mudo": a segunda é
+        // uma falha do equipamento e o médico precisa saber ANTES de atribuir a
+        // perda a si mesmo — e antes de atender o próximo paciente.
+        if (micMudoDetectado) {
+          statusText.textContent = '⚠️ Microfone mudo nesta sessão — nada foi capturado';
+          statusText.style.color = '#dc2626';
+          statusText.style.fontWeight = 'bold';
+        } else {
+          statusText.textContent = '⚠️ Nenhuma fala detectada — sessão descartada';
+          statusText.style.color = '#eab308';
+          statusText.style.fontWeight = 'normal';
+        }
         setTimeout(() => {
           statusText.textContent = 'Clique para iniciar o ditado';
           statusText.style.color = '';
-        }, 4000);
+          statusText.style.fontWeight = '';
+        }, micMudoDetectado ? 15000 : 4000);
         return;
       }
     }
@@ -530,6 +635,10 @@ async function processAudioInBackground(audioBlob, capturedText) {
               examesNormaisInjetados: SessionFlags.examesNormaisInjetados,
               dilatacaoDetectada:     SessionFlags.dilatacaoDetectada,
             },
+            // Pseudofacia AO veta H52.4 (guard de presbiopia). Calculada aqui porque
+            // o parser canônico vive no sidepanel; o DE não tem parser próprio.
+            pseudofacia: (typeof parsePseudofaciaFromDados === 'function')
+              ? parsePseudofaciaFromDados(data.dados) : null,
             tipoConsulta: data.tipo_consulta,
           });
           if (decision.guardsApplied.length > 0) {
@@ -544,6 +653,7 @@ async function processAudioInBackground(audioBlob, capturedText) {
           // Copiar flags reconciliadas de volta para o objeto de trabalho
           workingData.injectExamesNormais = decision.injectFlags.injectExamesNormais;
           workingData.injectBlefarite     = decision.injectFlags.injectBlefarite;
+          workingData.blefariteDescritaNoExame = decision.injectFlags.blefariteDescritaNoExame;
           if (decision.injectFlags.dilatacao) SessionFlags.dilatacaoDetectada = true;
         }
       } catch (e) {
@@ -849,14 +959,21 @@ async function cancelarDilatacao() {
             examesNormaisInjetados: SessionFlags.examesNormaisInjetados,
             dilatacaoDetectada:     false,
           },
+          pseudofacia: (typeof parsePseudofaciaFromDados === 'function')
+            ? parsePseudofaciaFromDados(data.dados) : null,
           tipoConsulta: data.tipo_consulta,
         });
         if (decision.guardsApplied.length > 0) {
           console.log('[Dilatacao] Reprocessamento — guards:', decision.guardsApplied);
         }
+        // O banner é o ÚNICO sinal visível quando um template é suprimido (ex.: blefarite
+        // sem inflamação descrita deixa a biomicroscopia em branco). Sem esta chamada, a
+        // fase 2 volta a falhar em silêncio como no log 2026-07-29.
+        _showClinicalWarnings(decision.avisos);
         workingData = decision.clonedAIResponse;
         workingData.injectExamesNormais = decision.injectFlags.injectExamesNormais;
         workingData.injectBlefarite     = decision.injectFlags.injectBlefarite;
+        workingData.blefariteDescritaNoExame = decision.injectFlags.blefariteDescritaNoExame;
       }
     } catch (e) {
       console.warn('[Dilatacao] DecisionEngine falhou no reprocessamento (não-fatal):', e.message);
@@ -901,9 +1018,80 @@ const SILENCE_MIN_WORDS      = 40;      // mínimo de palavras capturadas
 const SILENCE_THRESHOLD_MS   = 180_000; // 3 min sem fala dispara o aviso
 const SILENCE_WARN_MS        = 5_000;   // 5s de aviso antes de parar
 const SEM_FALA_AVISO_MS      = 30_000;  // 30s sem fala mostra aviso de mic morto
+// 40s sem NENHUM `onresult` (nem interim) derruba e recria o reconhecedor. O
+// intervalo fica bem abaixo do SILENCE_THRESHOLD_MS para dar 3–4 tentativas de
+// ressuscitar a captura antes que o auto-stop sequer considere encerrar, e bem
+// acima da pausa normal entre falas de um exame (o interim dispara a cada
+// ruído, não só a cada frase completa).
+const SPEECH_RECICLO_MS      = 40_000;
+
+/**
+ * Saúde da captura — sinais OBJETIVOS, não inferência a partir de silêncio.
+ * Roda inclusive com a câmera aberta, onde o silêncio é normal mas a morte do
+ * microfone (justamente o que abrir a câmera provoca) não seria vista por
+ * nenhuma outra rede.
+ */
+function _checkMicHealth() {
+  if (persistentStream && !_micTrackSaudavel(persistentStream)) {
+    if (!micMudoDetectado) {
+      micMudoDetectado = true;
+      console.warn('[Mic] ⚠️ Track de áudio inutilizável (mute/ended) detectada no polling.');
+    }
+    _avisarMicMorto('⚠️ Microfone mudo — o áudio NÃO está sendo capturado');
+    return;
+  }
+  if (stopCommandTimeout) return;
+  if (_probeSpeechAlive() === 'alive') _checkSpeechProduzindo();
+}
+
+/**
+ * Prova de PRODUÇÃO — a que a sonda de liveness não dá.
+ *
+ * `_probeSpeechAlive` só distingue "parado" de "rodando": um reconhecedor zumbi
+ * (rodando, sem entregar `onresult` nem `no-speech`) devolve 'alive' a cada 10s
+ * indefinidamente. Foi assim que o log 2026-09-03 perdeu os 3 minutos finais da
+ * consulta — fim da refração, conduta e despedida — sem uma linha de aviso.
+ *
+ * O único sinal confiável de que a captura funciona é texto chegando. Sem
+ * `onresult` por SPEECH_RECICLO_MS, a sessão é descartada e recriada do zero:
+ * `stop()` não tira um zumbi do lugar (ele não emite `onend`), então o objeto
+ * inteiro é abandonado e um novo `SpeechRecognition` assume.
+ *
+ * `lastSpeechTime` NÃO é tocado aqui: o reciclo é uma tentativa de conserto, não
+ * prova de fala. Zerá-lo tornaria o auto-stop por silêncio inalcançável.
+ */
+function _checkSpeechProduzindo() {
+  if (Date.now() - lastSpeechTime < SPEECH_RECICLO_MS) return;
+  if (Date.now() - ultimoRecicloSpeech < SPEECH_RECICLO_MS) return;
+  _reciclarSpeechRecognition(`${Math.round((Date.now() - lastSpeechTime) / 1000)}s sem onresult`);
+}
+
+/** Derruba o reconhecedor atual e sobe um novo. Seguro contra o zumbi. */
+function _reciclarSpeechRecognition(motivo) {
+  ultimoRecicloSpeech = Date.now();
+  reciclosSpeechNaSessao++;
+  console.warn(`[Speech] Reciclo forçado #${reciclosSpeechNaSessao} (${motivo}) — sessão viva mas sem produzir texto.`);
+
+  const _velho = speechRecognition;
+  // Zerar a referência ANTES de parar: os handlers do objeto velho comparam
+  // contra `speechRecognition` e viram no-op, então o `onend` atrasado dele não
+  // derruba `isSpeechActive` nem tenta reiniciar a sessão nova.
+  speechRecognition = null;
+  isSpeechActive = false;
+  try { _velho?.abort(); } catch (_e) { /* zumbi não responde — esperado */ }
+
+  startSpeechRecognition();
+}
 
 function _checkSilence() {
-  if (!isRecording || stopCommandTimeout || SessionFlags.dilatacaoDetectada || silencePendingStop) return;
+  if (!isRecording) return;
+
+  _checkMicHealth();
+
+  if (stopCommandTimeout || SessionFlags.dilatacaoDetectada || silencePendingStop) return;
+  // O aviso por silêncio e o auto-stop seguem suspensos durante a câmera: ali o
+  // silêncio é esperado, e avisar em toda captura de OCR treinaria o médico a
+  // ignorar o aviso. A morte do microfone já é coberta por _checkMicHealth.
   if (isSpeechPausedByCamera) return;
 
   const silenceMs = Date.now() - lastSpeechTime;
@@ -933,9 +1121,29 @@ function _checkSilence() {
   silencePendingStop = setTimeout(() => {
     silencePendingStop = null;
     if (isRecording && !stopCommandTimeout) {
-      console.log('[Silence] Auto-stop por silêncio — encerrando consulta');
-      SessionFlags.consultaEncerradaDetectada = true;
+      // O auto-stop NÃO é um encerramento de consulta — é uma rede de segurança
+      // contra gravação esquecida. Marcar consultaEncerradaDetectada aqui era
+      // afirmar uma despedida que ninguém disse: a flag bypassa o guard de
+      // "exame em andamento" e libera o fallback de exames normais na injeção.
+      // No log 2026-09-03 foi ela que transformou uma captura morta no meio da
+      // refração em prontuário completo e injetado. Só é setada quando a
+      // despedida REALMENTE está no texto (o hook pode ter perdido o gatilho
+      // por restart do Speech no momento exato).
+      const _txt = normalizeText(recognizedText) || normalizeText(recentTextBuffer);
+      const _despediu = ClinicalTriggers.detectaEncerramentoNaFala(_txt);
+      if (_despediu) {
+        SessionFlags.consultaEncerradaDetectada = true;
+        console.log('[Silence] Auto-stop por silêncio — despedida presente no texto, tratando como encerramento');
+      } else {
+        console.warn(`[Silence] Auto-stop por silêncio SEM despedida no texto — a consulta pode ter sido cortada (reciclos do reconhecedor nesta sessão: ${reciclosSpeechNaSessao}). Sem bypass do guard de exame e sem fallback de exames normais.`);
+      }
       stopRecording();
+      if (!_despediu) {
+        // stopRecording deixa "Processando..."; o médico precisa ver que este
+        // encerramento foi da rede de segurança, não da consulta.
+        statusText.textContent = '⚠️ Parada por silêncio — confira se o fim da consulta foi capturado';
+        statusText.style.color = '#f59e0b';
+      }
     }
   }, SILENCE_WARN_MS);
 }
@@ -962,12 +1170,22 @@ function startSpeechRecognition() {
     speechRecognition.interimResults = true;
     speechRecognition.lang = 'pt-BR';
 
+    // Identidade da sessão. Um reconhecedor reciclado ainda pode emitir eventos
+    // atrasados (o `onend` do zumbi chega minutos depois); sem esta guarda, esses
+    // eventos mexeriam no estado da sessão NOVA — `isSpeechActive = false` num
+    // reconhecedor saudável reabre exatamente o buraco que o reciclo fechou.
+    const _rec = speechRecognition;
+    const _daSessaoAtual = () => speechRecognition === _rec;
+
     speechRecognition.onstart = () => {
+      if (!_daSessaoAtual()) return;
       isSpeechActive = true;
+      speechEndSeen = false;
       console.log('[Speech] Reconhecimento de voz iniciado.');
     };
 
     speechRecognition.onresult = (event) => {
+      if (!_daSessaoAtual()) return;
       // Fala detectada — resetar contador de no-speech e timestamp de silêncio
       noSpeechCount = 0;
       lastSpeechTime = Date.now();
@@ -1028,6 +1246,7 @@ function startSpeechRecognition() {
     }; // fim do speechRecognition.onresult
 
     speechRecognition.onerror = (event) => {
+      if (!_daSessaoAtual()) return;
       isSpeechActive = false;
       if (event.error === 'no-speech') {
         noSpeechCount++;
@@ -1045,8 +1264,9 @@ function startSpeechRecognition() {
           setTimeout(() => {
             isSpeechBackingOff = false; // Desativar trava de backoff
             noSpeechCount = 0; // reset para nova janela de tentativas
-            // Reiniciar só se ainda estiver gravando, sem stop agendado e sem pausa por câmera
-            if (isRecording && speechRecognition && !stopCommandTimeout && !isSpeechPausedByCamera && !isSpeechActive) {
+            // Reiniciar só se ainda estiver gravando e sem stop agendado.
+            // (A câmera não bloqueia mais a recuperação — ver onend.)
+            if (isRecording && speechRecognition && !stopCommandTimeout && !isSpeechActive) {
               try {
                 speechRecognition.start();
                 isSpeechActive = true;
@@ -1071,11 +1291,11 @@ function startSpeechRecognition() {
 
         // Auto-recuperação para erros de hardware/transientes (ex: interrupção por getUserMedia)
         // speechRecoveryTimer é cancellable — evita acúmulo de timers em erros repetidos.
-        if (isRecording && !stopCommandTimeout && !isSpeechPausedByCamera) {
+        if (isRecording && !stopCommandTimeout) {
           clearTimeout(speechRecoveryTimer);
           speechRecoveryTimer = setTimeout(() => {
             speechRecoveryTimer = null;
-            if (isRecording && speechRecognition && !stopCommandTimeout && !isSpeechPausedByCamera && !isSpeechActive) {
+            if (isRecording && speechRecognition && !stopCommandTimeout && !isSpeechActive) {
               try {
                 speechRecognition.start();
                 isSpeechActive = true;
@@ -1092,13 +1312,21 @@ function startSpeechRecognition() {
     };
 
     speechRecognition.onend = () => {
+      if (!_daSessaoAtual()) return;
       isSpeechActive = false;
+      speechEndSeen = true;
       console.log('[Speech] Reconhecimento de voz encerrado.');
-      
-      // Não reiniciar o speech se um comando de parada já foi agendado, se está pausado pela câmera ou em backoff.
-      if (isRecording && speechRecognition && !stopCommandTimeout && !isSpeechPausedByCamera && !isSpeechBackingOff) {
+
+      // Não reiniciar se um comando de parada já foi agendado ou se está em backoff.
+      //
+      // A câmera NÃO bloqueia mais o restart. Ela nunca parou o reconhecimento
+      // (pauseSpeechRecognition só levanta uma flag — a câmera é vídeo-only),
+      // então bloquear a recuperação aqui era herança de quando ela parava: um
+      // `onend` do Chrome no meio de uma captura de OCR ficava sem restart até
+      // a câmera fechar, e a consulta seguia gravando nada. Ver log 2026-08-07.
+      if (isRecording && speechRecognition && !stopCommandTimeout && !isSpeechBackingOff) {
         setTimeout(() => {
-          if (isRecording && speechRecognition && !stopCommandTimeout && !isSpeechPausedByCamera && !isSpeechActive) {
+          if (isRecording && speechRecognition && !stopCommandTimeout && !isSpeechActive) {
             try {
               speechRecognition.start();
               isSpeechActive = true;
@@ -1126,6 +1354,39 @@ function stopSpeechRecognition() {
   }
 }
 
+/**
+ * Sonda de liveness do reconhecedor — e conserto no mesmo gesto.
+ *
+ * `isSpeechActive` é otimista: é marcado `true` ao CHAMAR `start()` e só volta
+ * a `false` no `onend`. Quando o Chrome mata a sessão sem emitir `onend` (é o
+ * que acontece quando o áudio some), a flag fica presa em `true` e todo caminho
+ * de recuperação — que testa `!isSpeechActive` — vira no-op silencioso.
+ *
+ * `start()` numa sessão viva lança `InvalidStateError` sem efeito colateral.
+ * Isso torna a própria chamada o teste: se lançar, estava vivo; se não lançar,
+ * estava morto e acabou de voltar.
+ *
+ * @returns {'alive'|'restarted'|'failed'|'skip'}
+ */
+function _probeSpeechAlive() {
+  if (!isRecording || !speechRecognition || stopCommandTimeout || isSpeechBackingOff) return 'skip';
+  try {
+    speechRecognition.start();
+    isSpeechActive = true;
+    // Os dois casos são falhas diferentes e não podem sair com a mesma frase:
+    // com `onend` visto, o restart de 300ms é que não pegou; sem ele, a sessão
+    // morreu sem emitir evento nenhum — que é o modo silencioso do log 2026-08-07.
+    console.warn(speechEndSeen
+      ? '[Speech] Reconhecedor parado após onend (restart não pegou) — reiniciado pela sonda.'
+      : '[Speech] Reconhecedor estava parado sem ter emitido onend — reiniciado pela sonda.');
+    return 'restarted';
+  } catch (e) {
+    if (e?.name === 'InvalidStateError') return 'alive';
+    console.warn('[Speech] Sonda de liveness falhou:', e?.message);
+    return 'failed';
+  }
+}
+
 function pauseSpeechRecognition() {
   if (!isRecording) return;
   // Apenas sinaliza que a câmera está ativa — NÃO para o Speech API.
@@ -1142,18 +1403,17 @@ function resumeSpeechRecognition() {
     return;
   }
   isSpeechPausedByCamera = false;
-  console.log('[Speech] Reconhecimento retomado após fechar câmera.');
 
-  if (speechRecognition && !isSpeechActive && !stopCommandTimeout) {
-    try {
-      speechRecognition.start();
-      isSpeechActive = true;
-      statusText.textContent = 'Gravando...';
-      statusText.style.color = '#ef4444';
-      statusText.style.fontWeight = 'bold';
-    } catch (e) {
-      console.warn('[Speech] Erro ao retomar reconhecimento:', e.message);
-    }
+  // Não confiar em `isSpeechActive` aqui: no log 2026-08-07 esta função logou
+  // "retomado" e não reiniciou nada, porque a flag ainda dizia `true` enquanto o
+  // reconhecedor estava morto havia 70s. A sonda descobre o estado real.
+  const estado = _probeSpeechAlive();
+  console.log(`[Speech] Reconhecimento retomado após fechar câmera (reconhecedor: ${estado}).`);
+
+  if ((estado === 'alive' || estado === 'restarted') && !micMudoDetectado) {
+    statusText.textContent = 'Gravando...';
+    statusText.style.color = '#ef4444';
+    statusText.style.fontWeight = 'bold';
   }
 }
 

@@ -84,10 +84,22 @@ pupila regular e reagente, cristalino transparente
 ### Biomicroscopia Blefarite
 ```
 AO: hiperemia e espessamento da margem palpebral, telangiectasias
-e disfunção de glândulas de meibômio com secreção espessa;
-córnea transparente, câmara anterior formada, pupila regular e
-reagente, cristalino transparente
+e disfunção de glândulas de meibômio; córnea transparente, câmara
+anterior formada, pupila regular e reagente, cristalino transparente
 ```
+> ⛔ **"com secreção espessa" saiu do template** (2026-08-04): é achado à parte
+> (meibum expressível), só escrito quando o médico falou de secreção ou glândula
+> entupida. No bloco padrão ela era afirmada em toda blefarite injetada.
+> ⛔ **NÃO é texto de rotina** (2026-08-04). Só entra quando o médico DESCREVEU
+> inflamação palpebral — blefarite/meibomite, pálpebra ou bordo vermelho/inflamado,
+> crosta, caspa, descamação, secreção, glândulas entupidas, "pontinhos de inflamação".
+> Prescrever shampoo, compressa ou higiene palpebral **não** autoriza a descrição:
+> tratamento não é exame. Sem descrição, `injectBlefarite` continua de pé (conduta e
+> tratamento entram), a biomicroscopia fica **em branco** e o médico recebe aviso.
+> Gate: `injectFlags.blefariteDescritaNoExame` (DecisionEngine).
+> ✅ **"informação na pálpebra" conta como inflamação** (2026-08-05): o ASR troca
+> "inflamação" por "informação" ("uma informaçãozinha na pálpebra" — achado real,
+> suprimido). Vale só COLADA à pálpebra/bordo/cílios; "uma informação" solta, não.
 
 ### Fundoscopia Normal
 ```
@@ -414,9 +426,22 @@ o encerramento (provável marcador faltando). `encerrar consulta` ignora o gate.
 
 ### OPACIDADE_CAPSULA_COMMANDS
 ```
-'limpeza da lente', 'opacidade de capsula', 'capsulotomia', 'yag',
-'opacificacao da capsula posterior'
+'opacidade de capsula', 'capsula posterior opaca', 'capsulotomia', 'yag',
+'opacificacao da capsula posterior', 'limpar a lente',
+— linguagem leiga (2026-08-05):
+'lente ta embacada', 'lente ta um pouquinho embacada', 'lente ta embacando',
+'sujeirinha na lente', 'lente ta suja', 'embacamento na lente',
+'vai precisar fazer uma limpeza', 'dar uma limpada na lente'
+(+ variações — ver config/clinical-triggers.js)
 ```
+> ⚠️ `'limpeza da lente'` (substantivo solto) foi REMOVIDO em 2026-06-18: casava o relato
+> HISTÓRICO do paciente (*"já fiz a limpeza da lente"*). REGRA para frases de limpeza:
+> o marcador de **futuro/necessidade** tem que estar DENTRO da string
+> (`'vai precisar fazer uma limpeza'`), ou o objeto explícito (`'limpar a lente'`).
+> Embaçamento/sujeira ficam ancorados em `lente`/`capsula` — `embacada` solto é a queixa
+> de visão do paciente.
+> `LENTE_LIMPA_COMMANDS` continua sendo o override definitivo: dito "a lente está limpa",
+> a opacidade não dispara mais naquela sessão.
 
 ### OLHO_IRRITADO_COMMANDS
 ```
@@ -504,6 +529,26 @@ o encerramento (provável marcador faltando). `encerrar consulta` ignora o gate.
 **Arquivos corrigidos:** `scripts/sidepanel-constants.js` — `parseCatarataFromDiagnostico()` agora remove os trechos de contexto cirúrgico ('cirurgia de catarata', 'operad[ao] de catarata', 'facectomia') antes da detecção; um diagnóstico real sobrevive por CID H25/H26.0–3 ou pela palavra fora desses contextos. `config/clinical-triggers.js` — adicionado `'fez uma cirurgia de catarata'` em LIO_COMMANDS. Testes `[CAT-DX-7..8]` em `utils/hooks-test.js`
 **Data:** 2026-07-17
 
+### Caso 7d — "cristalino transparente" em paciente pseudofácica (o placeholder virou a afirmação) ⭐
+**Sintoma:** paciente relatou cirurgia de catarata AO há 1 ano e o médico confirmou a lente boa; a biomicroscopia injetada afirmou **"cristalino transparente"** — um olho sem cristalino descrito como tendo cristalino (log 2026-08-03)
+**Causa:** três falhas em série:
+  1. O **prompt** mandava terminar TODA linha com `cristalino transparente` ("o sistema substitui automaticamente"). O modelo sabia da pseudofacia — o próprio raciocínio dizia "mantendo 'cristalino transparente' como placeholder" — e ainda assim escreveu a contradição
+  2. Nenhum gatilho de LIO disparou: quem falou foi a **paciente, em 1ª pessoa** ("eu fiz a cirurgia de catarata tem um ano") e LIO_COMMANDS só tinha as formas de 3ª pessoa (`fez`/`fez a`/`fez uma cirurgia de catarata`)
+  3. Não havia rede determinística: a derivação por diagnóstico só cobre catarata, e esta consulta nem emitiu `Z96.1` (CIDs foram H401/H524/H010) — a cirurgia estava em `antecedentes_oftalmologicos`
+**Correções:**
+  1. `src/gemini-interview-agent.js` — o placeholder deixou de ser regra absoluta: agora é o caso **fácico**, com exceção obrigatória para o olho pseudofácico (escreve `pseudofacia, LIO transparente e bem posicionada` direto na linha), lista de evidências de cirurgia JÁ realizada e regra de lateralidade + exemplos
+  2. `config/clinical-triggers.js` — LIO_COMMANDS ganhou a fala do paciente: `fiz (a/uma) cirurgia de catarata`, `operei de catarata`, `operei a catarata`, `operei o olho(s)`, `fui operad[ao] de catarata`
+  3. `scripts/sidepanel-constants.js` — nova `parsePseudofaciaFromDados()` (lê `antecedentes_oftalmologicos` + `diagnostico` + `biomicroscopia`, ignora cirurgia planejada e negativas) e `getBiomicroscopiaComLente()` ganhou **guard de texto misto** (não converte o placeholder do olho fácico quando a outra linha já afirma LIO) e **lateralidade** via `SessionFlags.lioLado`
+  4. `scripts/sidepanel-injection.js` — reconciliação de pseudofacia antes da de catarata; só liga a flag com o **lado conhecido**, senão apenas avisa no console
+**Regra que ficou:** o texto do modelo é a decisão da lente; o runtime é rede de segurança. Pseudofacia sem lado definido **não** substitui nada — placeholder visível é melhor que cirurgia inventada no olho são.
+**Testes:** `[LENTE-5..8]` e `[PSEUDO-1..7]` em `utils/hooks-test.js`
+**Data:** 2026-08-03
+**Desdobramento (2026-08-04):** a mesma consulta também saiu com `H524 - Presbiopia` num
+paciente pseudofácico AO. Olho sem cristalino não tem acomodação a perder — veto de
+presbiopia por pseudofacia **bilateral** no prompt e no `_guardPresbiopiaObrigatoria`
+(`src/DecisionEngine.js`), usando a lateralidade de `parsePseudofaciaFromDados()`.
+Ver `transcricao-consulta-oftalmologia/SKILL.md` → "FLAGS DE DIAGNÓSTICO — Presbiopia".
+
 ### Caso 7b — Regressão do Caso 7: catarata vence LIO quando ambas as flags disparam ⭐
 **Sintoma:** Biomicroscopia injeta "catarata" em paciente pseudofácico (consulta 2026-06-30: log mostrou `[Hook] Flag: catarata detectada` + `[Hook] Flag: LIO detectada`; o CID veio correto — `Z961 - Presença de lente intra-ocular` — mas a lente da biomicroscopia veio "catarata")
 **Causa:** Uma mudança não commitada em `getBiomicroscopiaComLente()` inverteu a prioridade documentada do Caso 7. O código passou a usar `if (lioDetectada && !catarataDetectada) return LIO; if (catarataDetectada) return catarata`, fazendo **catarata vencer LIO** quando as duas flags disparam. A justificativa do comentário (cirurgia futura ativando LIO) já estava obsoleta — `'cirurgia de catarata'` foi removido de LIO_COMMANDS, então uma flag LIO ativa só significa pseudofacia confirmada (sem cristalino natural → impossível ter catarata).
@@ -515,3 +560,11 @@ o encerramento (provável marcador faltando). `encerrar consulta` ignora o gate.
 **Causa:** `injectAll()` não tinha guard para `dilatacaoDetectada` — apenas `processAudioInBackground` bloqueava o caminho de áudio, mas o caminho de câmera contornava esse bloqueio
 **Arquivo corrigido:** `scripts/sidepanel-injection.js` — adicionado guard no topo de `injectAll()`: quando `dilatacaoDetectada=true`, o áudio é temporariamente removido e apenas a câmera é injetada; o `audioData` é restaurado para injeção manual ao final da consulta
 **Data:** 2026-05-11
+
+### Caso 10 — Fundoscopia normal não injetada porque o ASR comeu a palavra "fundo" ⭐
+**Sintoma:** consulta 2026-08-05 17:54 — médico declarou os exames normais ("o resto tá tudo tranquilo... normal"), a biomicroscopia normal entrou e o campo de **fundoscopia ficou vazio**.
+**Causa:** o bloco de exames normais do `injectAll()` só injetava `FUNDOSCOPIA_NORMAL` se `SessionFlags.fundoscopiaDetectada || mencionouFundoNaFala`, e `mencionouFundoNaFala` era um `includes('fundo')` cru na transcrição. A fala do médico não sobreviveu ao reconhecimento — o ASR devolveu "produção normal" onde provavelmente havia "escavação normal". Ampliar o léxico não resolveria: a palavra simplesmente não chega ao texto.
+**Correção:** `scripts/sidepanel-injection.js` — o ramo de `injectExamesNormais` passa a chamar `_fundoNormalSeguro()` direto. A flag já significa, por definição do prompt, que o médico afirmou que **todos** os exames estão normais; o gate desconfiava da própria entrada. As proteções contra laudar fundo não examinado continuam: `!dilatacaoDetectada` na mesma condição, o Guard 7 (`_guardExamesNormaisFase2`) na fase 2 pós-dilatação e o próprio `_fundoNormalSeguro()`, que suprime o template quando o diagnóstico afirma achado de segmento posterior.
+**Mesma classe, caminho ao vivo:** o hook `exames_normais` (`scripts/sidepanel-hooks.js`) marcava `fundoscopiaDetectada` com `text.includes('fundo')`, então uma declaração de escopo global ("exames estão todos normais", "seus olhos estão normais") caía no ramo restrito ao segmento anterior — e, como o hook também marca `examesNormaisInjetados`, o `injectAll()` pula o bloco de exames depois e ninguém corrige a omissão. Agora quem decide é o **escopo da frase**: só suprime a fundoscopia quando a fala cita biomicroscopia/segmento anterior **sem** citar o fundo. Testes `[EXNORM-1..4]` em `utils/hooks-test.js`.
+**Não alterado:** o **fallback de despedida** (nenhum gatilho disparou, sem `injectExamesNormais`) segue exigindo `mencionouFundoNaFala` — ali não há afirmação nenhuma de que o fundo foi visto. Testes `[FUNDO-4]` e `[FUNDO-5]` em `utils/integration-test.js`.
+**Data:** 2026-08-05

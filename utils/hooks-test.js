@@ -2026,6 +2026,26 @@ noiseTest('[NERVO-2] fala cita o nervo → diagnóstico e fundoscopia preservado
   expect(/nervo/.test(d.fundoscopia)).toBe(true);
 });
 
+// 2026-11-08 — simulação D29: o guard apagava a fundoscopia NORMAL (texto padrão
+// tem "escavação simétrica e fisiológica") em consulta sem fala de nervo.
+noiseTest('[NERVO-3] fundoscopia normal sem fala de nervo → preservada', () => {
+  const fundo = 'FUNDOSCOPIA INDIRETA: AO retina aplicada, mácula em bom aspecto, sem alteração do padrão vascular, escavação simétrica e fisiológica';
+  const raw = { tipo_consulta: 'retorno', dados: {
+    diagnostico: 'H110 - Pterígio', fundoscopia: fundo } };
+  const fala = 'essa carninha no olho direito e um pterigio vamos acompanhar e usar colirio lubrificante';
+  const d = DecisionEngine.buildDecision(raw, { transcribedText: fala }).clonedAIResponse.dados;
+  expect(d.fundoscopia).toBe(fundo);
+  expect(d.diagnostico).toBe('H110 - Pterígio');
+});
+
+noiseTest('[NERVO-4] linha mista: retina fica, trecho de nervo alterado sai', () => {
+  const raw = { tipo_consulta: 'retorno', dados: {
+    fundoscopia: 'FUNDOSCOPIA INDIRETA: AO retina aplicada, mácula em bom aspecto, escavação aumentada 0,7 AO' } };
+  const fala = 'o senhor e miope e tem um pouco de astigmatismo vai precisar do oculos para longe';
+  const d = DecisionEngine.buildDecision(raw, { transcribedText: fala }).clonedAIResponse.dados;
+  expect(d.fundoscopia).toBe('FUNDOSCOPIA INDIRETA: AO retina aplicada, mácula em bom aspecto');
+});
+
 // ──────────────────────────────────────────────────────────────────────────────
 // RELATÓRIO
 // ──────────────────────────────────────────────────────────────────────────────

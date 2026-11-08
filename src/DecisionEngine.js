@@ -1197,6 +1197,8 @@
   // Vocabulário mínimo para o médico ter falado do nervo/pressão/glaucoma ou colírios hipotensores. ASR-tolerante.
   const _NERVO_EVIDENCIA_RE = /nervo|papila|disc[oa]\s*optic|escava[cç]|excava[cç]|glaucom|pressa[oõ]|tens[aã]o\s+ocular|\bpio\b|brimonidina|timolol|latanoprosta|travoprosta|bimatoprosta|dorzolamida|brinzolamida|tafluprosta/;
   const _NERVO_AFIRMADO_RE = /nervo|papila|disco\s*[óo]ptic|escava[cç]|excava[cç]|glaucom|\bH40\d?\b/i;
+  // Na fundoscopia, só sai o trecho de nervo que afirma DOENÇA; descrição normal fica.
+  const _NERVO_DOENCA_RE = /altera[cç]|alterad|suspeit|sugestiv|aumentad|glaucom|assimetr|fora\s+do\s+padr|\bH40|0[,.][5-9]|escavad|p[aá]lid|edema|atrofi|entalhe|notch|hemorrag/i;
 
   /**
    * Guard 5c: alteração de nervo óptico / suspeita de glaucoma sem que a consulta
@@ -1215,13 +1217,34 @@
 
     const d = cloned.dados;
     const alterados = [];
-    const dropLines = (txt) => String(txt).split('\n')
-      .filter(l => l.trim() && !_NERVO_AFIRMADO_RE.test(l)).join('\n').trim();
 
-    for (const campo of ['diagnostico', 'fundoscopia']) {
-      if (d[campo] && _NERVO_AFIRMADO_RE.test(d[campo])) {
-        d[campo] = dropLines(d[campo]) || (campo === 'fundoscopia' ? null : '');
-        alterados.push(campo);
+    // Diagnóstico: cada linha é um CID — a linha de nervo/glaucoma sai inteira.
+    if (d.diagnostico && _NERVO_AFIRMADO_RE.test(d.diagnostico)) {
+      d.diagnostico = String(d.diagnostico).split('\n')
+        .filter(l => l.trim() && !_NERVO_AFIRMADO_RE.test(l)).join('\n').trim();
+      alterados.push('diagnostico');
+    }
+
+    // Fundoscopia: sai só o TRECHO que afirma doença de nervo. A descrição normal
+    // ("escavação simétrica e fisiológica" do texto padrão) e os achados de retina
+    // na mesma linha ficam (regressão D29, simulação 2026-11-08: o guard apagava a
+    // fundoscopia normal inteira numa consulta de pterígio).
+    if (d.fundoscopia && _NERVO_AFIRMADO_RE.test(d.fundoscopia)) {
+      const antes = String(d.fundoscopia);
+      const depois = antes.split('\n').map(linha => {
+        const trechos = linha.split(/(,\s+|;\s*)/);
+        const out = [];
+        for (let i = 0; i < trechos.length; i += 2) {
+          const t = trechos[i];
+          if (_NERVO_AFIRMADO_RE.test(t) && _NERVO_DOENCA_RE.test(t)) continue;
+          if (out.length) out.push(trechos[i - 1]);
+          out.push(t);
+        }
+        return out.join('').replace(/^[\s,;]+|[\s,;]+$/g, '');
+      }).filter(l => l.trim()).join('\n').trim();
+      if (depois !== antes.trim()) {
+        d.fundoscopia = depois || null;
+        alterados.push('fundoscopia');
       }
     }
     if (!alterados.length) return;

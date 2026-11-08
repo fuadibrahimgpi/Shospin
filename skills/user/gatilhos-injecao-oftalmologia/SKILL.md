@@ -9,7 +9,9 @@ description: >
   OLHO_IRRITADO_COMMANDS), ou quando houver problemas com injeção automática
   (biomicroscopia, fundoscopia, blefarite, receita olho irritado, conduta,
   tratamento). Também use quando a gravação parar cedo demais, não parar,
-  ou quando um gatilho disparar no contexto errado.
+  ou quando um gatilho disparar no contexto errado. NÃO é a skill de entrada
+  quando o tratamento saiu com remédio que o médico não prescreveu: isso é
+  extração, e vai para conduta-tratamento-oftalmologia.
 ---
 
 # Gatilhos de Voz e Injeção Automática

@@ -1,6 +1,6 @@
 ---
 name: ocr-topcon-oftalmologia
-description: "Interpreta e organiza dados de tickets de autorefrator TOPCON para prontuários oftalmológicos. Use quando o usuário apresentar imagem ou transcrição de ticket TOPCON e precisar extrair refração, tonometria e paquimetria em JSON estruturado, com regras anti-alucinação, validação de lateralidade OD/OE, tratamento de tickets dobrados, ilegíveis, invertidos, múltiplos tickets, ERR e lensômetro, e descarte por olho quando houver incerteza clínica — as mesmas regras do OCR da extensão."
+description: "Interpreta e organiza dados de tickets de autorefrator TOPCON para prontuários oftalmológicos. Use quando o usuário apresentar imagem ou transcrição de ticket TOPCON e precisar extrair refração, tonometria e paquimetria em JSON estruturado, com regras anti-alucinação, validação de lateralidade OD/OE, tratamento de tickets dobrados, ilegíveis, invertidos, múltiplos tickets, ERR e lensômetro, e descarte por olho quando houver incerteza clínica — as mesmas regras do OCR da extensão. Também use quando um erro de leitura do ticket (sinal, eixo, olho trocado) derrubou o CID refrativo — miopia, hipermetropia, astigmatismo ou presbiopia não lançados; nesse caso carregue junto a skill cid-oftalmologia."
 ---
 
 # OCR TOPCON — Interpretação Segura de Tickets Oftalmológicos

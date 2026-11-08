@@ -10,7 +10,7 @@
 
 window.GeminiService = {
   // ── Agente de Exames ──
-  extractExams:        (images, cb) => geminiExamAgent.extractExams(images, cb),
+  extractExams:        (images, cb, isRetry, fullRes) => geminiExamAgent.extractExams(images, cb, isRetry, fullRes),
   validateExamData:    (data)       => geminiExamAgent.validateExamData(data),
 
   // ── Agente de Entrevista ──

@@ -262,6 +262,69 @@ body {
   object-fit: cover;
 }
 
+/* ---- Guia de enquadramento do ticket ---- */
+/* Moldura HORIZONTAL: é assim que o ticket é fotografado na prática, e deitado
+   ele aproveita a largura inteira do quadro (de pé, o comprimento seria cortado
+   pela altura e os dígitos encolheriam ~40%). O que a moldura padroniza é o lado
+   do CABEÇALHO — daí a faixa marcada à esquerda. `pointer-events: none` para não
+   roubar o clique do botão de captura. */
+.framing-guide {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.framing-guide-box {
+  position: relative;
+  width: 94%;
+  height: 62%;
+  border: 2px dashed rgba(255, 255, 255, 0.85);
+  border-radius: 6px;
+  box-shadow: 0 0 0 9999px rgba(15, 23, 42, 0.28);
+}
+
+/* Faixa do cabeçalho, encostada na borda DIREITA da moldura — é onde o médico
+   já apoia o cabeçalho (confirmado girando as fotos reais: 270° é o que deixa a
+   REF.DATA legível). O texto fica girado porque é assim que ele aparece no
+   ticket deitado: o médico compara com o papel sem traduzir nada mentalmente.
+   ⚠ Trocar de lado aqui exige trocar PRE_ROTACAO_MOLDURA no agente de OCR. */
+.framing-guide-head {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: 0;
+  width: 20%;
+  border-left: 2px dashed rgba(255, 255, 255, 0.55);
+  background: rgba(37, 99, 235, 0.28);
+  border-radius: 0 4px 4px 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  writing-mode: vertical-rl;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: #fff;
+  text-align: center;
+}
+
+.framing-guide-label {
+  position: absolute;
+  bottom: 6px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 10px;
+  font-weight: 600;
+  color: #fff;
+  background: rgba(15, 23, 42, 0.72);
+  padding: 3px 8px;
+  border-radius: 10px;
+  white-space: nowrap;
+}
+
 .camera-overlay {
   position: absolute;
   inset: 0;

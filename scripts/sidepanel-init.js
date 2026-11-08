@@ -28,7 +28,7 @@ if (manualCaptureBtn) {
 }
 
 injectAllBtn.addEventListener('click', async () => {
-  try { await injectAll(); } catch (e) { console.log('[UI] Erro na injeção manual:', e.message); }
+  try { await injectAll(true); } catch (e) { console.log('[UI] Erro na injeção manual:', e.message); }
 });
 
 // Limpeza manual (novo paciente) DESARMA retomadas pendentes; as pausas dos
@@ -110,7 +110,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       break;
 
     case 'injectAllFromKeyboard':
-      injectAll()
+      injectAll(true)
         .then(() => sendResponse({ ok: true }))
         .catch(e => { console.log('[Keyboard] Erro na injeção:', e.message); sendResponse({ ok: false }); });
       return true; // canal assíncrono — não fechar antes da Promise resolver

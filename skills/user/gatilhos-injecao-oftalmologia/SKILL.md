@@ -14,6 +14,16 @@ description: >
 
 # Gatilhos de Voz e Injeção Automática
 
+## Onde isso REALMENTE roda (autoridade)
+
+> ⚠️ **As listas de gatilho que executam em produção estão em
+> `config/clinical-triggers.js`** (namespace `ClinicalTriggers`). Os hooks que as
+> usam estão em `scripts/sidepanel-hooks.js` e `scripts/sidepanel-hook-runner.js`;
+> os textos injetados (`BIOMICROSCOPIA_NORMAL` etc.) em `scripts/sidepanel-constants.js`;
+> a injeção em `scripts/sidepanel-injection.js`. Esta skill traz as regras e
+> **exemplos** de cada lista, não as listas inteiras. Editar esta skill NÃO muda a
+> extensão. Regra geral: `skills/user/README.md`.
+
 ## Visão Geral
 
 A extensão usa o **Web Speech API** para monitorar o texto transcrito em tempo
@@ -41,6 +51,13 @@ Todo texto é **normalizado antes da comparação**:
 | `CATARATA_COMMANDS` | Flag passiva | Modifica lente na biomicroscopia → "catarata" | ❌ Não |
 | `LIO_COMMANDS` | Flag passiva | Modifica lente → "pseudofacia, LIO transparente..." | ❌ Não |
 | `OPACIDADE_CAPSULA_COMMANDS` | Flag passiva | Modifica lente → "pseudofacia, opacidade de cápsula..." | ❌ Não |
+| `LENTE_LIMPA_COMMANDS` | Flag passiva (override) | Cancela a opacidade de cápsula na sessão ("a lente está limpa") | ❌ Não |
+| `STOP_COMMANDS_ANCORADOS` | Parada condicional | Despedida que também é ditado de conduta; só vale no fim da fala (2s, cancelável) | ✅ Sim |
+| `STOP_COMMANDS_CURTOS` | Parada condicional | Despedida curta ("tchau"); só vale no fim da fala | ✅ Sim |
+| `STOP_SAUDACAO_COMMANDS` | Parada condicional | "bom dia" como despedida; fim da fala e fora do início da gravação | ✅ Sim |
+| `STOP_FORCAR_COMMANDS` | Parada forçada | Ordem explícita ("encerrar a consulta"); ignora o gate de captura | ✅ Sim |
+| `EXAME_EM_ANDAMENTO_COMMANDS` | Guard pré-análise | Instrução de exame nos últimos 300 caracteres ("olha para cima") adia a análise e guarda a transcrição como pausa armada do mesmo paciente (`detectaExameEmAndamento`, `sidepanel-audio.js`) | ❌ Não |
+| `DILATACAO_COMBOS` | Co-ocorrência | Pares de palavras que juntos indicam dilatação (ex.: tropicamida + dilatar) | ✅ Sim |
 
 ---
 
@@ -84,10 +101,22 @@ pupila regular e reagente, cristalino transparente
 ### Biomicroscopia Blefarite
 ```
 AO: hiperemia e espessamento da margem palpebral, telangiectasias
-e disfunção de glândulas de meibômio com secreção espessa;
-córnea transparente, câmara anterior formada, pupila regular e
-reagente, cristalino transparente
+e disfunção de glândulas de meibômio; córnea transparente, câmara
+anterior formada, pupila regular e reagente, cristalino transparente
 ```
+> ⛔ **"com secreção espessa" saiu do template** (2026-08-04): é achado à parte
+> (meibum expressível), só escrito quando o médico falou de secreção ou glândula
+> entupida. No bloco padrão ela era afirmada em toda blefarite injetada.
+> ⛔ **NÃO é texto de rotina** (2026-08-04). Só entra quando o médico DESCREVEU
+> inflamação palpebral — blefarite/meibomite, pálpebra ou bordo vermelho/inflamado,
+> crosta, caspa, descamação, secreção, glândulas entupidas, "pontinhos de inflamação".
+> Prescrever shampoo, compressa ou higiene palpebral **não** autoriza a descrição:
+> tratamento não é exame. Sem descrição, `injectBlefarite` continua de pé (conduta e
+> tratamento entram), a biomicroscopia fica **em branco** e o médico recebe aviso.
+> Gate: `injectFlags.blefariteDescritaNoExame` (DecisionEngine).
+> ✅ **"informação na pálpebra" conta como inflamação** (2026-08-05): o ASR troca
+> "inflamação" por "informação" ("uma informaçãozinha na pálpebra" — achado real,
+> suprimido). Vale só COLADA à pálpebra/bordo/cílios; "uma informação" solta, não.
 
 ### Fundoscopia Normal
 ```
@@ -252,7 +281,14 @@ Quando `injectExamesNormais = true`:
 
 ---
 
-## GATILHOS ATUAIS — REFERÊNCIA COMPLETA
+## GATILHOS ATUAIS — EXEMPLOS POR LISTA
+
+> A lista completa de cada gatilho está em `config/clinical-triggers.js`; aqui vão
+> exemplos e o motivo das remoções. As listas de STOP abaixo estão completas na
+> data desta revisão; as demais são **amostras**. O teste `[SKILL-SYNC-GATILHOS]`
+> (`utils/integration-test.js`) garante que toda lista exportada é citada aqui pelo
+> nome e que todo exemplo entre aspas existe de fato na lista do código. Frase
+> removida do código deve sair do exemplo ou ir para uma linha `❌ REMOVIDA`.
 
 ### STOP_COMMANDS (encerramento da consulta — lista forte, para em 500ms)
 ```
@@ -361,10 +397,15 @@ o encerramento (provável marcador faltando). `encerrar consulta` ignora o gate.
 ```
 'esperar la fora', 'aguardar la fora', 'espera la fora', 'aguarda la fora',
 'esperar um pouco la fora', 'esperar ali fora', 'espera ali fora',
-'aguardar na recepcao', 'esperar na recepcao',
-'precisar dilatar', 'precisa dilatar', 'vou dilatar',
-'vamos dilatar', 'vai dilatar', 'dar uma dilatada'
+'esperem la fora', 'esperarem la fora', 'leva ele la fora',
+'vai precisar dilatar', 'precisa dilatar', 'vou dilatar',
+'vai dilatar', 'dar uma dilatada', 'fazer a dilatacao',
+'colirio para dilatar', 'efeito para dilatar', 'ja dilatei'
+(≈104 frases — ver config/clinical-triggers.js)
 ```
+> `DILATACAO_COMBOS` cobre co-ocorrências como `['tropicamida', 'pingar']`.
+> ⚠️ Não entram: `'ja dilatou'` (frase do RETORNO da dilatação, re-disparava a pausa),
+> `'dilata'` isolado e as formas de "pingar o colírio" (casavam prescrição de colírio).
 
 ### EXAMES_NORMAIS_COMMANDS
 ```
@@ -375,16 +416,15 @@ o encerramento (provável marcador faltando). `encerrar consulta` ignora o gate.
 'biomicroscopia sem alteracoes', 'fundoscopia sem alteracoes',
 'fundo de olho normal', 'fundo de olho sem alteracoes',
 'seus olhos estao normais', 'olhos estao normais'
-(+ variações — ver sidepanel-constants.js)
+(+ variações — ver config/clinical-triggers.js)
 ```
 
 ### EXAME_BLEFARITE_COMMANDS
 ```
 'blefarite', 'blefaromeibomite', 'meibomite',
 'disfuncao de meibomio', 'palpebra inflamada',
-'inflamacao palpebral', 'lubrificacao comprometida',
-'olho seco por blefarite'
-(+ variações — ver sidepanel-constants.js)
+'inflamacao palpebral', 'olho seco por blefarite'
+(+ variações — ver config/clinical-triggers.js)
 ```
 
 ### CATARATA_COMMANDS
@@ -402,7 +442,7 @@ o encerramento (provável marcador faltando). `encerrar consulta` ignora o gate.
 'lente esta otima', 'lente ta otima', 'lente esta boa', 'lente ta boa',
 'lente bem posicionada', 'lente no lugar',
 'operou o olho', 'operou os olhos', 'ja operou o olho', 'ja operou os olhos',
-'operou catarata', 'ja operou de catarata', 'operad[ao] de catarata',
+'operou catarata', 'ja operou de catarata', 'operado de catarata', 'operada de catarata',
 'fez cirurgia de catarata', 'fez a cirurgia de catarata', 'fez uma cirurgia de catarata',
 'cirurgia foi bem', 'cirurgia ta otima', 'cirurgia deu certo',
 'pseudofacico', 'pseudofaquico', 'lio bem posicionada', 'lio transparente'
@@ -414,9 +454,22 @@ o encerramento (provável marcador faltando). `encerrar consulta` ignora o gate.
 
 ### OPACIDADE_CAPSULA_COMMANDS
 ```
-'limpeza da lente', 'opacidade de capsula', 'capsulotomia', 'yag',
-'opacificacao da capsula posterior'
+'opacidade de capsula', 'capsula posterior opaca', 'capsulotomia', 'yag',
+'opacificacao da capsula posterior', 'limpar a lente',
+— linguagem leiga (2026-08-05):
+'lente ta embacada', 'lente ta um pouquinho embacada', 'lente ta embacando',
+'sujeirinha na lente', 'lente ta suja', 'embacamento na lente',
+'vai precisar fazer uma limpeza', 'dar uma limpada na lente'
+(+ variações — ver config/clinical-triggers.js)
 ```
+> ⚠️ `'limpeza da lente'` (substantivo solto) foi REMOVIDO em 2026-06-18: casava o relato
+> HISTÓRICO do paciente (*"já fiz a limpeza da lente"*). REGRA para frases de limpeza:
+> o marcador de **futuro/necessidade** tem que estar DENTRO da string
+> (`'vai precisar fazer uma limpeza'`), ou o objeto explícito (`'limpar a lente'`).
+> Embaçamento/sujeira ficam ancorados em `lente`/`capsula` — `embacada` solto é a queixa
+> de visão do paciente.
+> `LENTE_LIMPA_COMMANDS` continua sendo o override definitivo: dito "a lente está limpa",
+> a opacidade não dispara mais naquela sessão.
 
 ### OLHO_IRRITADO_COMMANDS
 ```
@@ -425,6 +478,26 @@ o encerramento (provável marcador faltando). `encerrar consulta` ignora o gate.
 'o senhor esta com o olho irritado', 'voce esta com o olho irritado',
 'olho esta bem irritado', 'olhos estao irritados'
 ```
+
+### LENTE_LIMPA_COMMANDS
+```
+'lente esta limpa', 'lente ta limpa', 'lente limpa', 'lentes estao limpas',
+'capsula limpa', 'capsula posterior limpa', 'capsula transparente'
+(+ variações — ver config/clinical-triggers.js)
+```
+> Override da opacidade: dita uma destas, a flag de opacidade de cápsula disparada
+> por histórico é cancelada naquela sessão.
+
+### EXAME_EM_ANDAMENTO_COMMANDS
+```
+'olha para baixo', 'olha para cima', 'encosta o queixo', 'nao pisca',
+'tampa o olho', 'melhor assim ou assim', 'primeira ou segunda'
+(+ variações — ver config/clinical-triggers.js)
+```
+> Só a cauda da fala conta (últimos 300 caracteres). Se a gravação para com o exame
+> em curso, a análise é adiada e a transcrição vira pausa ARMADA (`motivo='exame'`):
+> a próxima gravação continua a mesma consulta. Não vale se a dilatação ou o
+> encerramento já foram detectados.
 
 ---
 
@@ -504,6 +577,26 @@ o encerramento (provável marcador faltando). `encerrar consulta` ignora o gate.
 **Arquivos corrigidos:** `scripts/sidepanel-constants.js` — `parseCatarataFromDiagnostico()` agora remove os trechos de contexto cirúrgico ('cirurgia de catarata', 'operad[ao] de catarata', 'facectomia') antes da detecção; um diagnóstico real sobrevive por CID H25/H26.0–3 ou pela palavra fora desses contextos. `config/clinical-triggers.js` — adicionado `'fez uma cirurgia de catarata'` em LIO_COMMANDS. Testes `[CAT-DX-7..8]` em `utils/hooks-test.js`
 **Data:** 2026-07-17
 
+### Caso 7d — "cristalino transparente" em paciente pseudofácica (o placeholder virou a afirmação) ⭐
+**Sintoma:** paciente relatou cirurgia de catarata AO há 1 ano e o médico confirmou a lente boa; a biomicroscopia injetada afirmou **"cristalino transparente"** — um olho sem cristalino descrito como tendo cristalino (log 2026-08-03)
+**Causa:** três falhas em série:
+  1. O **prompt** mandava terminar TODA linha com `cristalino transparente` ("o sistema substitui automaticamente"). O modelo sabia da pseudofacia — o próprio raciocínio dizia "mantendo 'cristalino transparente' como placeholder" — e ainda assim escreveu a contradição
+  2. Nenhum gatilho de LIO disparou: quem falou foi a **paciente, em 1ª pessoa** ("eu fiz a cirurgia de catarata tem um ano") e LIO_COMMANDS só tinha as formas de 3ª pessoa (`fez`/`fez a`/`fez uma cirurgia de catarata`)
+  3. Não havia rede determinística: a derivação por diagnóstico só cobre catarata, e esta consulta nem emitiu `Z96.1` (CIDs foram H401/H524/H010) — a cirurgia estava em `antecedentes_oftalmologicos`
+**Correções:**
+  1. `src/gemini-interview-agent.js` — o placeholder deixou de ser regra absoluta: agora é o caso **fácico**, com exceção obrigatória para o olho pseudofácico (escreve `pseudofacia, LIO transparente e bem posicionada` direto na linha), lista de evidências de cirurgia JÁ realizada e regra de lateralidade + exemplos
+  2. `config/clinical-triggers.js` — LIO_COMMANDS ganhou a fala do paciente: `fiz (a/uma) cirurgia de catarata`, `operei de catarata`, `operei a catarata`, `operei o olho(s)`, `fui operad[ao] de catarata`
+  3. `scripts/sidepanel-constants.js` — nova `parsePseudofaciaFromDados()` (lê `antecedentes_oftalmologicos` + `diagnostico` + `biomicroscopia`, ignora cirurgia planejada e negativas) e `getBiomicroscopiaComLente()` ganhou **guard de texto misto** (não converte o placeholder do olho fácico quando a outra linha já afirma LIO) e **lateralidade** via `SessionFlags.lioLado`
+  4. `scripts/sidepanel-injection.js` — reconciliação de pseudofacia antes da de catarata; só liga a flag com o **lado conhecido**, senão apenas avisa no console
+**Regra que ficou:** o texto do modelo é a decisão da lente; o runtime é rede de segurança. Pseudofacia sem lado definido **não** substitui nada — placeholder visível é melhor que cirurgia inventada no olho são.
+**Testes:** `[LENTE-5..8]` e `[PSEUDO-1..7]` em `utils/hooks-test.js`
+**Data:** 2026-08-03
+**Desdobramento (2026-08-04):** a mesma consulta também saiu com `H524 - Presbiopia` num
+paciente pseudofácico AO. Olho sem cristalino não tem acomodação a perder — veto de
+presbiopia por pseudofacia **bilateral** no prompt e no `_guardPresbiopiaObrigatoria`
+(`src/DecisionEngine.js`), usando a lateralidade de `parsePseudofaciaFromDados()`.
+Ver `transcricao-consulta-oftalmologia/SKILL.md` → "FLAGS DE DIAGNÓSTICO — Presbiopia".
+
 ### Caso 7b — Regressão do Caso 7: catarata vence LIO quando ambas as flags disparam ⭐
 **Sintoma:** Biomicroscopia injeta "catarata" em paciente pseudofácico (consulta 2026-06-30: log mostrou `[Hook] Flag: catarata detectada` + `[Hook] Flag: LIO detectada`; o CID veio correto — `Z961 - Presença de lente intra-ocular` — mas a lente da biomicroscopia veio "catarata")
 **Causa:** Uma mudança não commitada em `getBiomicroscopiaComLente()` inverteu a prioridade documentada do Caso 7. O código passou a usar `if (lioDetectada && !catarataDetectada) return LIO; if (catarataDetectada) return catarata`, fazendo **catarata vencer LIO** quando as duas flags disparam. A justificativa do comentário (cirurgia futura ativando LIO) já estava obsoleta — `'cirurgia de catarata'` foi removido de LIO_COMMANDS, então uma flag LIO ativa só significa pseudofacia confirmada (sem cristalino natural → impossível ter catarata).
@@ -515,3 +608,11 @@ o encerramento (provável marcador faltando). `encerrar consulta` ignora o gate.
 **Causa:** `injectAll()` não tinha guard para `dilatacaoDetectada` — apenas `processAudioInBackground` bloqueava o caminho de áudio, mas o caminho de câmera contornava esse bloqueio
 **Arquivo corrigido:** `scripts/sidepanel-injection.js` — adicionado guard no topo de `injectAll()`: quando `dilatacaoDetectada=true`, o áudio é temporariamente removido e apenas a câmera é injetada; o `audioData` é restaurado para injeção manual ao final da consulta
 **Data:** 2026-05-11
+
+### Caso 10 — Fundoscopia normal não injetada porque o ASR comeu a palavra "fundo" ⭐
+**Sintoma:** consulta 2026-08-05 17:54 — médico declarou os exames normais ("o resto tá tudo tranquilo... normal"), a biomicroscopia normal entrou e o campo de **fundoscopia ficou vazio**.
+**Causa:** o bloco de exames normais do `injectAll()` só injetava `FUNDOSCOPIA_NORMAL` se `SessionFlags.fundoscopiaDetectada || mencionouFundoNaFala`, e `mencionouFundoNaFala` era um `includes('fundo')` cru na transcrição. A fala do médico não sobreviveu ao reconhecimento — o ASR devolveu "produção normal" onde provavelmente havia "escavação normal". Ampliar o léxico não resolveria: a palavra simplesmente não chega ao texto.
+**Correção:** `scripts/sidepanel-injection.js` — o ramo de `injectExamesNormais` passa a chamar `_fundoNormalSeguro()` direto. A flag já significa, por definição do prompt, que o médico afirmou que **todos** os exames estão normais; o gate desconfiava da própria entrada. As proteções contra laudar fundo não examinado continuam: `!dilatacaoDetectada` na mesma condição, o Guard 7 (`_guardExamesNormaisFase2`) na fase 2 pós-dilatação e o próprio `_fundoNormalSeguro()`, que suprime o template quando o diagnóstico afirma achado de segmento posterior.
+**Mesma classe, caminho ao vivo:** o hook `exames_normais` (`scripts/sidepanel-hooks.js`) marcava `fundoscopiaDetectada` com `text.includes('fundo')`, então uma declaração de escopo global ("exames estão todos normais", "seus olhos estão normais") caía no ramo restrito ao segmento anterior — e, como o hook também marca `examesNormaisInjetados`, o `injectAll()` pula o bloco de exames depois e ninguém corrige a omissão. Agora quem decide é o **escopo da frase**: só suprime a fundoscopia quando a fala cita biomicroscopia/segmento anterior **sem** citar o fundo. Testes `[EXNORM-1..4]` em `utils/hooks-test.js`.
+**Não alterado:** o **fallback de despedida** (nenhum gatilho disparou, sem `injectExamesNormais`) segue exigindo `mencionouFundoNaFala` — ali não há afirmação nenhuma de que o fundo foi visto. Testes `[FUNDO-4]` e `[FUNDO-5]` em `utils/integration-test.js`.
+**Data:** 2026-08-05

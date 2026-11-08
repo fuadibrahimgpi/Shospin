@@ -9,6 +9,16 @@ metadata:
 
 # Conduta Oftalmológica
 
+## Onde isso REALMENTE roda (autoridade)
+
+> ⚠️ **A cópia que executa em produção é o prompt do Gemini em
+> `src/gemini-interview-agent.js` (`_buildConsultationPrompt`, blocos `- conduta:` e
+> `- tratamento:` dentro de `CAMPOS:`, mais `MED_KNOWLEDGE_BASE`).** No mesmo arquivo,
+> `_sanitizeCondutaTratamento` e `_garantirExamesPedidosNaConduta` corrigem a saída;
+> depois vêm os guards de `src/DecisionEngine.js` (2, 2b–2f, 3, 3b, 4, 5) e o léxico
+> `config/medicamentos-lexico.js`. Editar esta skill NÃO muda a extensão. Regra
+> geral: `skills/user/README.md`.
+
 ## Quando usar esta skill
 
 Use esta skill quando precisar preencher, revisar ou corrigir o campo `conduta` em registros oftalmológicos derivados de:
@@ -103,7 +113,9 @@ Ao registrar um medicamento que o médico **prescreve**, use o nível mais espec
 
 - Marca dita **sempre** traz o princípio ativo na frente — não registre o nome comercial sozinho quando há mapeamento.
 - ⚠️ Nunca coloque entre parênteses uma marca que o médico **não pronunciou**: a base de conhecimento serve para reconhecer nomes ditos, nunca para completá-los.
-- **Lubrificantes:** a marca dita **não** autoriza princípio (não há princípio único por marca) → `Lubrificante ocular (Systane)`. Se o médico disse o princípio ("hialuronato", "carmelose"), registre-o: `Hialuronato`. Disse só "lubrificante" → `Lubrificante ocular`, sem marca.
+- **Lubrificantes:** a marca dita **não** autoriza princípio (não há princípio único por marca) → `Lubrificante ocular (Systane)`. Se o médico disse o princípio ("hialuronato", "carmelose"), registre-o: `Hialuronato`.
+  - **Disse só "lubrificante(s)", sem marca nem princípio → `Carmelose sódica ou hialuronato de sódio`** (protocolo declarado do médico, 2026-11-05: são os dois genéricos que ele prescreve; vale **toda vez** que ele diz a palavra "lubrificante"). Sem marca; a posologia dita é preservada (`usa lubrificante 4x ao dia` → `Carmelose sódica ou hialuronato de sódio 4x/dia`). Marca ou princípio dito vence o padrão.
+  - Isto só **nomeia** um lubrificante já prescrito — não cria prescrição (ver regra anti-invenção). O `DecisionEngine` aplica o mesmo nome por código (Guard 2f) se o modelo escrever só "Lubrificante ocular".
 - ⚠️ Nunca infira o princípio ativo a partir do diagnóstico ou do contexto — só quando o nome (marca ou princípio) foi efetivamente pronunciado, ou quando um protocolo declarado (nível 1.5) se aplica. Princípio ativo errado num prontuário é pior que um genérico.
 
 **Nível 1.5 — Protocolo declarado do médico.** O médico declarou previamente qual remédio ele usa em determinada combinação de tratamento. Não é inferência a partir do diagnóstico: é a conduta padrão dele, informada por ele.
@@ -161,7 +173,7 @@ Entrada:
 "A blefarite tá mais atacada, vou passar um tratamento mais forte pra você fazer." (paciente já faz higiene com shampoo e usa lubrificante)
 
 Saída:
-tratamento_sugerido: "Tobramicina + dexametasona\nHigiene palpebral com shampoo infantil\nLubrificante ocular"
+tratamento_sugerido: "Tobramicina + dexametasona\nHigiene palpebral com shampoo infantil\nCarmelose sódica ou hialuronato de sódio"
 ```
 
 ```text
@@ -169,7 +181,7 @@ Entrada (log 2026-09-15):
 "Vou passar um tratamento para a senhora fazer para melhorar essa irritação, isso é coisa simples. [compressa e limpeza] de manhã e no fim do dia... um lubrificante, pode pingar quantas vezes quiser, pode comprar sem receita... já tem costume de tomar ômega 3?"
 
 Saída:
-tratamento_sugerido: "Compressa morna\nHigiene palpebral\nLubrificante ocular\nÔmega 3"
+tratamento_sugerido: "Compressa morna\nHigiene palpebral\nCarmelose sódica ou hialuronato de sódio\nÔmega 3"
 ❌ NÃO: "Tobramicina + dexametasona" — o único pingar é do lubrificante; não houve colírio da blefarite.
 ```
 
@@ -203,7 +215,7 @@ tratamento_sugerido: "Dorzolamida + Timolol"
 Médico: "Mantém o colírio da pressão e começa lubrificante."
 
 Correto:
-tratamento_sugerido: "Colírio para pressão\nLubrificante ocular"
+tratamento_sugerido: "Colírio para pressão\nCarmelose sódica ou hialuronato de sódio"
 
 Errado:
 tratamento_sugerido: "Associação de colírio hipotensor com lubrificante"
@@ -217,7 +229,7 @@ Exemplo:
 Médico: "Faz compressa morna duas vezes ao dia e usa lubrificante de seis em seis horas."
 
 conduta: "Orientado compressa morna 2x/dia"
-tratamento: "Lubrificante ocular 1 gota AO 6/6h"
+tratamento: "Carmelose sódica ou hialuronato de sódio AO 6/6h"
 ```
 
 ## Orientações e explicações verbais do médico
@@ -580,7 +592,7 @@ Médico orienta compressa morna, higiene palpebral com shampoo infantil, o colí
 
 Saída:
 conduta: "Encaminhamento: Dermatologista\nRetorno 6 meses"
-tratamento_sugerido: "Compressa morna\nHigiene palpebral com shampoo infantil\nTobramicina + dexametasona após higiene palpebral\nLubrificante ocular\nÔmega 3"
+tratamento_sugerido: "Compressa morna\nHigiene palpebral com shampoo infantil\nTobramicina + dexametasona após higiene palpebral\nCarmelose sódica ou hialuronato de sódio\nÔmega 3"
 descartado: null
 
 ⚠️ Nota: compressa morna e higiene palpebral são ações físicas do paciente → TRATAMENTO, não conduta.

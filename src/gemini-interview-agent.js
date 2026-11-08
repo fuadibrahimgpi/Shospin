@@ -41,6 +41,7 @@ GLAUCOMA - Associações:
 LUBRIFICANTES (a MARCA NÃO identifica um princípio único — registre "Lubrificante ocular (Marca)"):
   Systane, Hylo, Hyabak, Artelac, Optive, Optive Fusion, Refresh, Lacrifilm
   (princípio só se o médico o DISSE: carmelose, hialuronato)
+  Médico disse só "lubrificante(s)", sem marca nem princípio → "Carmelose sódica ou hialuronato de sódio"
 
 CORTICÓIDES:
   Maxidex (Dexametasona), Pred Fort (Prednisolona), FML (Fluormetolona), Loteprednol/Loteprol (Loteprednol)
@@ -194,10 +195,33 @@ class GeminiInterviewAgent {
       'gi'
     );
     let n = 0;
-    const out = texto.replace(VARIANTES_OCT, () => { n++; return 'OCT'; });
+    let out = texto.replace(VARIANTES_OCT, () => { n++; return 'OCT'; });
     if (n > 0) {
       this.logger.info(`[ASR-EXAME] ${n} variante(s) fonética(s) de "OCT" restaurada(s) na transcrição`);
     }
+
+    // ── Normalização de termos oftalmológicos corrompidos pelo ASR (Chrome Web Speech API) ──
+    // 1) Fundoscopia: "filoscopia", "fudoscopia", "fundo escopia", "filo escopia"
+    out = out.replace(/(?<![a-zà-ú0-9])(?:filoscopia|fudoscopia|fundo\s+escopia|filo\s+escopia)(?![a-zà-ú0-9])/gi, 'fundoscopia');
+
+    // 2) Biomicroscopia: "mal de bicicleta", "ao de bicicleta", "na bicicleta", "bio microscopia"
+    out = out.replace(/(?<![a-zà-ú0-9])(?:mal\s+de\s+bicicleta|ao\s+de\s+bicicleta|na\s+bicicleta|bio\s+microscopia)(?![a-zà-ú0-9])/gi, 'biomicroscopia');
+
+    // 3) Acuidade visual: "como a cuidar de visual", "a cuidar de visual", "cuidar de visual", "cuidar visual"
+    out = out.replace(/(?<![a-zà-ú0-9])(?:(?:como\s+)?a\s+cuidar\s+de\s+visual|cuidar\s+(?:de\s+)?visual)(?![a-zà-ú0-9])/gi, 'acuidade visual');
+
+    // 4) Hiperemia / conjuntival: "perimetro conjuntival", "parametro conjuntival"
+    out = out.replace(/(?<![a-zà-ú0-9])(?:per[ií]metro|par[aâ]metro)\s+conjuntival(?![a-zà-ú0-9])/gi, 'hiperemia conjuntival');
+
+    // 5) Timolol: "trometolol", "timetolol"
+    out = out.replace(/(?<![a-zà-ú0-9])(?:trometolol|timetolol)(?![a-zà-ú0-9])/gi, 'timolol');
+
+    // 6) Pterígio: "cao de pterigio", "cão de pterigio", "cão de pterígio"
+    out = out.replace(/(?<![a-zà-ú0-9])c[aã]o\s+de\s+pter[ií]gio(?![a-zà-ú0-9])/gi, 'avaliação de pterígio');
+
+    // 7) Blefarite: "blufarite", "blackfarite", "bruxarite"
+    out = out.replace(/(?<![a-zà-ú0-9])(?:blufarite|blackfarite|bruxarite)(?![a-zà-ú0-9])/gi, 'blefarite');
+
     return out;
   }
 
@@ -276,7 +300,7 @@ class GeminiInterviewAgent {
 
     // Linhas que começam com classe de medicamento oftálmico específico — são prescrições
     // mesmo sem posologia numérica (ex: "Lubrificante ocular 1x ao dia").
-    const MED_CLASS_INDICATOR_RE = /^(?:lubrificante\s+ocular|pomada\s+oftalm|gel\s+oftalm|solucao\s+oftalm)/i;
+    const MED_CLASS_INDICATOR_RE = /^(?:lubrificante\s+ocular|carmelose\s+s[óo]dica\s+ou\s+hialuronato|pomada\s+oftalm|gel\s+oftalm|solucao\s+oftalm)/i;
 
     // Lista branca: padrões que são inequivocamente conduta médica.
     // Compressa, higiene palpebral, shampoo e lavagem NÃO constam aqui —
@@ -447,7 +471,9 @@ REGRAS ANTI-DELÍRIO (CRÍTICAS)
    ❌ Paciente disse "lubrificante" → NÃO escreva "Artelac" ou qualquer marca
    ❌ Paciente disse "colírio amarelo" → NÃO escreva "Xalatan"
    ❌ Paciente disse "aquele remédio" → NÃO escreva nenhum nome
-   ✅ Registre exatamente o que foi dito: "lubrificante ocular", "colírio para pressão", "colírio amarelo"
+   ✅ Registre exatamente o que foi dito: "colírio para pressão", "colírio amarelo"
+   ✅ Exceção — o MÉDICO disse "lubrificante(s)" na conduta: registre "Carmelose sódica ou hialuronato
+      de sódio" (protocolo declarado do médico, ver LUBRIFICANTES na hierarquia de nomeação). Não é marca.
    A base de conhecimento serve APENAS para reconhecer nomes efetivamente pronunciados,
    nunca para completar ou inferir nomes não ditos.
    ⚠️ Isto NÃO impede registrar a CLASSE ou um genérico quando o médico PRESCREVE um remédio sem
@@ -822,15 +848,20 @@ CAMPOS:
       ceratite/úlcera traumática, hemorragia subconjuntival por trauma) → sufixo "OD" ou "OE"
       conforme o lado; NUNCA "AO" (bilateralizar inventa doença no olho são).
       ✅ "H161 - Ceratite traumática OD"   ❌ "H161 - Ceratite traumática AO"
-    • Se o lado for impossível de determinar → sufixar "(confirmar olho)" em vez de assumir AO.
-      Ex: "H161 - Ceratite traumática (confirmar olho)"
+    • Se o lado for impossível de determinar → sufixar " - confirmar olho" em vez de assumir AO.
+      Ex: "H161 - Ceratite traumática - confirmar olho"
     • DIAGNÓSTICOS BILATERAIS-CAPAZES (catarata, glaucoma, refração, DMRI, retinopatia):
       NUNCA chute "OD"/"OE" por acuidade visual, ordem do exame, ou dedução de qual olho
       "está pior". Só atribua um lado que o médico ATRIBUIU explicitamente àquele olho.
         - Médico descreveu o achado nos DOIS olhos ("os dois estão com catarata") → "AO".
         - Médico atribuiu claramente a UM olho ("a catarata do direito") → "OD"/"OE".
-        - Ambíguo (não dá para saber se um ou ambos) → sufixar "(confirmar olho)".
-      Ex: "H259 - Catarata senil NE (confirmar olho)" em vez de arriscar "OD".
+        - Ambíguo (não dá para saber se um ou ambos) → sufixar " - confirmar olho".
+      Ex: "H259 - Catarata senil NE - confirmar olho" em vez de arriscar "OD".
+
+  ⛔ NÃO COLOQUE IMPRESSÕES ENTRE PARÊNTESES (regra do médico, 2026-10-29):
+    o diagnóstico é escrito sem parênteses. Marcadores de lado e de status vão depois
+    de hífen: " - confirmar olho", " - resolvida". Parênteses ficam só para medidas e
+    descrições do exame (ex.: "relação E/D ~0,7"), nunca para impressão diagnóstica.
 
   ⚠️ CAPTURA DE ACHADOS DO EXAME FÍSICO (biomicroscopia / lâmpada de fenda):
   Achados mencionados durante o exame (ex: "tem uma cataratinha incipiente", "cristalino com opacidade",
@@ -861,7 +892,7 @@ CAMPOS:
     • Ambíguo, sem qualquer fala do médico descrevendo o achado agora → tratar como
        história (antecedente). Deixar de fora é seguro; inventar achado de exame não é.
     • Só quando o médico confirma um episódio recente JÁ RESOLVIDO e você precisa registrá-lo
-       no diagnóstico, sufixe "(resolvida)" — assim ele não exige descrição no exame de hoje.
+       no diagnóstico, sufixe " - resolvida" — assim ele não exige descrição no exame de hoje.
 
   CIDs OFTALMOLÓGICOS FREQUENTES (usar estes preferencialmente):
   Pálpebras/lágrimas: H010=Blefarite  H020=Entrópio  H021=Ectrópio  H040=Dacrioadenite  H042=Epífora
@@ -1236,7 +1267,11 @@ CAMPOS:
         médico não pronunciou (a base serve para reconhecer nomes ditos, nunca para completá-los).
         LUBRIFICANTES: marca dita NÃO autoriza princípio (não há princípio único por marca) →
         "Lubrificante ocular (Systane)". Se o médico disse o princípio ("hialuronato", "carmelose"),
-        registre-o: "Hialuronato". Disse só "lubrificante" → "Lubrificante ocular", sem marca.
+        registre-o: "Hialuronato". Disse só "lubrificante(s)", sem marca nem princípio → registre
+        "Carmelose sódica ou hialuronato de sódio" (protocolo declarado do médico: são os dois
+        genéricos que ele prescreve; vale SEMPRE que ele diz a palavra "lubrificante"), sem marca,
+        mantendo a posologia dita. Ex.: "usa lubrificante 4x ao dia" → "Carmelose sódica ou hialuronato
+        de sódio 4x/dia". Isto só NOMEIA um lubrificante já prescrito — não cria prescrição.
         ⚠️ NUNCA infira o princípio ativo a partir do diagnóstico ou do contexto — apenas quando o
         nome (marca ou princípio) foi efetivamente PRONUNCIADO, ou quando um PROTOCOLO DECLARADO
         do médico (nível 1.5) se aplica. Princípio ativo errado num prontuário é pior que um genérico.
@@ -1287,7 +1322,7 @@ CAMPOS:
 
   ✅ Colírios nomeados ou por classe: "Vigadexa 4x/dia por 7 dias" → "Moxifloxacino + dexametasona (Vigadexa) 4x/dia por 7 dias",
      "Tobramicina + dexametasona 3x/dia após higiene palpebral"
-  ✅ Lubrificantes oculares: "Lubrificante ocular AO ao longo do dia"
+  ✅ Lubrificantes oculares (médico disse "lubrificante"): "Carmelose sódica ou hialuronato de sódio AO ao longo do dia"
   ✅ Medicamentos orais: "Ômega 3 1000mg — 1cp almoço e 1cp jantar por 30 dias"
   ✅ Pomadas oculares com posologia
   ✅ Compressa morna: "Compressa morna 2 min — 2x/dia"
@@ -1303,7 +1338,7 @@ CAMPOS:
     tratamento: "Compressa morna 2 min — 2x/dia"
                 "Higiene palpebral com shampoo infantil — 3x/dia"
                 "Tobramicina + dexametasona 3x/dia após higiene palpebral"
-                "Lubrificante ocular AO ao longo do dia"
+                "Carmelose sódica ou hialuronato de sódio AO ao longo do dia"
                 "Ômega 3 1000mg — 1cp almoço e 1cp jantar por 30 dias"
 
   ★ Regra da medicação de blefarite (CRÍTICA — quando injectBlefarite=true ou a blefarite está
@@ -1367,7 +1402,7 @@ CAMPOS:
     • Achado verbalizado DURANTE o exame (o médico está na lâmpada de fenda: "encosta o queixo",
       "olha para frente", "pisca") conta como achado de exame mesmo que o reconhecimento de voz
       embarale quem fala — nesse contexto a frase é do exame, não anamnese.
-    • Se o achado é histórico/resolvido, marque-o como tal no diagnóstico ("(resolvida)") — aí
+    • Se o achado é histórico/resolvido, marque-o como tal no diagnóstico (" - resolvida") — aí
       ele não exige descrição no exame atual.
 
   ⚠️ REGRA DE FLAG (crítica): se QUALQUER olho tem achado de segmento anterior, injectExamesNormais=false.
@@ -1411,6 +1446,13 @@ CAMPOS:
     Pterígio OD: "OD: pterígio nasal grau I, sem invasão de eixo visual; córnea transparente nas demais regiões, câmara anterior formada, pupila regular e reagente, cristalino transparente\nOE: olho calmo, córnea transparente, câmara anterior formada, pupila regular e reagente, cristalino transparente"
     Conjuntivite alérgica AO: "AO: hiperemia conjuntival difusa com secreção serosa, papilas tarsais; córnea transparente, câmara anterior formada, pupila regular e reagente, cristalino transparente"
     Blefarite + pterígio OD: "OD: hiperemia e espessamento da margem palpebral, telangiectasias e disfunção de glândulas de meibômio; pterígio nasal grau I; córnea transparente nas demais regiões, câmara anterior formada, pupila regular e reagente, cristalino transparente\nOE: hiperemia e espessamento da margem palpebral, telangiectasias e disfunção de glândulas de meibômio; córnea transparente, câmara anterior formada, pupila regular e reagente, cristalino transparente"
+
+  🔴 CONJUNTIVITE → FOLÍCULOS (regra do médico, 2026-10-29): se "diagnostico" registra
+     CONJUNTIVITE como ATUAL, a biomicroscopia do olho citado na consulta inclui
+     "presença de folículos em fundo de saco conjuntival". Vale para conjuntivite de
+     qualquer causa; no olho contralateral não citado, segue "olho calmo".
+     ✅ "OD: hiperemia conjuntival, presença de folículos em fundo de saco conjuntival; córnea transparente, câmara anterior formada, pupila regular e reagente, cristalino transparente"
+     Conjuntivite bilateral citada nos dois olhos → "AO: ..." com a frase de folículos.
 
   ⛔ "hiperemia e espessamento da margem palpebral, telangiectasias e disfunção de glândulas
      de meibômio" NÃO É FRASE DE ROTINA. E "com secreção espessa" NÃO entra nessa frase:
@@ -1556,6 +1598,12 @@ CAMPOS:
     Mesma regra vale para qualquer outra interpretação diagnóstica no fundo: descreva o
     achado, deixe o nome da doença para o diagnóstico.
 
+  ⚠️ ESCAVAÇÃO NO FINAL (regra do médico, 2026-10-29): quando a fundoscopia descreve
+     alteração de escavação, ela vai no FINAL da linha do olho, depois de retina, mácula e
+     padrão vascular. Mesma posição do "escavação fisiológica" do template normal.
+     ❌ "OD: escavação aumentada (relação E/D ~0,7); retina aplicada, mácula em bom aspecto..."
+     ✅ "OD: retina aplicada, mácula em bom aspecto, padrão vascular preservado, escavação aumentada (relação E/D ~0,7)"
+
   FORMATO (unilateral): header "FUNDOSCOPIA INDIRETA:" seguido de uma linha por olho (\n):
     "FUNDOSCOPIA INDIRETA:\nOD: [achado]; retina aplicada, mácula em bom aspecto, padrão vascular preservado, escavação fisiológica\nOE: fundo sem alterações, retina aplicada, mácula em bom aspecto, padrão vascular preservado, escavação fisiológica"
   FORMATO (bilateral): linha única AO:
@@ -1565,9 +1613,9 @@ CAMPOS:
 
   Exemplos:
     Nevo OE (unilateral): "FUNDOSCOPIA INDIRETA:\nOD: fundo sem alterações, retina aplicada, mácula em bom aspecto, padrão vascular preservado, escavação fisiológica\nOE: nevo de coroide inferotemporal, estável, sem sinais de atividade; retina aplicada, mácula em bom aspecto, padrão vascular preservado, escavação fisiológica"
-    Glaucoma OD escavação aumentada (unilateral) — SÓ a descrição; a suspeita vai para o diagnóstico (H400) e os exames para a conduta: "FUNDOSCOPIA INDIRETA:\nOD: escavação aumentada (relação E/D ~0,7); retina aplicada, mácula em bom aspecto, padrão vascular preservado\nOE: fundo sem alterações, retina aplicada, mácula em bom aspecto, padrão vascular preservado, escavação fisiológica"
+    Glaucoma OD escavação aumentada (unilateral) — SÓ a descrição; a suspeita vai para o diagnóstico (H400) e os exames para a conduta: "FUNDOSCOPIA INDIRETA:\nOD: retina aplicada, mácula em bom aspecto, padrão vascular preservado, escavação aumentada (relação E/D ~0,7)\nOE: fundo sem alterações, retina aplicada, mácula em bom aspecto, padrão vascular preservado, escavação fisiológica"
     Retinopatia diabética (bilateral): "FUNDOSCOPIA INDIRETA: AO sinais de retinopatia diabética leve (microaneurismas), sem edema macular aparente; retina aplicada, escavação simétrica e fisiológica"
-    Glaucoma bilateral simétrico (AO) — idem, sem a leitura diagnóstica: "FUNDOSCOPIA INDIRETA: AO escavação aumentada e simétrica (relação E/D ~0,7); retina aplicada, mácula em bom aspecto, padrão vascular preservado"
+    Glaucoma bilateral simétrico (AO) — idem, sem a leitura diagnóstica: "FUNDOSCOPIA INDIRETA: AO retina aplicada, mácula em bom aspecto, padrão vascular preservado, escavação aumentada e simétrica (relação E/D ~0,7)"
 
 ══════════════════════════════════════════════════════════════
 TESTE OBRIGATÓRIO — ANTES DE CADA LINHA

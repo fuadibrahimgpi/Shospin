@@ -82,10 +82,26 @@ let isSpeechPausedByCamera = false;
 let isSpeechActive = false;
 let isSpeechBackingOff = false;
 let speechRecoveryTimer = null;
+// `onend` foi visto desde o último `onstart`? Distingue "o Chrome encerrou a
+// sessão e o restart falhou" de "a sessão morreu sem emitir evento nenhum" —
+// dois diagnósticos diferentes que a sonda de liveness precisa não confundir.
+let speechEndSeen = false;
+// Reciclo do reconhecedor: `start()` lançar InvalidStateError prova que a sessão
+// está VIVA, não que ela está PRODUZINDO. No log 2026-09-03 o reconhecedor ficou
+// zumbi por 189s — vivo para a sonda, mudo para o `onresult`, sem sequer emitir
+// `no-speech` — e o auto-stop por silêncio encerrou a consulta no meio do exame.
+// A prova de produção é o próprio texto: sem `onresult` por SPEECH_RECICLO_MS,
+// o reconhecedor é derrubado e recriado. Ver _reciclarSpeechRecognition.
+let ultimoRecicloSpeech = 0;
+let reciclosSpeechNaSessao = 0;
 
 
 // Stream de áudio persistente
 let persistentStream = null;
+// Saúde do microfone: a track pode ficar MUDA (mute) sem terminar (`ended`) —
+// o SO/driver rouba o dispositivo, a extensão não recebe erro nenhum e a
+// sessão inteira sai vazia sem uma linha de log. Ver _watchMicTrack.
+let micMudoDetectado = false;
 
 // Estado da câmera
 let cameraStream = null;
@@ -102,6 +118,12 @@ let captureTimeout = null;
 //
 // Notas por flag:
 //   catarataGrau — "inicial" | "incipiente" | "moderada" | "avançada" | null
+//   lioLado — "OD" | "OE" | "AO" | null. Lado PSEUDOFÁCICO quando conhecido.
+//     Os gatilhos de voz não sabem o lado (deixam null = lente aplicada em todas
+//     as linhas, comportamento histórico); a rede determinística
+//     (parsePseudofaciaFromDados) só liga lioDetectada quando consegue o lado,
+//     para não escrever pseudofacia no olho fácico de um paciente operado de um
+//     olho só. Ver getBiomicroscopiaComLente.
 //   despedidaNaSessao — sticky: uma despedida/encerramento já foi DETECTADA
 //     nesta sessão (mesmo que bloqueada pelo gate ou cancelada). Diferente de
 //     consultaEncerradaDetectada, NÃO é limpa no cancelamento — persiste até o
@@ -122,6 +144,7 @@ const SESSION_FLAG_DEFAULTS = Object.freeze({
   catarataDetectada: false,
   catarataGrau: null,
   lioDetectada: false,
+  lioLado: null,
   opacidadeCapsulaDetectada: false,
   lenteLimpaDetectada: false,
   dilatacaoDetectada: false,
@@ -200,6 +223,7 @@ const _stateBridge = {
   get noSpeechCount()                { return noSpeechCount; },
   get isSpeechPausedByCamera()       { return isSpeechPausedByCamera; },
   get isSpeechActive()               { return isSpeechActive; },
+  get reciclosSpeechNaSessao()       { return reciclosSpeechNaSessao; },
   get lastTriggerTime()              { return lastTriggerTime; },
   get hasStopScheduled()             { return stopCommandTimeout !== null; },
   get stopGateOffset()               { return stopGateOffset; },
@@ -216,7 +240,7 @@ const _stateBridge = {
       hasAudioData: audioData !== null,
       hasCameraData: cameraData !== null,
       audioDataInjected, cameraDataInjected,
-      isSpeechPausedByCamera, isSpeechActive,
+      isSpeechPausedByCamera, isSpeechActive, reciclosSpeechNaSessao,
       flags,
       hasStopScheduled: stopCommandTimeout !== null,
       recognizedTextLength: recognizedText.length,
@@ -241,11 +265,15 @@ window.__shospState = Object.freeze(_stateBridge);
 
 const BIOMICROSCOPIA_NORMAL = 'AO: olho calmo, córnea transparente, câmara anterior formada, pupila regular e reagente, cristalino transparente';
 const FUNDOSCOPIA_NORMAL = 'FUNDOSCOPIA INDIRETA: AO retina aplicada, mácula em bom aspecto, sem alteração do padrão vascular, escavação simétrica e fisiológica';
-const BIOMICROSCOPIA_BLEFARITE = 'AO: hiperemia e espessamento da margem palpebral, telangiectasias e disfunção de glândulas de meibômio com secreção espessa; córnea transparente, câmara anterior formada, pupila regular e reagente, cristalino transparente';
+// "com secreção espessa" removido em 2026-08-04 (decisão do médico): a secreção
+// espessa (meibum expressível) é um achado à parte, que só existe se o médico o
+// examinou — no bloco padrão ela virava rotina. O template descreve apenas a
+// inflamação da margem, alinhado aos exemplos do prompt e das skills.
+const BIOMICROSCOPIA_BLEFARITE = 'AO: hiperemia e espessamento da margem palpebral, telangiectasias e disfunção de glândulas de meibômio; córnea transparente, câmara anterior formada, pupila regular e reagente, cristalino transparente';
 
 // Conduta e tratamento padrão para blefarite (auto-preenchidos quando injectBlefarite = true)
 const BLEFARITE_CONDUTA_PADRAO = 'Compressa morna por 2 min antes da higiene palpebral — 2x/dia\nHigiene palpebral com shampoo infantil (espuma na base dos cílios, ~20x, enxaguar) — 3x/dia';
-const BLEFARITE_TRATAMENTO_PADRAO = 'Associação (ATB + corticoide ocular) 1 gota 3x/dia após higiene palpebral\nLubrificante ocular 1 gota em cada olho ao longo do dia\nÔmega 3 (EPA+DHA) 1000 mg — 1 comprimido no almoço e 1 no jantar por 30 dias';
+const BLEFARITE_TRATAMENTO_PADRAO = 'Tobramicina + dexametasona 3x/dia após higiene palpebral\nCarmelose sódica ou hialuronato de sódio em cada olho ao longo do dia\nÔmega 3 (EPA+DHA) 1000 mg — 1 comprimido no almoço e 1 no jantar por 30 dias';
 
 const LENTE_CATARATA = 'catarata';
 const LENTE_LIO = 'pseudofacia, LIO transparente e bem posicionada';
@@ -285,19 +313,131 @@ const MAX_TIME = 15000;
 // ============================================================================
 
 /**
+ * O texto-base já afirma a lente de um olho pseudofácico?
+ *
+ * Desde 2026-08-03 o prompt manda o modelo escrever a lente DIRETO na linha do olho
+ * operado ("pseudofacia, LIO transparente e bem posicionada") em vez do placeholder.
+ * Isso torna alcançável um texto MISTO: uma linha com a LIO escrita e a outra ainda
+ * com "cristalino transparente" — ou seja, o olho FÁCICO. Ver _aplicaLente.
+ */
+function _textoJaAfirmaPseudofacia(baseText) {
+  return /pseudofac|\bLIO\b|lente\s+intra\s?ocular/i.test(baseText || '');
+}
+
+/**
+ * Substitui o placeholder "cristalino transparente" pela lente.
+ *
+ * `lado` ("OD"/"OE") restringe a substituição às linhas daquele olho — o texto de
+ * biomicroscopia é uma linha por olho ("OD: ...\nOE: ..."). Sem lado (null/"AO") a
+ * substituição é global, que é o comportamento dos gatilhos de voz (não sabem o lado).
+ *
+ * Linha "AO:" com lado unilateral NÃO é substituída: escrever pseudofacia num texto
+ * que fala dos dois olhos inventaria a cirurgia no olho fácico. Mesma política do
+ * _bioNormalSeguro em sidepanel-injection.js — placeholder visível é melhor que
+ * afirmação falsa, e o médico corrige a linha.
+ */
+function _aplicaLente(baseText, lente, lado) {
+  const LADO = String(lado || '').toUpperCase();
+  if (LADO !== 'OD' && LADO !== 'OE') return baseText.replaceAll('cristalino transparente', lente);
+
+  let ignorouLinhaBilateral = false;
+  const out = baseText.split('\n').map((linha) => {
+    if (!linha.includes('cristalino transparente')) return linha;
+    // Prefixo do olho no INÍCIO da linha, tolerando o marcador "[CONFIRMAR OLHO AFETADO] ".
+    // Deliberadamente ancorado: buscar OD/OE solto acharia a menção ao outro olho no meio
+    // da frase ("OD ... em relação ao OE") e trocaria a lente da linha errada.
+    const m = linha.match(/^\s*(?:\[[^\]]*\]\s*)?(OD|OE|AO)\b/i);
+    const prefixo = m ? m[1].toUpperCase() : null;
+    if (prefixo === LADO) return linha.replaceAll('cristalino transparente', lente);
+    if (prefixo === 'OD' || prefixo === 'OE') return linha; // olho contralateral: fácico
+    ignorouLinhaBilateral = true;                            // "AO" ou linha sem prefixo
+    return linha;
+  }).join('\n');
+
+  if (ignorouLinhaBilateral) {
+    console.warn(`[Lente] Pseudofacia ${LADO} não aplicada — o texto descreve os olhos juntos ("AO"/sem prefixo). Placeholder mantido para descrição manual.`);
+  }
+  return out;
+}
+
+/**
+ * Cápsula opacificada num texto que JÁ afirma a pseudofacia com a lente LIMPA.
+ *
+ * Desde 2026-08-03 o modelo escreve a lente direto na linha do olho operado; quando ele
+ * escreve a forma limpa ("pseudofacia, LIO transparente e bem posicionada") e o médico
+ * descreveu a cápsula embaçada, a substituição de placeholder não tem o que trocar — o
+ * texto sairia contradizendo a fala. Aqui a troca é sobre o ESTADO DA CÁPSULA, não sobre
+ * a existência da cirurgia: uma linha que já diz "pseudofacia" não é olho fácico, então
+ * atualizá-la não inventa cirurgia nenhuma (é por isso que o guard de texto misto do LIO
+ * não se aplica a este caminho).
+ *
+ * `lado` unilateral restringe a troca à linha daquele olho; linha "AO" com lado unilateral
+ * é preservada — afirmar opacidade nos dois olhos quando só um foi descrito seria invenção,
+ * mesma política de _aplicaLente.
+ */
+function _upgradeParaOpacidadeCapsula(baseText, lado) {
+  const LIO_LIMPA = /LIO\s+transparente\s+e\s+bem\s+posicionada/gi;
+  if (!LIO_LIMPA.test(baseText)) {
+    if (!/opacidade\s+de\s+c[áa]psula/i.test(baseText)) {
+      console.warn('[Lente] Opacidade de cápsula detectada, mas o texto afirma a pseudofacia com outra redação — cápsula NÃO atualizada. Confira o cristalino na biomicroscopia.');
+    }
+    return baseText;
+  }
+
+  const LADO = String(lado || '').toUpperCase();
+  const restringe = (LADO === 'OD' || LADO === 'OE');
+  let ignorouLinhaBilateral = false;
+
+  const out = baseText.split('\n').map((linha) => {
+    if (!/LIO\s+transparente\s+e\s+bem\s+posicionada/i.test(linha)) return linha;
+    if (restringe) {
+      const m = linha.match(/^\s*(?:\[[^\]]*\]\s*)?(OD|OE|AO)\b/i);
+      const prefixo = m ? m[1].toUpperCase() : null;
+      if (prefixo !== LADO) {
+        if (prefixo !== 'OD' && prefixo !== 'OE') ignorouLinhaBilateral = true;
+        return linha;
+      }
+    }
+    return linha.replace(/LIO\s+transparente\s+e\s+bem\s+posicionada/gi, 'opacidade de cápsula posterior');
+  }).join('\n');
+
+  if (ignorouLinhaBilateral) {
+    console.warn(`[Lente] Opacidade de cápsula ${LADO} não aplicada — o texto descreve os olhos juntos ("AO"/sem prefixo). Redação da lente mantida para correção manual.`);
+  }
+  return out;
+}
+
+/**
  * Retorna biomicroscopia com lente dinâmica baseada nas flags de detecção.
  * Prioridade: opacidade cápsula > LIO > catarata > padrão (cristalino transparente)
  */
 function getBiomicroscopiaComLente(baseText) {
-  if (SessionFlags.opacidadeCapsulaDetectada) return baseText.replaceAll('cristalino transparente', LENTE_OPACIDADE_CAPSULA);
+  if (!baseText) return baseText;
+
+  // GUARD DE TEXTO MISTO: o modelo já escreveu a lente do olho pseudofácico numa das
+  // linhas. Os placeholders que sobraram são do olho FÁCICO — trocá-los por LIO/
+  // opacidade de cápsula inventaria uma cirurgia que o paciente não fez naquele olho.
+  const _jaTemLente = _textoJaAfirmaPseudofacia(baseText);
+
+  if (SessionFlags.opacidadeCapsulaDetectada) {
+    // Texto que já afirma pseudofacia NÃO volta intacto aqui (ao contrário do LIO): a
+    // cápsula embaçada é uma atualização da lente já escrita. Ver _upgradeParaOpacidadeCapsula.
+    if (_jaTemLente) return _upgradeParaOpacidadeCapsula(baseText, SessionFlags.lioLado);
+    return _aplicaLente(baseText, LENTE_OPACIDADE_CAPSULA, SessionFlags.lioLado);
+  }
   // LIO tem prioridade sobre catarata: pseudofacia confirmada significa que o cristalino
   // natural já foi removido — não pode haver catarata nesse olho. Se ambas as flags
   // dispararam, a menção de catarata é histórica ("antes da cirurgia tinha catarata") e a
   // LIO (LIO_COMMANDS já não cobre cirurgia futura) é o achado definitivo. Ver Caso 7.
-  if (SessionFlags.lioDetectada) return baseText.replaceAll('cristalino transparente', LENTE_LIO);
+  if (SessionFlags.lioDetectada) {
+    if (_jaTemLente) return baseText;
+    return _aplicaLente(baseText, LENTE_LIO, SessionFlags.lioLado);
+  }
   if (SessionFlags.catarataDetectada) {
     const lente = SessionFlags.catarataGrau ? `catarata ${SessionFlags.catarataGrau}` : LENTE_CATARATA;
-    return baseText.replaceAll('cristalino transparente', lente);
+    // Catarata NÃO passa pelo guard misto: num paciente operado de um olho só, a linha
+    // que ainda tem placeholder é justamente a do olho fácico — onde a catarata cabe.
+    return _aplicaLente(baseText, lente, null);
   }
   return baseText;
 }
@@ -358,6 +498,101 @@ function parseCatarataFromDiagnostico(diagnostico) {
   else if (/avancad[ao]|madura/.test(semHistorico)) grau = 'avançada';
 
   return { detected: true, grau };
+}
+
+/**
+ * Deriva PSEUDOFACIA (olho já operado de catarata) dos dados estruturados do LLM.
+ *
+ * Origem (log 2026-08-03): paciente pseudofácica AO ("eu fiz a cirurgia de catarata
+ * tem um ano"; médico: "a cirurgia ficou boa"). Nenhum gatilho de LIO disparou —
+ * LIO_COMMANDS só tinha as formas de 3ª pessoa ("fez cirurgia de catarata"), não a
+ * fala do próprio paciente ("fiz") — então a biomicroscopia foi injetada com
+ * "cristalino transparente" num olho SEM cristalino. Nem o CID salvava: a consulta
+ * não gerou Z96.1 (saiu H401/H524/H010), e é o campo antecedentes_oftalmologicos
+ * que carrega a cirurgia.
+ *
+ * Função PURA (sem efeitos colaterais). Retorna { detected, lado }, com
+ * lado ∈ "OD" | "OE" | "AO" | null. `detected` sem `lado` = evidência de pseudofacia
+ * com lateralidade ambígua: o chamador NÃO deve ligar a flag (ver sidepanel-injection).
+ *
+ * Só conta cirurgia JÁ REALIZADA — mesma regra do LIO_COMMANDS. Linhas de cirurgia
+ * PLANEJADA ("indicada cirurgia de catarata", "vai operar"), negativas ("nega cirurgia")
+ * e cirurgia de TERCEIRO ("minha mãe operou o olho direito", que só aparece em hda) são
+ * descartadas.
+ */
+function parsePseudofaciaFromDados(dados) {
+  const vazio = { detected: false, lado: null };
+  if (!dados) return vazio;
+
+  // hda/retorno entram porque é ali que a cirurgia costuma vir na voz do paciente
+  // ("fiz um olho e depois o outro"). Fonte narrativa é segura AQUI porque o portão
+  // é a lateralidade: texto frouxo no máximo produz detected sem lado — que o
+  // chamador trata como "não substituir nada", nunca como pseudofacia inventada.
+  const fontes = [
+    dados.antecedentes_oftalmologicos,
+    dados.diagnostico,
+    dados.biomicroscopia,
+    dados.hda,
+    dados.retorno,
+  ].filter(Boolean).join('\n');
+  if (!fontes) return vazio;
+
+  const norm = String(fontes).toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+
+  // Cirurgia FUTURA/planejada não é pseudofacia. O veto é REGENTE (o marcador precisa
+  // vir a até 2 palavras da cirurgia) — um "aguarda YAG" no fim da linha não pode
+  // apagar a facectomia dita no começo dela. Mesma estreiteza da negação abaixo.
+  const futuroRege = /\b(indicad[ao]|indicacao|programad[ao]|agendad[ao]|aguardando|planejad[ao]|encaminhad[ao]|vai|vamos|ira|sera|pretende|pensar\s+em|candidat[ao])\s+(\S+\s+){0,2}(cirurgia|facectomia|facoemulsificacao|operar|operad\w*|catarata)/;
+
+  // Negação explícita da cirurgia. Deliberadamente ESTREITA: um "sem" solto não serve
+  // de negação porque aparece na própria descrição da lente ("pseudofacia AO, LIO sem
+  // opacidade de cápsula") — só nega quando o "sem" rege a cirurgia.
+  const negacao = /\b(nega|negou|nunca\s+operou|jamais|nao\s+(foi\s+)?(operad[ao]|operou|fez))\b|sem\s+(cirurgia|antecedente|historia\s+de\s+cirurgia)/;
+
+  // Cirurgia de TERCEIRO — em hda/retorno o paciente fala da família ("minha mãe
+  // operou o olho direito"). Sem este filtro isso viraria pseudofacia com lado.
+  const terceiro = /\b(mae|pai|irma|irmao|filh[ao]|espos[ao]|marido|mulher|avo|avos|tia|tio|prim[ao]|sogr[ao]|vizinh[ao]|amig[ao]|colega)\b/;
+
+  // Evidência INEQUÍVOCA de olho já operado: são estados, não eventos — nenhuma delas
+  // aparece em consulta de olho fácico, então o veto de futuro não se aplica.
+  const evidenciaInequivoca = /pseudofac|\blio\b|lente\s+intra\s?ocular|facectomia|facoemulsificacao|\bz\s?96\.?1\b/;
+  // Evidência CIRÚRGICA: descreve o evento, e evento pode ser futuro — passa pelo veto.
+  // "cirurgia ... de catarata" aceita até 2 palavras no meio — caso real 2026-08-03:
+  // "Cirurgia combinada de catarata e glaucoma AO há ~1 ano".
+  const evidenciaCirurgica = /cirurgia(\s+\S+){0,2}\s+de\s+catarata|operad[ao]s?\s+de\s+catarata|catarata\s+operada|operou\s+(a\s+)?catarata/;
+
+  let temOD = false, temOE = false, temAO = false, achou = false;
+
+  for (const linha of norm.split('\n')) {
+    if (negacao.test(linha) || terceiro.test(linha)) continue;
+    const inequivoca = evidenciaInequivoca.test(linha);
+    const cirurgica  = evidenciaCirurgica.test(linha) && !futuroRege.test(linha);
+    if (!inequivoca && !cirurgica) continue;
+    achou = true;
+
+    // A linha mistura olho operado e cirurgia PLANEJADA ("Pseudofacia OD; indicada
+    // cirurgia de catarata no olho esquerdo"): os dois olhos são citados, mas só um
+    // é pseudofácico. Não dá para separar com confiança — conta a detecção e abandona
+    // a lateralidade (sem lado o chamador não substitui nada, que é o desfecho seguro).
+    if (futuroRege.test(linha)) continue;
+
+    const bilateral = /\bao\b|\bambos\b|\bbilateral\b|(os\s+)?dois\s+olhos|um\s+olho\s+e\s+(depois\s+)?o\s+outro|nos\s+dois/.test(linha);
+    const od = /\bod\b|olho\s+direito/.test(linha);
+    const oe = /\boe\b|olho\s+esquerdo/.test(linha);
+
+    if (bilateral || (od && oe)) temAO = true;
+    else if (od) temOD = true;
+    else if (oe) temOE = true;
+  }
+
+  if (!achou) return vazio;
+
+  let lado = null;
+  if (temAO || (temOD && temOE)) lado = 'AO';
+  else if (temOD) lado = 'OD';
+  else if (temOE) lado = 'OE';
+
+  return { detected: true, lado };
 }
 
 /**
@@ -463,6 +698,7 @@ const startCameraBtn = document.getElementById('startCameraBtn');
 const stopCameraBtn = document.getElementById('stopCameraBtn');
 const examFieldsContainer = document.getElementById('examFieldsContainer');
 const manualCaptureBtn = document.getElementById('manualCaptureBtn');
+const cameraFramingGuide = document.getElementById('cameraFramingGuide');
 
 // Comum
 const dataSummary = document.getElementById('dataSummary');

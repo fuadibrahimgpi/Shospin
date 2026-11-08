@@ -7,7 +7,8 @@
     "check": "node scripts-dev/check.js",
     "test": "node scripts-dev/test.js",
     "test:integration": "node utils/integration-test.js",
-    "test:hooks": "node utils/hooks-test.js"
+    "test:hooks": "node utils/hooks-test.js",
+    "test:agents": "node utils/agents-test.js"
   },
   "engines": {
     "node": ">=18"

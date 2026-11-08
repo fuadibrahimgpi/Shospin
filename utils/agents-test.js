@@ -33,7 +33,8 @@ t('LEXICO-5', Lexico.encontrarMedicamentos('Lágrima artificial e Xalatan').map(
 const _nome = txt => { const a = Lexico.encontrarMedicamentos(txt)[0]; return a && Lexico.nomeRegistrado(a); };
 t('LEXICO-6', _nome('Vigadexa') === 'Moxifloxacino + dexametasona (Vigadexa)', _nome('Vigadexa'));
 t('LEXICO-7', _nome('dorzolamida') === 'Dorzolamida', 'princípio dito sozinho não ganha marca');
-t('LEXICO-8', _nome('Systane') === 'Lubrificante ocular (Systane)' && _nome('hialuronato') === 'Hialuronato' && _nome('lubrificante') === 'Lubrificante ocular');
+t('LEXICO-8', _nome('Systane') === 'Lubrificante ocular (Systane)' && _nome('hialuronato') === 'Hialuronato' && _nome('lubrificante') === 'Carmelose sódica ou hialuronato de sódio' && _nome('lubrificantes') === Lexico.LUBRIFICANTE_PADRAO, 'só "lubrificante(s)" dito vira o registro padrão; marca e princípio ditos vencem');
+t('LEXICO-8b', _nome('lagrima artificial') === 'Lubrificante ocular', '"lágrima artificial" não é a palavra "lubrificante": segue como classe');
 t('LEXICO-9', _nome('trometolou') === 'Cetorolaco' && _nome('tobra-dexa') === 'Tobramicina + dexametasona', 'variante de ASR não vira marca');
 t('LEXICO-10', Lexico.MEDICAMENTOS_LEXICO.every(e => (e.marcas || []).every(m => e.nomes.some(n => Lexico.normalizarLexico(n).replace(/ /g, '') === Lexico.normalizarLexico(m).replace(/ /g, '')))), 'marca fora de nomes nunca casaria');
 
@@ -133,6 +134,33 @@ t('RECHECK-8', r7.divergencias.length === 0, JSON.stringify(r7));
 // Biomicroscopia multilinha: uma linha alterada basta para divergir
 const r8 = Recheck.conferirFidelidade([{ label: 'Biomicroscopia', texto: 'Córnea transparente\nCâmara anterior profunda' }], { Biomicroscopia: 'Córnea transparente\nCâmara anterior rasa' });
 t('RECHECK-9', r8.divergencias.length === 1 && r8.divergencias[0].linha === 'Câmara anterior profunda', JSON.stringify(r8));
+
+// Diagnóstico [Med] (só log): mostra fala × modelo × final e NUNCA altera o dado
+function diag(fala, dados, tipo) {
+  const raw = { dados, tipo_consulta: tipo || 'retorno' };
+  const antes = JSON.stringify(raw);
+  const d = DecisionEngine.buildDecision(raw, { transcribedText: fala });
+  return { texto: d.diagMedicacao, intacto: JSON.stringify(raw) === antes, final: d.clonedAIResponse.dados };
+}
+const dg1 = diag('Eu estou usando o colírio só para hidratar. Continua caprichando a lubrificação e toma ômega 3.',
+  { medicacoes_em_uso: 'Colírio lubrificante', tratamento: null });
+t('DIAG-1', /^\[Med\] fala:/.test(dg1.texto) && /generico=\[.*colirio so para hidratar/.test(dg1.texto) && /lubrific/.test(dg1.texto) && /omega/.test(dg1.texto), dg1.texto);
+// "continua" + colírio em uso: o Guard 2e preenche o tratamento; o [Med] tem que MOSTRAR a mudança
+t('DIAG-2', /trat=∅ → "Colírio lubrificante"/.test(dg1.texto) && /Guard 2e/.test(dg1.texto), dg1.texto);
+const dg1b = diag('Eu estou usando o colírio só para hidratar. Toma ômega 3.', { medicacoes_em_uso: 'Colírio lubrificante', tratamento: null });
+t('DIAG-3', /ATENÇÃO: trat vazio/.test(dg1b.texto), 'tratamento vazio + palavra de medicação deve avisar o placeholder: ' + dg1b.texto);
+t('DIAG-3b', dg1b.intacto && dg1b.final.tratamento === null, 'o diagnóstico não pode alterar nada');
+const dg2 = diag('Vou passar o Xalatan à noite.', { medicacoes_em_uso: 'Nega uso de medicações oculares', tratamento: 'Medicação ocular prescrita' });
+t('DIAG-4', /ALERTA: fala cita Latanoprosta/.test(dg2.texto), dg2.texto);
+const dg3 = diag('Vou passar o Xalatan à noite.', { medicacoes_em_uso: 'Nega uso de medicações oculares', tratamento: 'Latanoprosta (Xalatan) à noite' });
+t('DIAG-5', !/ALERTA/.test(dg3.texto) && !/ATENÇÃO/.test(dg3.texto), dg3.texto);
+const dg4 = diag('Suspende o Xalatan e começa Timoptol.', { conduta: 'Suspender Xalatan', tratamento: 'Timolol' });
+t('DIAG-6', /conduta-suspensao="Suspender Xalatan"/.test(dg4.texto), dg4.texto);
+const dg5 = diag('Tudo normal, volta em um ano.', { tratamento: null });
+t('DIAG-7', !/ALERTA|ATENÇÃO/.test(dg5.texto), 'sem medicação na fala não há alerta: ' + dg5.texto);
+t('DIAG-8', DecisionEngine.buildDecision({ dados: null }, { transcribedText: 'colírio' }).diagMedicacao === null, 'dados nulos não quebra');
+const dg7 = DecisionEngine.buildDecision({ dados: { tratamento: 'Xalatan', medicacoes_em_uso: 'Xalatan' }, tipo_consulta: 'retorno' }, { transcribedText: 'mantém o Xalatan' });
+t('DIAG-9', /em_uso="Xalatan"/.test(dg7.diagMedicacao) && !/ → /.test(dg7.diagMedicacao.split('\n')[1]), 'campo igual não mostra seta: ' + dg7.diagMedicacao);
 
 console.log(`\n  Total: ${ok + falhas}  |  ✅ ${ok}  |  ❌ ${falhas}`);
 process.exit(falhas ? 1 : 0);

@@ -1,26 +1,44 @@
 ---
 name: ocr-topcon-oftalmologia
-description: "Interpreta e organiza dados de tickets de autorefrator TOPCON para prontuários oftalmológicos. Use quando o usuário apresentar imagem ou transcrição de ticket TOPCON e precisar extrair refração, tonometria e paquimetria em JSON estruturado, com regras anti-alucinação, validação de lateralidade OD/OE, tratamento de tickets dobrados, ilegíveis, invertidos, colunas paralelas, ERR, lensômetro e bloqueio de injeção automática quando houver incerteza clínica."
+description: "Interpreta e organiza dados de tickets de autorefrator TOPCON para prontuários oftalmológicos. Use quando o usuário apresentar imagem ou transcrição de ticket TOPCON e precisar extrair refração, tonometria e paquimetria em JSON estruturado, com regras anti-alucinação, validação de lateralidade OD/OE, tratamento de tickets dobrados, ilegíveis, invertidos, múltiplos tickets, ERR e lensômetro, e descarte por olho quando houver incerteza clínica — as mesmas regras do OCR da extensão."
 ---
 
 # OCR TOPCON — Interpretação Segura de Tickets Oftalmológicos
 
+## Onde isso REALMENTE roda (autoridade)
+
+> ⚠️ **O código que executa em produção é `src/gemini-exam-agent.js`:** o prompt
+> `_getExamPrompt`, os prompts de verificação e desempate
+> (`_getRefractionVerifyPrompt`, `_getSphereSignTiebreakPrompt`,
+> `_getCylinderTiebreakPrompt`, `_getAxisTiebreakPrompt`), o pós-processamento
+> `_postProcessRefraction` / `_processEye`, o bloqueio por olho `_resolveBlocking` e o
+> CID refrativo `_inferCidRefracao`. Editar esta skill NÃO muda a extensão. Regra
+> geral: `skills/user/README.md`.
+
+Esta skill serve ao Claude lendo um ticket diretamente (foto ou transcrição colada).
+Desde 2026-11-07 ela **segue o runtime**: mesmas regras de leitura e mesmo JSON de
+saída do `_getExamPrompt`, e o valor final de cada olho é decidido pelas mesmas regras
+do `_processEye`. O que só existe aqui é o que a extensão faz por mecanismo e o Claude
+precisa fazer de cabeça: reorientar o ticket (a extensão gira a imagem e pede de novo),
+rejeitar lensômetro e o loop de feedback com o médico. O teste
+`SKILL_PROMPT_ANCHORS_OCR` confere as regras compartilhadas.
+
 ## Objetivo
 
-Extrair dados de tickets de autorefrator TOPCON de forma estruturada, rastreável e conservadora, priorizando segurança clínica e evitando alucinação. A saída deve ser um JSON pronto para revisão humana e, quando seguro, para injeção em prontuário oftalmológico.
+Extrair dados de tickets de autorefrator TOPCON de forma estruturada, rastreável e conservadora, priorizando segurança clínica e evitando alucinação. A saída é o mesmo JSON que a extensão pede ao modelo, seguido do valor final por olho e da lista de avisos para revisão do médico.
 
-Esta skill não substitui julgamento clínico. Em caso de dúvida visual, lateralidade incerta, leitura incompleta ou inconsistência interna, prefira `null`, registre o motivo e bloqueie a injeção automática.
+Esta skill não substitui julgamento clínico. Em caso de dúvida visual, lateralidade incerta, leitura incompleta ou inconsistência interna, prefira `null` e explique em `_avisos`. Vazio é uma resposta válida; inventar um número é sempre pior do que `null`.
 
 ## Princípios absolutos
 
 - Leia apenas caracteres, dígitos e sinais claramente visíveis no ticket.
 - Nunca copie valores de OD para OE ou de OE para OD.
 - Nunca misture valores de `KRT. DATA`, `KM DATA`, `KER.` ou `KERT.` com `REF. DATA`.
-- Nunca calcule valores, exceto quando esta skill autorizar explicitamente uma inferência.
-- Use `null` somente junto com um campo de motivo quando houver ambiguidade clínica.
-- Se a lateralidade `<R>`/`<L>` estiver incerta, não injete automaticamente no prontuário.
-- Se um campo estiver ilegível, use `null` apenas naquele campo; se o olho inteiro estiver ausente ou oculto, use `null` para o objeto inteiro do olho.
-- Se houver conflito entre regra de extração e segurança clínica, prevalece a segurança: marque revisão manual e bloqueie injeção automática.
+- Nunca calcule valores. Não estime. Não complete por simetria.
+- Se a lateralidade `<R>`/`<L>` de um olho estiver incerta, esse olho inteiro é `null`.
+- Se um campo estiver ilegível, use `null` naquele campo; se o olho inteiro estiver ausente, ilegível ou sem esfera, use `null` para o objeto inteiro do olho.
+- Nunca decida qual coluna é S, C ou A pela magnitude dos valores: a ordem posicional manda (1ª = S, 2ª = C, 3ª = A). Esfera pequena com cilindro grande (ex.: `S -0.25  C -3.75  A 76`) é real.
+- OD e OE podem ser muito diferentes (anisometropia). Não harmonize.
 
 ## Workflow obrigatório
 
@@ -30,43 +48,30 @@ Esta skill não substitui julgamento clínico. Em caso de dúvida visual, latera
 |---|---|---|
 | `REF. DATA`, `RET. DATA`, `IER. DATA` | Autorefrator TOPCON | Prosseguir |
 | `TOPCON CL-200`, `PSM`, `ABBE`, `DWN`, `UP` | Lensômetro | Rejeitar como autorefrator |
-| Nenhum cabeçalho reconhecível | Tipo desconhecido | Extrair apenas se houver evidência suficiente e bloquear injeção |
+| Nenhum cabeçalho reconhecível | Tipo desconhecido | Extrair apenas o que tiver cabeçalho explícito; avisar |
 
-Se for lensômetro, não extraia refração a partir de `PSM`, `ABBE`, `DWN` ou `UP`. Retorne o schema completo com `tipo_ticket: "lensometro"`, seções clínicas `null`, `_bloquear_injecao: true` e `_aviso` explicativo.
+Se for lensômetro, não extraia refração a partir de `PSM`, `ABBE`, `DWN` ou `UP`: `refracao`, `tonometria` e `paquimetria` ficam `null` e `_avisos` explica o motivo.
 
 ### Passo 2 — Orientação do ticket
 
-O ticket pode estar fotografado de cabeça para baixo. Sinais comuns:
+O ticket é quase sempre fotografado deitado ou de cabeça para baixo. O TOPO é o cabeçalho com a data, `REF.DATA` e `VD:`; o RODAPÉ é o lado de `TOPCON`, `TONO.DATA` e `PACH.DATA`. De cabeça para baixo, `REF.DATA` vira `ATAD.FER` e `<R>` vira `>R<`.
 
-- `NAME`, `REF. DATA`, `TONO. DATA` ou `PACH. DATA` aparecem na parte inferior.
-- Texto está invertido verticalmente.
-- As linhas aparecem em ordem visual reversa.
-
-Se o ticket estiver invertido, reoriente mentalmente antes de extrair. A lateralidade continua sendo definida por `<R>` e `<L>`, independentemente da posição física na imagem. Marque `_ticket_invertido: true`.
+Reoriente mentalmente antes de extrair, até `REF.DATA` ficar legível na horizontal. Nunca transcreva com o ticket torto: lendo de lado, a coluna do cilindro fica onde a mente espera a esfera, e o valor sai trocado com aparência plausível. A lateralidade continua sendo definida por `<R>` e `<L>`, independentemente da posição física na imagem. Registre a reorientação em `_avisos`.
 
 ### Passo 3 — Mapeamento das seções visíveis
-
-Identifique quais seções estão presentes antes de extrair:
 
 | Cabeçalho | Ação |
 |---|---|
 | `REF. DATA` | Extrair refração |
 | `TONO. DATA` | Extrair tonometria |
 | `PACH. DATA` | Extrair paquimetria |
-| `KRT. DATA`, `KM DATA`, `KER.`, `KERT.` | Ignorar completamente |
+| `KRT. DATA`, `KM DATA`, `KER.`, `KERT.` | Ignorar completamente (R1, R2, AVE, CYL ceratométrico, MM1, MM2 não são refração) |
 
 Em tickets dobrados ou parciais, é frequente `KRT. DATA` aparecer de um lado da foto e `REF. DATA` de outro. Nunca use valores de ceratometria como se fossem refração.
 
-### Passo 4 — Transcrição literal antes da extração
+### Passo 4 — Mais de um ticket na mesma foto
 
-Antes de gerar o JSON final, monte mentalmente uma transcrição curta das linhas que sustentam a extração:
-
-- linha ou bloco usado para OD;
-- linha ou bloco usado para OE;
-- linha de tonometria OD/OE, se presente;
-- linha de paquimetria OD/OE, se presente.
-
-Esses textos devem aparecer em `debug_leitura`. Se não houver texto confiável para um campo, use `null` e registre o motivo.
+Cada ticket tem seu próprio cabeçalho com data e hora. Nunca misture seções de tickets diferentes como se fossem do mesmo exame. Se um ticket cobre parte do outro e não dá para saber a qual papel uma seção pertence, essa seção é `null`. Com mais de um ticket, `_ticketsMultiplos: true`.
 
 ## Auto-regulação por feedback (loop de aprendizado)
 
@@ -147,119 +152,86 @@ As lições de `licoes-aprendidas.md` são uma camada **adicional**, não substi
 
 ---
 
-## Regra CYL — leitura da coluna de cilindro do ticket TOPCON
-
-O cabeçalho da coluna de cilindro no ticket TOPCON é sempre `CYL: (−)` (notação negativa). Cada linha de medida tem 3 colunas: **S** (esfera), **C** (cilindro), **A** (eixo). Para evitar cilindro fantasma, siga rigorosamente:
-
-1. **Só registrar cilindro quando houver número com sinal explícito** na coluna C (ex.: `−0,25`, `−0,50`, `−1,00`).
-2. Se a coluna C trouxer traço, hífen, ponto, espaço em branco, `− − −`, `...`, `0.00` ou qualquer marcador não-numérico → registrar **cilindro ausente** (esférico puro). **Nunca assumir `−0,25` por padrão.**
-3. Se cilindro for ausente, o campo eixo (A) **também fica vazio**. Nunca inventar eixo `90°` ou `180°` "porque o aparelho costuma imprimir".
-4. Em caso de dúvida entre `−0,25` e traço (foto ruim, borda cortada, baixa resolução), **não chutar**: retornar o campo como `"indeterminado"` e sinalizar no JSON de saída com `cyl_incerto: true` para revisão manual do médico.
-5. **Sanity-check obrigatório com S.E. (equivalente esférico) impresso pelo próprio TOPCON.** A relação é `S.E. = esfera + (cilindro / 2)`. Se o parser leu cilindro mas o S.E. impresso bate exatamente com a esfera pura (cilindro implícito = 0), **descartar o cilindro lido** — é alucinação. Exemplo: esfera `−0,50` e S.E. `−0,50` → cilindro tem que ser `0`; qualquer outro valor é erro de leitura.
-6. As 3 medidas consecutivas do mesmo olho devem ser coerentes entre si. Se 2 das 3 vêm sem cilindro e 1 vem com `−0,25`, tratar a divergente como provável alucinação e marcar `cyl_incerto: true`.
-7. Quando em dúvida, **prefira subdiagnosticar cilindro a superdiagnosticar** — astigmatismo fantasma gera prescrição errada; ausência de astigmatismo discreto não causa dano.
-8. **Sinais independentes.** O sinal da esfera e o do cilindro são independentes entre si. É normal e correto haver dois números negativos na mesma linha (ex.: `S −2,25  C −0,50`). Nunca propague o sinal da esfera para o cilindro; nunca some ou combine os dois valores.
-
 ## Refração (`REF. DATA`)
 
 ### Lateralidade
 
 - `<R>` corresponde a OD.
 - `<L>` corresponde a OE.
-- A posição física na imagem não define lateralidade.
-- A ordem das colunas é definida pelo cabeçalho impresso, como `<R> <L>` ou `<L> <R>`.
-- Se o cabeçalho estiver ilegível, não assuma lateralidade para injeção automática. Extraia como melhor esforço, marque `_lateralidade_insegura: true` e `_bloquear_injecao: true`.
+- A posição física na imagem não define lateralidade. Nunca use "esquerda da imagem = OD".
+- A ordem dos blocos é definida pelo cabeçalho impresso.
+- Se você não consegue identificar `<R>` ou `<L>` claramente para um olho, retorne `null` para ESSE OLHO INTEIRO. Não chute.
 
 ### Estrutura usual
 
-O TOPCON costuma imprimir 3 medições e 1 média. Use a média, geralmente a 4ª linha ou a linha sem número de medição. Exemplo:
-
 ```text
-S -1.25  C -0.50  A  90   <- medição 1: ignorar
-S -1.50  C -0.50  A  85   <- medição 2: ignorar
-S -1.25  C -0.75  A  90   <- medição 3: ignorar
-S -1.25  C -0.50  A  88   <- média: usar
-S.E. -1.50                 <- SE: usar para campo se
+<R>  S      C      A
+  + 1.75  - 0.50   75    <- medição 1
+  + 1.75  - 0.50   75    <- medição 2
+  + 1.75  - 0.50   75    <- medição 3
+  + 1.75  - 0.50   75    <- MÉDIA (negrito, imediatamente acima do S.E.)
+  S.E. + 1.50            <- equivalente esférico: referência, não fonte
 ```
 
-Nunca use uma linha que contenha apenas `S.E.` como fonte de ESF, CIL ou EIXO.
+Podem existir de 1 a 3 medições. Transcreva as medições e a média separadamente (o valor final é decidido depois, ver "Valor final por olho"). A linha `S.E.` NUNCA é fonte de S, C ou A.
 
-### Campos de refração
+### Coluna S (esfera)
 
-| Campo | Regra |
-|---|---|
-| `esf` | Copie com sinal. Zero pode ser `"plano"` se estiver assim no ticket. Se sinal ausente, só infira se ESF puder ser derivado com segurança de `SE - CIL/2`; se não, use `null`. |
-| `cil` | Deve ser negativo, zero ou `null`. Se vier positivo em notação de cilindro positivo, converta para negativo somente se todos os campos necessários para transposição forem visíveis; caso contrário, bloqueie injeção. |
-| `eixo` | Inteiro entre 1 e 180. Se `cil` for `0` ou `null`, `eixo` deve ser `null`. |
-| `se` | Leia do ticket. Não calcule. Se ausente ou ilegível, use `null`. **Nunca copie a esfera para `se`**: se `cil != 0` e `se == esf`, é matematicamente impossível — descarte como alucinação e use `null`. |
+- Número com sinal (`+` ou `−`). Célula vazia → `null`.
+- Se ESF = `0.00`, escreva `"plano"`. O TOPCON também imprime literalmente `PLANO` ou `PL`: retorne `"plano"`, nunca `+0.25` ou outro número pequeno.
+- Se o sinal não aparece visível, null (não chute). Não infira o sinal pelo S.E. nem por expectativa clínica. (Na extensão, a verificação e o desempate de sinal resolvem isso com uma nova leitura; aqui, o médico confere.)
+- `+` tem traço vertical E horizontal; `−` tem só o horizontal. Em impressão térmica o traço vertical do `+` sai fraco: olhe com atenção. Hipermetropia é tão comum quanto miopia.
 
-### CIL zero
+### Regra CYL — coluna C (cilindro)
 
-Se `C 0.00` ou `C 0` estiver impresso:
+O cabeçalho `CYL: (-)` é só o marcador da convenção negativa, não é valor.
 
-- use `cil: 0`;
-- use `eixo: null`;
-- use `cil_motivo: "zero_impresso"`;
-- não trate como dado ilegível.
-
-Isso evita confundir ausência de astigmatismo com falha de leitura.
-
-### CIL ilegível ou ausente
-
-Se CIL não estiver claramente impresso:
-
-- use `cil: null`;
-- use `eixo: null`;
-- preencha `cil_motivo` com `"ilegivel"`, `"ausente"` ou `"nao_aplicavel"`;
-- nunca copie CIL/EIXO do outro olho.
+1. Se a célula está VAZIA, EM BRANCO, sem dígitos visíveis → `null`. Traço, hífen, ponto e `...` também são vazio.
+2. Se o ticket imprime literalmente "0.00", é null (sem astigmatismo).
+3. Se imprime "0.50" sem sinal, é -0.50 (convenção negativa).
+4. Se a coluna C mostra algo que pode ser traço OU −0.25 (foto ruim, borda cortada, baixa resolução), não chute: `c: null` e `a: null` nesse olho.
+5. Prefira subdiagnosticar cilindro a superdiagnosticar — astigmatismo fantasma gera prescrição errada; ausência de astigmatismo discreto não causa dano.
+6. **Sinais independentes.** O sinal da esfera e o do cilindro são independentes. É normal haver dois números negativos na mesma linha (ex.: `S −2,25  C −0,50`). Nunca propague o sinal da esfera para o cilindro; nunca some ou combine os dois.
+7. NUNCA copie o C do outro olho.
 
 ### Anti-truncamento de CIL
 
-Em tickets térmicos, valores como `-3.50` podem ser lidos erroneamente como `-0.50` ou `.50`. Antes de registrar CIL:
+Em tickets térmicos, valores como `-3.50` podem ser lidos erroneamente como `-0.50` ou `.50`:
 
 - confira se existe dígito inteiro antes do ponto decimal;
 - leia `C - 3.50` como `-3.50`, não como `-0.50`;
-- se a imagem estiver degradada e houver dúvida entre `-0.50` e `-3.50`, use `null` e bloqueie injeção;
-- não rejeite CIL alto apenas por ser alto. CIL até `-8.00` pode ser clinicamente possível.
+- se houver dúvida entre `-0.50` e `-3.50`, retorne `c: null` e `a: null`;
+- CIL alto (até `-8.00`) é clinicamente possível — não rejeite por magnitude.
 
-### Anti-espelhamento
+### Coluna A (eixo)
 
-É comum o equipamento obter leitura completa de um olho e apenas esfera do outro. Se uma coluna não mostra CIL/EIXO claramente:
+- Inteiro de 1 a 180, sem sinal. Célula vazia → `null`.
+- Se C é `null`, A obrigatoriamente também é `null`. Nunca invente `90°` ou `180°`.
+- Cilindro sem eixo não existe. Se você vê o cilindro mas não consegue ler o eixo, releia; se ainda assim não conseguir, C e A ficam `null`.
 
-- mantenha `cil: null` e `eixo: null` naquele olho;
-- não use simetria visual;
-- não copie valores da coluna vizinha;
-- se OD e OE ficarem idênticos em `esf`, `cil` e `eixo`, com `cil` diferente de zero, marque `_padrao_suspeito: true`, `_bloquear_injecao: true` e peça revisão manual.
+### Passo dióptrico
 
-### Colunas paralelas
+Esfera e cilindro devem ser múltiplos exatos de 0.25D. Leitura como `-0.37`, `-1.13` ou `-0.40` é erro de OCR → `null`.
 
-Exemplo:
+### Completude — esfera é obrigatória
 
-```text
-        <L>      <R>
-S    -0.75    -1.25
-C    -0.50    -0.50
-A       93       70
-```
+Refração com C presente e S=null é IMPOSSÍVEL clinicamente. Se você não consegue ler a esfera de um olho, o OLHO INTEIRO é `null` — nunca devolva cilindro e eixo "isolados".
 
-Resultado:
+### S.E. — regra anti-alucinação
 
-- OE é a coluna sob `<L>`: `esf="-0.75"`, `cil=-0.50`, `eixo=93`.
-- OD é a coluna sob `<R>`: `esf="-1.25"`, `cil=-0.50`, `eixo=70`.
+O campo `se` é apenas o reflexo literal da linha `S.E.` impressa. Não é cálculo, não é estimativa. Nunca copie a esfera para `se`.
 
-Nunca use “esquerda da imagem = OD” como regra. A lateralidade é sempre pelo cabeçalho.
+- Linha `S.E.` ausente, cortada ou ilegível → `se: null`.
+- Com cilindro presente, é matematicamente impossível que `se` seja igual à esfera (S.E. = S + C/2): releia; se continuar duvidoso, `se: null`.
+- Sem cilindro (C vazio ou `0.00`), `se` igual à esfera é o esperado.
+- Sinal do S.E. não visível → `se: null`.
 
-### Média, inversão e linha espúria em colunas paralelas
+### Autovigilância antes de responder
 
-Quando houver 3 medições e 1 média, conte as linhas. A 4ª linha costuma ser a média. Porém, se as 3 medições concordam e a última linha aparece com colunas trocadas ou valor discrepante, trate como possível erro de OCR ou linha espúria.
-
-Regras:
-
-- Se as 3 medições concordam num valor para cada coluna e a última linha mostra exatamente os valores invertidos, use o valor majoritário das 3 medições e marque `_medicao_discrepante_detectada: true`.
-- Para CIL, se `N >= 3` medições mostram valor `X` e a última mostra `Y` com diferença maior que `0.25D`, use `X`.
-- Para EIXO, se `N >= 3` medições mostram valor `X` e a última mostra `Y` com diferença circular maior que `10°`, use `X`.
-- Diferença circular = `min(abs(X-Y), 180-abs(X-Y))`.
-- Se a correção depender de interpretação incerta, bloqueie injeção automática.
+- As medições e a média de cada olho devem ser parecidas. Se as medições mostram C vazio e a média mostra C com valor, você provavelmente leu errado a média: releia.
+- OD = OE exatamente em S, C e A → você quase certamente copiou um olho para o outro: releia.
+- Se "preencheu" C ou A de um olho porque "o outro tem" → apague e marque `null`.
+- Faltam pixels claros para um dígito → `null`.
 
 ## Tonometria (`TONO. DATA`)
 
@@ -267,168 +239,130 @@ Regras:
 |---|---|
 | Linha `R` | OD |
 | Linha `L` | OE |
-| Existe `AVG.` | Use o valor após `AVG.` |
-| Não existe `AVG.` | Use o último número válido da linha |
-| `ERR` isolado | Ignore aquela leitura |
-| Valor entre parênteses, como `(16)` | Medição válida com artefato; use `AVG.` quando disponível |
+| Existe `AVG.` | Use o valor da coluna `AVG.` |
+| Não existe `AVG.` | Use o último número da linha |
+| `ERR` isolado | Ignore aquela medição |
+| `ERR 17` ou `(17)` | Use o número |
 
-Faixa usual esperada: 8 a 25 mmHg. Valores 22 a 24 podem ser clinicamente válidos e não devem ser rejeitados automaticamente.
-
-Exemplos:
+Transcreva também, em `_tonoMedicoes`, as medições individuais antes do `AVG.` (inclusive as entre parênteses, só o número; `ERR` não entra). Faixa esperada: 8 a 25 mmHg; 22 a 24 pode ser real e não deve ser rejeitado.
 
 ```text
-R   17   (16)  (16)  AVG. 17  -> od = 17
-L   ERR  ERR   (17)  AVG. 16  -> oe = 16
+R   17   (16)  (16)  AVG. 17  -> od = 17, _tonoMedicoes.od = [17, 16, 16]
+L   ERR  ERR   (17)  AVG. 16  -> oe = 16, _tonoMedicoes.oe = [17]
 R   14   15    14    14       -> od = 14
-R   ERR  15                   -> od = 15
 ```
 
 ## Paquimetria (`PACH. DATA`)
 
 | Situação | Regra |
 |---|---|
-| `RO.` | Etiqueta de OD, não valor separado |
-| `LO.` | Etiqueta de OE, não valor separado |
+| `RO.` / `LO.` | Etiqueta de OD / OE, não valor separado |
 | Número colado a `RO.` ou `LO.` | Primeira medição, não média |
 | Existe `AVG.` | Use sempre o valor após `AVG.` |
-| Valor em mm, como `0.540` | Converter para micra: `540` |
-| `ERR` sem número | Leitura inválida |
-| `ERR` seguido de número | Use o número se estiver claro |
-| Todas as medições `ERR`, mas existe `AVG.` | Use `AVG.` |
-| Todas as medições e `AVG.` são `ERR` | Use `null` para aquele olho |
+| Valor em mm, como `0.540` | Multiplique por 1000: `540` µm |
+| Todas as medições e `AVG.` são `ERR` | `null` para aquele olho |
 
-Faixa usual esperada: 420 a 650 µm.
-
-Exemplo:
+Faixa esperada: 420 a 650 µm.
 
 ```text
 RO.513  0.504  0.510  AVG. 0.509  -> od = 509
 LO.487  0.492  0.484  AVG. 0.488  -> oe = 488
 ```
 
-## Valores extremos válidos
+## Schema de saída (o mesmo do `_getExamPrompt`)
 
-Não rejeite automaticamente valores extremos clinicamente possíveis:
-
-| Campo | Faixa extrema válida |
-|---|---|
-| ESF | -20.00 a +20.00 |
-| CIL | 0 a -8.00 |
-| EIXO | 1 a 180 |
-| Tonometria | 8 a 25 mmHg |
-| Paquimetria | 420 a 650 µm |
-
-Valores fora dessas faixas não devem ser corrigidos automaticamente. Se estiverem claramente impressos, registre o valor, marque `_valor_extremo: true` e `_bloquear_injecao: true`.
-
-## Schema de saída obrigatório
-
-Retorne apenas JSON válido, sem comentários fora do JSON.
+Retorne este JSON, sem comentários dentro dele:
 
 ```json
 {
-  "debug_leitura": {
-    "tipo_ticket": "autorefrator | lensometro | desconhecido",
-    "orientacao": "normal | invertido | incerta",
-    "secoes_visiveis": {
-      "ref_data": true,
-      "tono_data": false,
-      "pach_data": false,
-      "krt_ignorada": false
-    },
-    "linha_od_texto": "texto literal ou null",
-    "linha_oe_texto": "texto literal ou null",
-    "linha_tonometria_texto": "texto literal ou null",
-    "linha_paquimetria_texto": "texto literal ou null"
-  },
+  "_ticketsMultiplos": false,
   "refracao": {
     "od": {
-      "esf": "string_ou_null",
-      "esf_motivo": "lido | inferido_com_segurança | ilegivel | ausente | nao_aplicavel",
-      "cil": "numero_ou_null",
-      "cil_motivo": "lido | zero_impresso | ilegivel | ausente | nao_aplicavel",
-      "eixo": "inteiro_ou_null",
-      "eixo_motivo": "lido | cil_zero | cil_ilegivel | ilegivel | ausente | nao_aplicavel",
-      "se": "string_ou_null",
-      "se_motivo": "lido | ilegivel | ausente | nao_aplicavel"
+      "medicoes": [
+        {"s": "+1.75", "c": -0.50, "a": 75},
+        {"s": "+1.75", "c": -0.50, "a": 75},
+        {"s": "+1.75", "c": -0.50, "a": 75}
+      ],
+      "media": {"s": "+1.75", "c": -0.50, "a": 75},
+      "se":   "+1.50"
     },
     "oe": {
-      "esf": "string_ou_null",
-      "esf_motivo": "lido | inferido_com_segurança | ilegivel | ausente | nao_aplicavel",
-      "cil": "numero_ou_null",
-      "cil_motivo": "lido | zero_impresso | ilegivel | ausente | nao_aplicavel",
-      "eixo": "inteiro_ou_null",
-      "eixo_motivo": "lido | cil_zero | cil_ilegivel | ilegivel | ausente | nao_aplicavel",
-      "se": "string_ou_null",
-      "se_motivo": "lido | ilegivel | ausente | nao_aplicavel"
+      "medicoes": [
+        {"s": "+1.50", "c": null, "a": null},
+        {"s": "+1.50", "c": null, "a": null},
+        {"s": "+1.50", "c": null, "a": null}
+      ],
+      "media": {"s": "+1.50", "c": null, "a": null},
+      "se":   "+1.50"
     }
   },
-  "tonometria": {
-    "od": "numero_ou_null",
-    "oe": "numero_ou_null",
-    "motivo_od": "lido | ilegivel | ausente | nao_aplicavel",
-    "motivo_oe": "lido | ilegivel | ausente | nao_aplicavel"
-  },
-  "paquimetria": {
-    "od": "numero_ou_null",
-    "oe": "numero_ou_null",
-    "motivo_od": "lido | convertido_mm_para_micra | ilegivel | ausente | nao_aplicavel",
-    "motivo_oe": "lido | convertido_mm_para_micra | ilegivel | ausente | nao_aplicavel"
-  },
-  "_lateralidade_insegura": false,
-  "_ticket_invertido": false,
-  "_tipo_desconhecido": false,
-  "_medicao_discrepante_detectada": false,
-  "_padrao_suspeito": false,
-  "_valor_extremo": false,
-  "_bloquear_injecao": false,
-  "_revisao_manual": false,
-  "_aviso": null
+  "tonometria":  {"od": 15, "oe": 14},
+  "_tonoMedicoes": {"od": [15, 15, 16], "oe": [14, 14]},
+  "paquimetria": {"od": 504, "oe": 526}
 }
 ```
 
-## Campo `cid_refracao` — computado pelo serviço, não pela IA
+Regras de `null`:
 
-O campo `cid_refracao` **não** faz parte do JSON que a IA deve gerar. Ele é adicionado deterministicamente pela camada de serviço (`geminiService.js → _inferCidRefracao`) após a validação dos dados de refração.
+- Olho inteiro ilegível, sem esfera ou com lateralidade incerta → `refracao.od = null` (ou `refracao.oe = null`).
+- Seção `REF.DATA` não aparece → `refracao = null`. Idem `tonometria` e `paquimetria`.
+- Menos de 3 medições visíveis → preencha o que tiver e use `null` nas faltantes.
+- Linha `S.E.` não visível ou ilegível → `se: null` nesse olho.
 
-A IA não deve tentar emitir CIDs. Qualquer tentativa de preencher `cid_refracao` no JSON de saída será ignorada (o serviço sobrescreve o campo).
+Os campos `_ticketRotacao` e `_refDataBox` do prompt da extensão servem ao mecanismo de girar e recortar a imagem; lendo direto, eles não se aplicam.
 
-**Lógica de inferência (aplicada pelo serviço):**
+## Valor final por olho (o mesmo do `_processEye`)
+
+Depois do JSON, apresente ao médico o valor final de cada olho (`esf`, `cil`, `eixo`, `se`) e a lista `_avisos`. As regras:
+
+- **Esfera:** a da média; se a média não tem S, o valor mais frequente das medições. Se as 3 medições são unânimes e a média diverge, valem as medições (a média de 3 valores iguais é igual a eles). Sem esfera → olho descartado.
+- **Cilindro:**
+  - média vazia e 2+ medições vazias → sem cilindro;
+  - média vazia e 2+ medições com valor → valor mais frequente das medições, com aviso;
+  - média com valor e 2+ medições vazias → descartado (provável alucinação), com aviso;
+  - média e medições com valor: 3 medições unânimes e diferentes da média → medições; todas a até 0.50D da média → média; senão, valor mais frequente das medições, com aviso.
+- **Eixo:** só existe com cilindro. Mesma regra de unanimidade; sem eixo na média, o mais frequente de 2+ medições. Eixo fora de 1–180 → cilindro e eixo descartados. Cilindro sem eixo → cilindro descartado, olho fica esférico puro e `se` vira `null` (o S.E. impresso embutia o cilindro removido).
+- **Passo dióptrico:** esfera fora do passo de 0.25D → olho descartado; cilindro fora do passo → cilindro e eixo descartados.
+- **OD idêntico a OE** em esfera, cilindro e eixo, com cilindro presente → provável duplicação: a refração inteira não é aproveitada (`refracao` final `null`), e tonometria e paquimetria são preservadas.
+
+### Bloqueio é por olho (o mesmo do `_resolveBlocking`)
+
+Não existe um sinalizador único de "bloquear tudo". Um olho inseguro vira `null` e ganha um aviso como "Refração do OD NÃO injetada — <motivo>. O outro olho foi preservado." Se a refração inteira cair, tonometria e paquimetria da mesma captura continuam valendo, com o aviso "Refração NÃO injetada — <motivo>". Só quando nada se aproveita a captura inteira falha.
+
+Valores extremos clinicamente possíveis (ESF de −20.00 a +20.00, CIL até −8.00) não são corrigidos: se estiverem claramente impressos, registre e acrescente um aviso para o médico conferir.
+
+## Campo `cid_refracao` — computado pelo código, não pela IA
+
+O campo `cid_refracao` **não** faz parte do JSON que a IA gera. Ele é calculado deterministicamente por `_inferCidRefracao` (em `src/gemini-exam-agent.js`) depois da validação da refração. Códigos **sem ponto**, que é o formato do SHOSP.
 
 | Condição | CID adicionado |
 |---|---|
-| `esf > 0` em qualquer olho | H52.0 — Hipermetropia |
-| `esf < 0` em qualquer olho | H52.1 — Miopia |
-| `\|cil\| ≥ 0.25` em qualquer olho | H52.2 — Astigmatismo |
-| `\|SE_OD − SE_OE\| > 1.50D` | H52.3 — Anisometropia |
-| Ambos os olhos com `esf = 0` e `cil = 0/null` | `[]` (emetropia, nenhum CID) |
+| `esf ≥ +0.50` em qualquer olho | H520 — Hipermetropia |
+| `esf ≤ −0.50` em qualquer olho | H521 — Miopia |
+| `\|cil\| ≥ 0.25` em qualquer olho | H522 — Astigmatismo |
+| `\|SE_OD − SE_OE\| > 1.50D` | H523 — Anisometropia |
+| Esfera entre −0.25 e +0.25 e sem cilindro | nenhum CID refrativo (faixa emétrope: ±0.25 seria diagnóstico de ruído) |
 
-- Campo preenchido apenas quando `_captureFailed === false`.
-- Se um olho está ausente (`null`), é ignorado na análise.
-- Deduplicação automática contra CIDs da transcrição clínica feita no momento da injeção.
+- Só é preenchido quando a captura não falhou; refração bloqueada → `[]`.
+- Olho `null` é ignorado na análise.
+- Deduplicação contra os CIDs da transcrição clínica no momento da injeção.
 
 ## Validação final obrigatória
 
-Antes de entregar o JSON, execute mentalmente esta lista:
+Antes de entregar, confira mentalmente:
 
 - `licoes-aprendidas.md` foi lido e suas regras aplicáveis foram aplicadas?
-- O tipo do equipamento foi identificado?
-- Lensômetro foi rejeitado como autorefrator?
-- Ticket invertido foi reorientado?
+- O tipo do equipamento foi identificado e lensômetro foi rejeitado?
+- O ticket foi reorientado até `REF.DATA` ficar na horizontal?
 - `KRT. DATA`, `KM DATA`, `KER.` e `KERT.` foram ignorados?
-- `<R>` foi mapeado para OD e `<L>` para OE?
-- Lateralidade incerta gerou `_lateralidade_insegura: true` e `_bloquear_injecao: true`?
-- Foi usada a média ou o valor mais seguro, e não uma linha espúria?
-- CIL zero foi registrado como `0`, não como `null`?
-- `cil: null` sempre gerou `eixo: null`?
-- `cil: 0` sempre gerou `eixo: null`?
-- CIL/EIXO não foram copiados do outro olho?
-- OD e OE idênticos com CIL diferente de zero geraram `_padrao_suspeito: true`?
-- `SE` foi lido do ticket, não calculado?
-- Tonometria usou `AVG.` quando disponível?
-- Paquimetria converteu mm para micra quando necessário?
-- Todo `null` importante tem motivo?
-
-Se qualquer resposta for incerta, marque `_revisao_manual: true`. Se a incerteza puder afetar injeção em prontuário, marque também `_bloquear_injecao: true`.
+- `<R>` foi mapeado para OD e `<L>` para OE? Lateralidade incerta zerou o olho?
+- As colunas S, C, A foram lidas pela posição, não pela magnitude?
+- `C 0.00` e C vazio viraram `null`? C sem eixo virou `null`?
+- Nenhum C/A foi copiado do outro olho?
+- Todos os valores estão no passo de 0.25D?
+- `se` foi lido do ticket, não calculado nem copiado da esfera?
+- Tonometria usou `AVG.` e trouxe `_tonoMedicoes`? Paquimetria converteu mm para µm?
+- Todo descarte relevante tem um aviso em `_avisos`?
 
 ## Casos de referência
 
@@ -439,20 +373,15 @@ Se qualquer resposta for incerta, marque `_revisao_manual: true`. Se a incerteza
 <L> S +0.25  C -1.75  A 96 / S.E. -0.75
 ```
 
-Resultado:
+Valor final: OD `esf="-0.25"`, `cil=-1.75`, `eixo=82`, `se="-1.25"`; OE `esf="+0.25"`, `cil=-1.75`, `eixo=96`, `se="-0.75"`.
 
-- OD: `esf="-0.25"`, `cil=-1.75`, `eixo=82`, `se="-1.25"`.
-- OE: `esf="+0.25"`, `cil=-1.75`, `eixo=96`, `se="-0.75"`.
-
-### Caso 2 — CYL zero
+### Caso 2 — CYL zero impresso
 
 ```text
 <R> S -1.50  C 0.00  A 43 / S.E. -1.50
 ```
 
-Resultado:
-
-- OD: `esf="-1.50"`, `cil=0`, `cil_motivo="zero_impresso"`, `eixo=null`, `eixo_motivo="cil_zero"`, `se="-1.50"`.
+Valor final: OD `esf="-1.50"`, `cil=null`, `eixo=null`, `se="-1.50"`. O `0.00` é "sem astigmatismo", e o `A 43` não vale sem cilindro.
 
 ### Caso 3 — Colunas paralelas com `<R>` à direita
 
@@ -463,10 +392,7 @@ C    -0.50    -0.50
 A       93       70
 ```
 
-Resultado:
-
-- OE: `esf="-0.75"`, `cil=-0.50`, `eixo=93`.
-- OD: `esf="-1.25"`, `cil=-0.50`, `eixo=70`.
+Valor final: OE `esf="-0.75"`, `cil=-0.50`, `eixo=93`; OD `esf="-1.25"`, `cil=-0.50`, `eixo=70`.
 
 ### Caso 4 — CIL alto com risco de truncamento
 
@@ -477,49 +403,37 @@ C    - 3.50      - 3.50
 A       84           76
 ```
 
-Resultado:
+Valor final: OD `esf="+0.75"`, `cil=-3.50`, `eixo=84`; OE `esf="+1.25"`, `cil=-3.50`, `eixo=76`. Nunca transformar `-3.50` em `-0.50`.
 
-- OD: `esf="+0.75"`, `cil=-3.50`, `eixo=84`.
-- OE: `esf="+1.25"`, `cil=-3.50`, `eixo=76`.
+### Caso 5 — Sinal da esfera ilegível
 
-Nunca transformar `-3.50` em `-0.50`.
+```text
+<R> S  1.25  C -0.50  A 90 / S.E. -1.50   (sinal da esfera apagado)
+```
 
-### Caso 5 — Paquimetria com `RO.` e `AVG.`
+Valor final: OD `null` (esfera sem sinal visível → `s: null` → olho sem esfera é descartado). Aviso para o médico conferir no ticket. Não deduzir `-1.25` pelo S.E.
+
+### Caso 6 — Paquimetria com `RO.` e `AVG.`
 
 ```text
 RO.513  0.504  0.510  AVG. 0.509
 LO.487  0.492  0.484  AVG. 0.488
 ```
 
-Resultado:
+Resultado: OD `509`, OE `488`.
 
-- OD: `509`.
-- OE: `488`.
-
-### Caso 6 — Tonometria com `ERR`
+### Caso 7 — Tonometria com `ERR`
 
 ```text
 R   17   (16)  (16)  AVG. 17
 L   ERR  ERR   (17)  AVG. 16
 ```
 
-Resultado:
+Resultado: OD `17`, OE `16`.
 
-- OD: `17`.
-- OE: `16`.
+### Caso 8 — Lensômetro CL-200
 
-### Caso 7 — Lensômetro CL-200
-
-Ticket com `TOPCON CL-200`, `PSM`, `ABBE`, `DWN` ou `UP`.
-
-Resultado:
-
-- `tipo_ticket: "lensometro"`;
-- `refracao: null`;
-- `tonometria: null`;
-- `paquimetria: null`;
-- `_bloquear_injecao: true`;
-- `_aviso: "Ticket de lensômetro CL-200. Não é ticket de autorefrator TOPCON."`.
+Ticket com `TOPCON CL-200`, `PSM`, `ABBE`, `DWN` ou `UP`: `refracao`, `tonometria` e `paquimetria` `null`, com o aviso "Ticket de lensômetro CL-200. Não é ticket de autorefrator TOPCON."
 
 ---
 

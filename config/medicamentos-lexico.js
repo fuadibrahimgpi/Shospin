@@ -26,6 +26,10 @@
  */
 'use strict';
 
+// Registro do lubrificante quando o médico diz só "lubrificante(s)". O DecisionEngine
+// mantém uma cópia desta string (carga independente no navegador); um teste as compara.
+const LUBRIFICANTE_PADRAO = 'Carmelose sódica ou hialuronato de sódio';
+
 const MEDICAMENTOS_LEXICO = [
   // ── Associações antibiótico + corticoide (antes dos componentes isolados) ──
   { id: 'vigadexa',   principio: 'Moxifloxacino + dexametasona', classe: 'associacao_atb_cortic', nomes: ['vigadexa'], marcas: ['Vigadexa'], asr: [] },
@@ -78,13 +82,19 @@ const MEDICAMENTOS_LEXICO = [
   { id: 'ciclosporina', principio: 'Ciclosporina', classe: 'imunomodulador', nomes: ['ciclosporina', 'restasis', 'ikervis'], marcas: ['Restasis', 'Ikervis'], asr: [] },
 
   // ── Lubrificantes ──
-  // Princípio DITO (carmelose, hialuronato) é registrado. Marca dita NÃO autoriza
-  // princípio — as marcas não têm princípio único mapeado com segurança — então vira
-  // a classe + a marca entre parênteses: "Lubrificante ocular (Systane)".
+  // Princípio DITO (carmelose, hialuronato) é registrado como dito. Marca dita NÃO
+  // autoriza princípio — as marcas não têm princípio único mapeado com segurança — então
+  // vira a classe + a marca entre parênteses: "Lubrificante ocular (Systane)".
+  //
+  // PROTOCOLO DECLARADO (2026-11-05): quando o médico diz a palavra "lubrificante(s)" na
+  // conduta, sem marca nem princípio, o registro é LUBRIFICANTE_PADRAO — a escolha dele
+  // entre os dois genéricos equivalentes, não uma inferência do diagnóstico.
   { id: 'carmelose',   principio: 'Carmelose',   classe: 'lubrificante', nomes: ['carmelose'],   marcas: [], asr: [] },
   { id: 'hialuronato', principio: 'Hialuronato', classe: 'lubrificante', nomes: ['hialuronato'], marcas: [], asr: [] },
+  { id: 'lubrificante_padrao', principio: LUBRIFICANTE_PADRAO, classe: 'lubrificante',
+    nomes: ['lubrificante', 'lubrificantes'], marcas: [], asr: [] },
   { id: 'lubrificante', principio: 'Lubrificante ocular', classe: 'lubrificante',
-    nomes: ['lubrificante', 'lubrificantes', 'systane', 'hylo', 'hyabak', 'artelac', 'optive fusion', 'optive', 'refresh', 'lacrifilm', 'lagrima artificial'],
+    nomes: ['systane', 'hylo', 'hyabak', 'artelac', 'optive fusion', 'optive', 'refresh', 'lacrifilm', 'lagrima artificial'],
     marcas: ['Systane', 'Hylo', 'Hyabak', 'Artelac', 'Optive Fusion', 'Optive', 'Refresh', 'Lacrifilm'], asr: [] },
 
   // ── Antivirais ──
@@ -154,7 +164,7 @@ function encontrarMedicamentos(texto) {
   return achados.sort((a, b) => a.indice - b.indice);
 }
 
-const MedicamentosLexico = { MEDICAMENTOS_LEXICO, normalizarLexico, encontrarMedicamentos, nomeRegistrado };
+const MedicamentosLexico = { MEDICAMENTOS_LEXICO, LUBRIFICANTE_PADRAO, normalizarLexico, encontrarMedicamentos, nomeRegistrado };
 
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = MedicamentosLexico;

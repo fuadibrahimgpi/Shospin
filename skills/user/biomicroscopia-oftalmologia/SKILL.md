@@ -23,7 +23,8 @@ Esta skill é focada apenas em `biomicroscopia`. Ela pode ser usada dentro da sk
 ## Onde isso REALMENTE roda (autoridade)
 
 > ⚠️ **A cópia que executa em produção é o prompt do Gemini em
-> `src/gemini-interview-agent.js` (seção `biomicroscopia`, hoje ~L816-854).**
+> `src/gemini-interview-agent.js` (`_buildConsultationPrompt`, bloco
+> `- biomicroscopia:` dentro de `CAMPOS:`).** Regra geral: `skills/user/README.md`.
 > Esta skill é o espelho legível dessas regras — editá-la NÃO muda o comportamento
 > da extensão. Ao mudar uma regra, altere o prompt e esta skill juntos, para não
 > divergirem. A injeção final é feita por `scripts/sidepanel-injection.js`
@@ -83,7 +84,8 @@ Se o `diagnostico` registra um achado **estrutural de segmento anterior como ATU
 
 - Isto **não afrouxa a regra de fonte** acima: relato do paciente e história continuam não virando achado de exame. A regra é *posterior* — depois de decidir que o achado é atual e digno de `diagnostico`, o exame precisa refleti-lo.
 - Achado verbalizado **durante** o exame (médico na lâmpada de fenda: *"encosta o queixo"*, *"olha pra frente"*, *"pisca"*) conta como achado de exame mesmo que o STT embarale quem fala.
-- Achado histórico/resolvido → marque no diagnóstico (`(resolvida)`); aí não exige descrição no exame atual.
+- Achado histórico/resolvido → marque no diagnóstico (` - resolvida`); aí não exige descrição no exame atual.
+- ⛔ **A decisão certa é antes, no `diagnostico`.** Achado **episódico** que só o paciente relatou (hemorragia subconjuntival recorrente, terçol, olho vermelho que vai e vem, conjuntivite passada) **não entra** em `diagnostico` como atual — vai para `antecedentes_oftalmologicos` (e, se motivou a consulta, também a queixa/HDA). Se não entra lá, esta regra não o arrasta para cá. Só há diagnóstico atual se o **médico descreveu ter visto hoje**; declaração de normalidade do médico ("o olho está ótimo") desempata contra. Nunca use a consistência como justificativa para escrever no exame o que o médico não descreveu.
 
 > 🛡️ **Rede de segurança no runtime (2026-07-29):** `temAchadoAnteriorNoDiagnostico()` em `scripts/sidepanel-constants.js` bloqueia a injeção do template normal quando o diagnóstico afirma achado anterior — o campo fica **vazio** para o médico redigir, em vez de receber `AO: olho calmo` contradizendo o prontuário. A rede **não compõe** a descrição por olho (isso seria inventar o detalhe); descrever bem continua sendo trabalho desta skill.
 
@@ -100,34 +102,65 @@ A lateralidade sai de **toda a consulta**. Se o paciente disse na história que 
 
 > `AO` nunca é "fallback seguro" para achado traumático — descrever nos dois olhos inventa lesão no olho são (origem: log 2026-07-27).
 
-O mesmo vale para o `diagnostico`: `"H161 - Ceratite traumática OD"` — nunca `AO`; lado indeterminável → `"H161 - Ceratite traumática (confirmar olho)"`.
+O mesmo vale para o `diagnostico`: `"H161 - Ceratite traumática OD"` — nunca `AO`; lado indeterminável → `"H161 - Ceratite traumática - confirmar olho"`. Sem parênteses no diagnóstico (regra do médico, 2026-10-29); usar " - ", nunca vírgula (o painel divide o campo por vírgula e buscaria "confirmar olho" como CID).
 
-## Paciente pseudofácico (pós-facectomia)
+## Cristalino: decidir OLHO A OLHO antes de escrever a linha
 
-Quando `antecedentes_oftalmologicos` contém **facectomia / cirurgia de catarata / facoemulsificação**:
+**1) Olho fácico (nunca operado) — caso padrão:** terminar a linha com `cristalino transparente`.
+Esse termo é um **placeholder**: o runtime o troca por `catarata ...` quando a catarata é detectada.
 
-- **NUNCA** escreva "catarata" na biomicroscopia — a lente natural foi removida.
-- **NUNCA** escreva "cristalino transparente" — o cristalino natural não existe mais.
-- Substitua por `pseudofácico, LIO bem posicionada` (ou `pseudofácico, opacidade de cápsula posterior` quando houver opacidade).
+**2) Olho pseudofácico (já operado de catarata) — exceção obrigatória:**
 
-| Situação do cristalino | O que escrever |
+- **NUNCA** escreva `cristalino transparente` — o cristalino foi removido na cirurgia (erro grave de prontuário; foi o que aconteceu no log 2026-08-03).
+- **NUNCA** escreva "catarata" nesse olho — não há lente natural para opacificar.
+- Escreva a lente **direto na linha daquele olho**:
+  - cápsula limpa / médico diz que a lente está boa → `pseudofacia, LIO transparente e bem posicionada`
+  - cápsula posterior opacificada → `pseudofacia, opacidade de cápsula posterior`
+
+### Opacidade de cápsula em linguagem leiga (2026-08-05)
+
+O médico não diz "opacidade de cápsula posterior" na frente do paciente — ele descreve **a lente embaçada, suja ou precisando de limpeza**. Todas estas falas **do médico** sobre a lente do olho pseudofácico são opacidade de cápsula:
+
+- "a lente está (um pouco/um pouquinho) embaçada", "está embaçando", "embaçadinha"
+- "tem uma sujeirinha na lente", "a lente está suja"
+- "vai precisar fazer uma limpeza", "vamos dar uma limpada na lente", YAG, capsulotomia
+
+**Intensidade não importa:** *"tá um pouquinho embaçada mas ainda não está atrapalhando"* **é** opacidade de cápsula. O "ainda não precisa limpar" é conduta, não muda o achado do exame.
+
+Não confundir com:
+- **queixa de visão** do paciente ("minha vista está embaçada") → sintoma, vai para a HDA;
+- **histórico** do paciente ("já fiz a limpeza da lente", "fizeram o laser há 2 anos") → antecedente; a cápsula pode estar limpa hoje;
+- médico afirmando lente **limpa/transparente** → forma limpa, mesmo com o paciente relatando embaçamento.
+
+Evidências de que o olho é pseudofácico (qualquer uma basta): relato do paciente, **inclusive em 1ª pessoa** (`fiz a cirurgia de catarata`, `operei esse olho`, `fui operada de catarata`); confirmação do médico no exame (`a lente está boa/bem posicionada/limpa`, `a cirurgia ficou boa`); facectomia / LIO / pseudofacia / `Z96.1` nos antecedentes ou no diagnóstico.
+Cirurgia apenas **planejada** (`vamos operar`, `está indicada a cirurgia`) **não** é pseudofacia — esse olho segue fácico.
+
+| Situação do cristalino | O que escrever na linha daquele olho |
 |---|---|
 | Sem cirurgia prévia | `cristalino transparente` |
-| Pós-facectomia (LIO implantada) | `pseudofácico, LIO bem posicionada` |
-| Pós-facectomia + opacidade de cápsula | `pseudofácico, opacidade de cápsula posterior` |
+| Pós-facectomia (LIO implantada) | `pseudofacia, LIO transparente e bem posicionada` |
+| Pós-facectomia + opacidade de cápsula | `pseudofacia, opacidade de cápsula posterior` |
 
-## Lente dinâmica (o runtime substitui — sempre termine com "cristalino transparente")
+**Lateralidade da lente:** a exceção vale só para o(s) olho(s) operado(s). Operou um olho só → a linha do outro continua com `cristalino transparente`. Nunca escrever pseudofacia em `AO` quando só um olho foi operado — inventa cirurgia no olho são.
 
-Sempre finalize cada linha com **`cristalino transparente`**. O código (`getBiomicroscopiaComLente`) substitui automaticamente esse termo pela lente correta quando um gatilho de voz ou o diagnóstico detecta o estado do cristalino, com esta prioridade:
+## Lente dinâmica (o que o runtime faz com o placeholder)
+
+`getBiomicroscopiaComLente` substitui `cristalino transparente` pela lente detectada por gatilho de voz, pelo diagnóstico (catarata) ou pela rede determinística de pseudofacia (`parsePseudofaciaFromDados`, que lê `antecedentes_oftalmologicos` + `diagnostico` + `biomicroscopia`):
 
 | Condição detectada | Substitui "cristalino transparente" por |
 |---|---|
 | Opacidade de cápsula | `pseudofacia, opacidade de cápsula posterior` |
 | LIO / pseudofacia | `pseudofacia, LIO transparente e bem posicionada` |
-| Catarata | `catarata` |
+| Catarata | `catarata` (+ grau, quando dito) |
 | (nenhuma) | mantém `cristalino transparente` |
 
-Prioridade: **opacidade > LIO > catarata > padrão**. Por isso o texto escrito pela IA sempre traz `cristalino transparente` no fim — a decisão da lente é do runtime.
+Prioridade: **opacidade > LIO > catarata > padrão**. Dois limites importantes:
+
+- **Texto misto** — se o texto já afirma `pseudofacia`/`LIO` em alguma linha, o runtime **não** converte os placeholders restantes em LIO: eles são do olho fácico.
+- **Cápsula opacificada sobre lente já escrita** (2026-08-05) — quando a opacidade foi detectada e o texto já traz `pseudofacia, LIO transparente e bem posicionada`, o runtime **atualiza essa linha** para `opacidade de cápsula posterior`. Aqui não há risco de inventar cirurgia: a linha já afirma pseudofacia; o que muda é o estado da cápsula. (Antes o texto voltava intacto e o prontuário contradizia a fala do médico.)
+- **Lado** — quando o lado pseudofácico é conhecido (`SessionFlags.lioLado = OD/OE`), a substituição ocorre só na linha daquele olho; com lado unilateral e texto em `AO`, o placeholder é preservado e o runtime emite um `console.warn` para o médico redigir.
+
+O runtime é a rede de segurança, não a decisão principal: a lente correta é responsabilidade do texto que a IA escreve.
 
 ## Blefarite + outro achado de segmento anterior
 
@@ -140,6 +173,14 @@ Prioridade: **opacidade > LIO > catarata > padrão**. Por isso o texto escrito p
 [OD/OE/AO]: [achado]; [elementos normais não afetados: córnea transparente, câmara anterior formada, pupila regular e reagente, cristalino transparente]
 ```
 - Achado unilateral → incluir linha do contralateral como `olho calmo`, separada por `\n`.
+- **Ordem dos olhos (regra do médico, 2026-09-04): OD SEMPRE antes de OE.** Vale a ordem
+  do prontuário (direito → esquerdo), nunca a ordem em que os olhos apareceram na fala —
+  mesmo quando o achado é do OE e o OE foi o assunto da consulta.
+  ✅ `OD: olho calmo, ...\nOE: pterígio nasal grau I, ...`
+  ❌ `OE: pterígio nasal grau I, ...\nOD: olho calmo, ...`
+  O runtime reordena as duas linhas (`_ordenaOlhosODPrimeiro`, `src/DecisionEngine.js`),
+  mas a saída já deve nascer certa — a rede determinística é a segunda barreira, não a
+  primeira.
 - Quando usada isoladamente, retorne:
 ```json
 {
@@ -152,16 +193,35 @@ Prioridade: **opacidade > LIO > catarata > padrão**. Por isso o texto escrito p
 
 ## Exemplos de referência
 
+> ⛔ A linha de blefarite ("hiperemia e espessamento da margem palpebral, telangiectasias
+> e disfunção de glândulas de meibômio") aparece nos exemplos de blefarite abaixo, mas
+> **não é frase de rotina** (2026-08-04): só escreva quando o médico descreveu inflamação
+> na pálpebra. Higiene palpebral, shampoo ou compressa prescritos são tratamento, não
+> exame — nesse caso a biomicroscopia fica em branco para o médico redigir.
+>
+> ⛔ **"com secreção espessa" não faz parte dessa linha** (2026-08-04): secreção espessa é
+> achado à parte (meibum expressível), escrito só quando o médico falou de secreção ou de
+> glândula entupida. O template injetado (`BIOMICROSCOPIA_BLEFARITE`) deixou de trazê-la.
+
 ```text
 Pterígio OD (unilateral):
 "OD: pterígio nasal grau I, sem invasão de eixo visual; córnea transparente nas demais regiões, câmara anterior formada, pupila regular e reagente, cristalino transparente
 OE: olho calmo, córnea transparente, câmara anterior formada, pupila regular e reagente, cristalino transparente"
 
 Conjuntivite alérgica AO (bilateral real):
-"AO: hiperemia conjuntival difusa com secreção serosa, papilas tarsais; córnea transparente, câmara anterior formada, pupila regular e reagente, cristalino transparente"
+"AO: hiperemia conjuntival difusa com secreção serosa, papilas tarsais, presença de folículos em fundo de saco conjuntival; córnea transparente, câmara anterior formada, pupila regular e reagente, cristalino transparente"
+
+Conjuntivite com diagnóstico ATUAL (regra do médico, 2026-10-29): o olho citado na consulta sempre leva "presença de folículos em fundo de saco conjuntival" na biomicroscopia. Contralateral não citado → "olho calmo".
 
 Abrasão por corpo estranho, lado só na história (unilateral por natureza):
 "OD: erosão corneana paracentral inferior, teste de fluoresceína positivo; câmara anterior formada, pupila regular e reagente, cristalino transparente
+OE: olho calmo, córnea transparente, câmara anterior formada, pupila regular e reagente, cristalino transparente"
+
+Pseudofacia bilateral, sem outro achado de segmento anterior:
+"AO: olho calmo, córnea transparente, câmara anterior formada, pupila regular e reagente, pseudofacia, LIO transparente e bem posicionada"
+
+Pseudofacia OD, OE ainda fácico:
+"OD: olho calmo, córnea transparente, câmara anterior formada, pupila regular e reagente, pseudofacia, LIO transparente e bem posicionada
 OE: olho calmo, córnea transparente, câmara anterior formada, pupila regular e reagente, cristalino transparente"
 
 Blefarite + pterígio OD:
@@ -196,10 +256,15 @@ Antes de finalizar a biomicroscopia, confirme:
 - **Correção**: pós-facectomia → "catarata" e "cristalino transparente" proibidos; obrigatório `pseudofácico, LIO bem posicionada`. Menção de catarata na transcrição vai para `antecedentes_oftalmologicos`.
 
 ### 2026-07-29 — Exame normal afirmado contra o próprio diagnóstico ⭐
-- **Erro**: consulta com `H111 - Pterígio OD` no diagnóstico saiu com `biomicroscopia: null`; o fallback de despedida injetou `AO: olho calmo, córnea transparente...` — o prontuário afirmou exame normal logo abaixo do diagnóstico de pterígio.
+- **Erro**: consulta com `H111 - Pterígio OD` no diagnóstico (código errado na época — pterígio é **H11.0**, corrigido em 2026-08-27) saiu com `biomicroscopia: null`; o fallback de despedida injetou `AO: olho calmo, córnea transparente...` — o prontuário afirmou exame normal logo abaixo do diagnóstico de pterígio.
 - **Causa (dupla)**: (1) o modelo atribuiu o pterígio à fala do paciente e aplicou a regra de fonte, deixando o campo null — mas aceitou o mesmo achado como `diagnostico`, saída internamente inconsistente; (2) no runtime, o fallback de despedida só era barrado por `_temTratamentoAtivo` (tratamento ou encaminhamento), e essa consulta tinha apenas receita de óculos — passou direto.
 - **Correção**: regra de consistência diagnóstico↔exame no prompt (sem tocar na regra de fonte) + rede determinística `temAchadoAnteriorNoDiagnostico()` aplicada a **todos** os pontos de default do injectAll. Política: campo vazio > texto fabricado. Testes `[DX-EXAME-1..9]` e `[DX-NORMAL-1..4]`.
 
+### 2026-08-14 — Achado episódico da história virou diagnóstico e foi arrastado para o exame ⭐
+- **Erro**: paciente em uso de anticoagulante relatou hemorragias subconjuntivais **recorrentes** ("de vez em quando eu tenho", "geralmente não percebo"); o médico apenas explicou o fenômeno e afirmou que o olho estava ótimo. Saiu `H113 - Hemorragia subconjuntival` no diagnóstico e a hemorragia **descrita na biomicroscopia** como achado de hoje.
+- **Causa**: a regra de consistência diagnóstico↔exame funcionou corretamente sobre uma premissa errada — uma vez que H113 entrou no `diagnostico`, ela **obriga** o exame a refleti-lo. A regra de fonte estava na seção da biomicroscopia; a decisão real acontece antes, na seção `diagnostico`, e lá não havia porta de saída para achado episódico só relatado.
+- **Correção**: regra crítica de **achado episódico** adicionada na seção `diagnostico` do prompt (`src/gemini-interview-agent.js`), com discriminador "o médico descreveu ter visto hoje?" + marcadores de recorrência + desempate por declaração de normalidade; rota correta = `antecedentes_oftalmologicos` (+ HDA se motivou a consulta). A regra de consistência **não foi afrouxada** — ganhou apenas um ponteiro para a decisão anterior.
+
 ### 2026-07-27 — Lateralidade (bilateralização de achado unilateral)
 - **Erro**: abrasão corneana por corpo estranho (só o olho direito na história) injetada como `AO`, descrevendo lesão no olho são; diagnóstico sem lado.
-- **Correção**: lado sai de toda a consulta; `AO` PROIBIDO em achado unilateral por natureza; lado indeterminável → `[CONFIRMAR OLHO AFETADO]` / `(confirmar olho)`, nunca `AO`.
+- **Correção**: lado sai de toda a consulta; `AO` PROIBIDO em achado unilateral por natureza; lado indeterminável → `[CONFIRMAR OLHO AFETADO]` / ` - confirmar olho` no diagnóstico, nunca `AO`.

@@ -85,6 +85,7 @@ var _BRIDGE = {
   shospState: window.__shospState,
   getBiomicroscopiaComLente: getBiomicroscopiaComLente,
   parseCatarataFromDiagnostico: parseCatarataFromDiagnostico,
+  parsePseudofaciaFromDados: parsePseudofaciaFromDados,
   temAchadoAnteriorNoDiagnostico: temAchadoAnteriorNoDiagnostico,
   temAchadoPosteriorNoDiagnostico: temAchadoPosteriorNoDiagnostico,
   BIOMICROSCOPIA_NORMAL: BIOMICROSCOPIA_NORMAL,
@@ -1150,6 +1151,42 @@ noiseTest('[NOISE-4] _guardOculosNaConduta NÃO adiciona texto quando noiseDetec
   }
 });
 
+noiseTest('[NOISE-5] transcrição clínica com colírios (brimonidina + timolol) NÃO ativa noiseDetected nem revisao_manual', () => {
+  // Transcrição real do log 2026-10-21: retorno de glaucoma com prescrição de colírios
+  const REAL_GLAUCOMA_TRANSCRIPT = 'entao se a gente vem parafuso intencional de area em uso de brimonidina com timolol das vezes ao dia acoes quanto ao quadro retorno em quatro meses para acompanhamento medicacao primonidina continua la o duas vezes ao dia';
+  const raw = {
+    tipo_consulta: 'retorno',
+    dados: {
+      diagnostico: 'Glaucoma NE',
+      conduta: 'Manutenção da medicação atual, Explicado o quadro clínico, Retorno 4 meses',
+      tratamento: null,
+      antecedentes_familiares: null,
+      antecedentes_oftalmologicos: null,
+    },
+  };
+  const decision = DecisionEngine.buildDecision(raw, { transcribedText: REAL_GLAUCOMA_TRANSCRIPT });
+  expect(decision.clonedAIResponse.noiseDetected).toBe(undefined);
+  expect(decision.clonedAIResponse.revisao_manual).toBe(undefined);
+  expect(decision.clonedAIResponse.dados.diagnostico).toBe('Glaucoma NE');
+  expect(decision.clonedAIResponse.dados.conduta.includes('Manutenção')).toBe(true);
+});
+
+noiseTest('[NOISE-6] transcrição com lubrificantes e posologia NÃO ativa noiseDetected', () => {
+  const LUBRICANT_TRANSCRIPT = 'paciente com queixa de olho seco orientada a usar lubrificante carmelose quatro vezes ao dia e manter acompanhamento';
+  const raw = {
+    tipo_consulta: 'retorno',
+    dados: {
+      diagnostico: 'Olho seco',
+      conduta: 'Uso de colirio lubrificante',
+      tratamento: 'Carmelose 4x/dia',
+    },
+  };
+  const decision = DecisionEngine.buildDecision(raw, { transcribedText: LUBRICANT_TRANSCRIPT });
+  expect(decision.clonedAIResponse.noiseDetected).toBe(undefined);
+  expect(decision.clonedAIResponse.revisao_manual).toBe(undefined);
+  expect(decision.clonedAIResponse.dados.diagnostico).toBe('Olho seco');
+});
+
 // ──────────────────────────────────────────────────────────────────────────────
 // LENTE DINÂMICA NA BIOMICROSCOPIA — getBiomicroscopiaComLente()
 // Prioridade: opacidade cápsula > LIO > catarata > padrão.
@@ -1182,6 +1219,188 @@ test('[LENTE-4] opacidade de cápsula tem prioridade máxima (acima de LIO)', ()
   ctx._BRIDGE.catarataDetectada = true;
   const out = ctx._BRIDGE.getBiomicroscopiaComLente(ctx._BRIDGE.BIOMICROSCOPIA_NORMAL);
   expect(out.includes('catarata')).toBe(false);
+});
+
+test('[LENTE-5] texto MISTO: linha com LIO escrita + linha com placeholder → placeholder NÃO vira LIO', () => {
+  // Desde 2026-08-03 o modelo escreve a lente direto na linha do olho operado.
+  // O placeholder que sobra é do olho FÁCICO — substituí-lo inventaria a cirurgia.
+  const misto = 'OD: olho calmo, córnea transparente, pseudofacia, LIO transparente e bem posicionada\n' +
+                'OE: olho calmo, córnea transparente, cristalino transparente';
+  ctx._BRIDGE.lioDetectada = true;
+  const out = ctx._BRIDGE.getBiomicroscopiaComLente(misto);
+  expect(out).toBe(misto);
+});
+
+test('[LENTE-6] lioLado=OD → só a linha do OD recebe a lente', () => {
+  const base = 'OD: olho calmo, córnea transparente, cristalino transparente\n' +
+               'OE: olho calmo, córnea transparente, cristalino transparente';
+  ctx._BRIDGE.lioDetectada = true;
+  ctx._BRIDGE.lioLado = 'OD';
+  const out = ctx._BRIDGE.getBiomicroscopiaComLente(base);
+  const [lOD, lOE] = out.split('\n');
+  expect(lOD.includes('pseudofacia')).toBe(true);
+  expect(lOD.includes('cristalino transparente')).toBe(false);
+  expect(lOE.includes('cristalino transparente')).toBe(true);
+  expect(lOE.includes('pseudofacia')).toBe(false);
+});
+
+test('[LENTE-7] lioLado unilateral + template "AO" → placeholder preservado (não bilateraliza)', () => {
+  ctx._BRIDGE.lioDetectada = true;
+  ctx._BRIDGE.lioLado = 'OE';
+  const out = ctx._BRIDGE.getBiomicroscopiaComLente(ctx._BRIDGE.BIOMICROSCOPIA_NORMAL);
+  expect(out).toBe(ctx._BRIDGE.BIOMICROSCOPIA_NORMAL);
+});
+
+test('[LENTE-8] lioLado=AO → substitui em todas as linhas (comportamento do gatilho de voz)', () => {
+  ctx._BRIDGE.lioDetectada = true;
+  ctx._BRIDGE.lioLado = 'AO';
+  const out = ctx._BRIDGE.getBiomicroscopiaComLente(ctx._BRIDGE.BIOMICROSCOPIA_BLEFARITE);
+  expect(out.includes('cristalino transparente')).toBe(false);
+  expect(out.includes('pseudofacia')).toBe(true);
+});
+
+test('[LENTE-9] caso 2026-08-05: modelo escreveu a LIO LIMPA + opacidade detectada → cápsula atualizada', () => {
+  // O guard de texto misto devolvia o texto INTACTO aqui: a flag de opacidade não
+  // tinha placeholder para trocar e o prontuário saía "LIO transparente e bem
+  // posicionada" logo depois de o médico dizer que a lente estava embaçada.
+  const base = 'AO: olho calmo, córnea transparente, câmara anterior formada, pupila regular e reagente, pseudofacia, LIO transparente e bem posicionada';
+  ctx._BRIDGE.opacidadeCapsulaDetectada = true;
+  const out = ctx._BRIDGE.getBiomicroscopiaComLente(base);
+  expect(out.includes('opacidade de cápsula posterior')).toBe(true);
+  expect(out.includes('LIO transparente')).toBe(false);
+  expect(out.includes('pseudofacia')).toBe(true);
+});
+
+test('[LENTE-10] opacidade + texto misto: só a linha pseudofácica muda, o olho fácico fica intacto', () => {
+  const misto = 'OD: olho calmo, córnea transparente, pseudofacia, LIO transparente e bem posicionada\n' +
+                'OE: olho calmo, córnea transparente, cristalino transparente';
+  ctx._BRIDGE.opacidadeCapsulaDetectada = true;
+  const [lOD, lOE] = ctx._BRIDGE.getBiomicroscopiaComLente(misto).split('\n');
+  expect(lOD.includes('opacidade de cápsula posterior')).toBe(true);
+  expect(lOE).toBe('OE: olho calmo, córnea transparente, cristalino transparente');
+});
+
+test('[LENTE-11] opacidade com lado OD → linha "AO" pseudofácica NÃO é bilateralizada', () => {
+  const base = 'AO: olho calmo, córnea transparente, pseudofacia, LIO transparente e bem posicionada';
+  ctx._BRIDGE.opacidadeCapsulaDetectada = true;
+  ctx._BRIDGE.lioLado = 'OD';
+  expect(ctx._BRIDGE.getBiomicroscopiaComLente(base)).toBe(base);
+});
+
+test('[LENTE-12] opacidade + texto que JÁ diz opacidade de cápsula → inalterado', () => {
+  const base = 'AO: olho calmo, córnea transparente, pseudofacia, opacidade de cápsula posterior';
+  ctx._BRIDGE.opacidadeCapsulaDetectada = true;
+  expect(ctx._BRIDGE.getBiomicroscopiaComLente(base)).toBe(base);
+});
+
+// ──────────────────────────────────────────────────────────────────────────────
+// PSEUDOFACIA DERIVADA DOS DADOS — parsePseudofaciaFromDados()
+// Regressão (log 2026-08-03): paciente operada de catarata AO há 1 ano, gatilho de
+// voz não disparou (fala em 1ª pessoa) e a biomicroscopia saiu "cristalino
+// transparente" num olho sem cristalino.
+// ──────────────────────────────────────────────────────────────────────────────
+
+test('[PSEUDO-1] caso real: cirurgia combinada AO em antecedentes → detected + lado AO', () => {
+  const r = ctx._BRIDGE.parsePseudofaciaFromDados({
+    antecedentes_oftalmologicos: 'Cirurgia combinada de catarata e glaucoma AO há ~1 ano. Diagnóstico de glaucoma desde 2015.',
+    diagnostico: 'H401 - Glaucoma primário ângulo aberto AO (avançado)\nH524 - Presbiopia\nH010 - Blefarite bilateral',
+  });
+  expect(r.detected).toBe(true);
+  expect(r.lado).toBe('AO');
+});
+
+test('[PSEUDO-2] regressão ponta a ponta: dados do caso real → lente deixa de ser "cristalino transparente"', () => {
+  const r = ctx._BRIDGE.parsePseudofaciaFromDados({
+    antecedentes_oftalmologicos: 'Facectomia com implante de LIO em ambos os olhos há 1 ano',
+  });
+  ctx._BRIDGE.lioDetectada = r.detected;
+  ctx._BRIDGE.lioLado = r.lado;
+  const out = ctx._BRIDGE.getBiomicroscopiaComLente(ctx._BRIDGE.BIOMICROSCOPIA_BLEFARITE);
+  expect(out.includes('cristalino transparente')).toBe(false);
+  expect(out.includes('pseudofacia')).toBe(true);
+});
+
+test('[PSEUDO-3] cirurgia PLANEJADA não é pseudofacia', () => {
+  expect(ctx._BRIDGE.parsePseudofaciaFromDados({
+    diagnostico: 'H259 - Catarata senil AO',
+    antecedentes_oftalmologicos: 'Indicada cirurgia de catarata AO',
+  }).detected).toBe(false);
+  expect(ctx._BRIDGE.parsePseudofaciaFromDados({
+    antecedentes_oftalmologicos: 'Paciente vai fazer cirurgia de catarata no olho direito',
+  }).detected).toBe(false);
+});
+
+test('[PSEUDO-4] negativa explícita não vira pseudofacia', () => {
+  expect(ctx._BRIDGE.parsePseudofaciaFromDados({
+    antecedentes_oftalmologicos: 'Nega cirurgia de catarata prévia',
+  }).detected).toBe(false);
+});
+
+test('[PSEUDO-5] lado ambíguo → detected sem lado (chamador não liga a flag)', () => {
+  const r = ctx._BRIDGE.parsePseudofaciaFromDados({
+    antecedentes_oftalmologicos: 'Cirurgia de catarata há 2 anos',
+  });
+  expect(r.detected).toBe(true);
+  expect(r.lado).toBe(null);
+});
+
+test('[PSEUDO-6] pseudofacia unilateral → lado do olho operado', () => {
+  const r = ctx._BRIDGE.parsePseudofaciaFromDados({
+    antecedentes_oftalmologicos: 'Facectomia com LIO no olho esquerdo em 2023',
+  });
+  expect(r.detected).toBe(true);
+  expect(r.lado).toBe('OE');
+});
+
+test('[PSEUDO-8] hda na voz do paciente dá o lado que os antecedentes não deram', () => {
+  const r = ctx._BRIDGE.parsePseudofaciaFromDados({
+    antecedentes_oftalmologicos: 'Facectomia bilateral',
+    hda: 'Refere que fez a cirurgia de catarata em um olho e depois o outro, há cerca de um ano',
+  });
+  expect(r.detected).toBe(true);
+  expect(r.lado).toBe('AO');
+});
+
+test('[PSEUDO-12] cirurgia SEM TIPO nos antecedentes não vira pseudofacia (caso 2026-09-02)', () => {
+  // Com o prompt corrigido o antecedente sai sem o nome do procedimento — o parser
+  // não pode "completar" a catarata que ninguém disse.
+  expect(ctx._BRIDGE.parsePseudofaciaFromDados({
+    antecedentes_oftalmologicos: 'Cirurgia ocular prévia AO há ~15 anos (tipo não especificado)'
+  }).detected).toBe(false);
+  expect(ctx._BRIDGE.parsePseudofaciaFromDados({
+    hda: 'Refere cirurgia nos dois olhos há mais de 10 anos'
+  }).detected).toBe(false);
+});
+
+test('[PSEUDO-9] cirurgia de TERCEIRO na hda não vira pseudofacia do paciente', () => {
+  expect(ctx._BRIDGE.parsePseudofaciaFromDados({
+    hda: 'Conta que a mãe operou o olho direito de catarata e ficou boa',
+  }).detected).toBe(false);
+});
+
+test('[PSEUDO-10] veto de futuro é REGENTE — "aguarda YAG" não apaga a facectomia da mesma linha', () => {
+  const r = ctx._BRIDGE.parsePseudofaciaFromDados({
+    antecedentes_oftalmologicos: 'Facectomia AO em 2025; aguarda capsulotomia YAG',
+  });
+  expect(r.detected).toBe(true);
+  expect(r.lado).toBe('AO');
+});
+
+test('[PSEUDO-11] pseudofacia OD + cirurgia planejada do OE → detected SEM lado (não bilateraliza)', () => {
+  // Os dois olhos são citados na mesma linha, mas só um é pseudofácico: sem lado
+  // confiável a flag não é ligada e o placeholder do olho fácico sobrevive.
+  const r = ctx._BRIDGE.parsePseudofaciaFromDados({
+    antecedentes_oftalmologicos: 'Pseudofacia OD; indicada cirurgia de catarata no olho esquerdo',
+  });
+  expect(r.detected).toBe(true);
+  expect(r.lado).toBe(null);
+});
+
+test('[PSEUDO-7] paciente fácico com catarata → não detected', () => {
+  expect(ctx._BRIDGE.parsePseudofaciaFromDados({
+    diagnostico: 'H250 - Catarata senil incipiente AO',
+    biomicroscopia: 'AO: olho calmo, córnea transparente, cristalino transparente',
+  }).detected).toBe(false);
 });
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -1323,6 +1542,26 @@ test('[CASO8-1] "cirurgiada de catarata" NÃO seta catarata e seta LIO', () => {
   expect(ctx._BRIDGE.lioDetectada).toBe(true);
 });
 
+test('[CASO8-10] "operou os olhos" de PTERÍGIO não seta LIO (caso real 2026-09-02)', () => {
+  // "operou/operei o olho" são formas genéricas da lista — não dizem de quê. A
+  // paciente tinha sido operada de pterígio nos dois olhos; a lente inferida daí
+  // escreveria pseudofacia em olho fácico e apagaria a presbiopia dela.
+  speak('a senhora ja operou os olhos foi de pterigio nos dois faz uns quinze anos');
+  expect(ctx._BRIDGE.lioDetectada).toBe(false);
+});
+
+test('[CASO8-12] "lente de contato" na mesma fala não cancela o veto do pterígio', () => {
+  // A palavra "lente" é ambígua (contato/óculos): se ela desfizesse o veto, o hook
+  // voltaria a escrever pseudofacia no paciente operado de pterígio.
+  speak('a senhora ja operou os olhos foi de pterigio nos dois e ja usou lente de contato alguma vez');
+  expect(ctx._BRIDGE.lioDetectada).toBe(false);
+});
+
+test('[CASO8-11] pterígio antigo + catarata operada: a evidência específica prevalece', () => {
+  speak('operei os dois olhos de pterigio e depois fiz a cirurgia de catarata tambem');
+  expect(ctx._BRIDGE.lioDetectada).toBe(true);
+});
+
 test('[CASO8-2] "cirurgia de catarata" (menção histórica) NÃO seta catarata', () => {
   speak('alem da cirurgia de catarata e da limpeza ela ja teve algum outro tratamento');
   expect(ctx._BRIDGE.catarataDetectada).toBe(false);
@@ -1353,6 +1592,51 @@ test('[CASO8-7] explicação de cirurgia FUTURA não seta LIO — catarata preva
   speak('o senhor tem catarata na cirurgia a gente tira a catarata e coloca a lente nova');
   expect(ctx._BRIDGE.catarataDetectada).toBe(true);
   expect(ctx._BRIDGE.lioDetectada).toBe(false);
+});
+
+test('[CASO8-8] Caso 7d: fala do PACIENTE em 1ª pessoa seta LIO (log 2026-08-03)', () => {
+  speak('to aqui nao vai fazer uma avaliacao no meu olho eu fiz a cirurgia de catarata que ela coma tem um ano');
+  expect(ctx._BRIDGE.lioDetectada).toBe(true);
+});
+
+test('[CASO8-9] "operei o olho" / "fui operada de catarata" também setam LIO', () => {
+  speak('doutor eu operei o olho direito ano passado');
+  expect(ctx._BRIDGE.lioDetectada).toBe(true);
+  ctx._BRIDGE.resetFlags();
+  speak('eu fui operada de catarata nos dois olhos');
+  expect(ctx._BRIDGE.lioDetectada).toBe(true);
+});
+
+// ──────────────────────────────────────────────────────────────────────────────
+// OPACIDADE DE CÁPSULA EM LINGUAGEM LEIGA (2026-08-05)
+// O médico fala "a lente tá embaçada" / "vai precisar de uma limpeza" — nunca
+// "opacidade de cápsula posterior" na frente do paciente. O passado do PACIENTE
+// ("já fiz a limpeza") continua sendo histórico e NÃO pode disparar (2026-06-18).
+// ──────────────────────────────────────────────────────────────────────────────
+
+test('[PCO-1] "a lente ta um pouquinho embacada" seta opacidade de cápsula', () => {
+  speak('deixa eu ver aqui a lente ta um pouquinho embacada mas ainda nao ta atrapalhando');
+  expect(ctx._BRIDGE.opacidadeCapsulaDetectada).toBe(true);
+});
+
+test('[PCO-2] "sujeirinha na lente" seta opacidade de cápsula', () => {
+  speak('tem uma sujeirinha na lente que da para tirar com laser');
+  expect(ctx._BRIDGE.opacidadeCapsulaDetectada).toBe(true);
+});
+
+test('[PCO-3] "vai precisar fazer uma limpeza" (futuro) seta opacidade de cápsula', () => {
+  speak('mais para frente vai precisar fazer uma limpeza com o laser');
+  expect(ctx._BRIDGE.opacidadeCapsulaDetectada).toBe(true);
+});
+
+test('[PCO-4] REGRESSÃO 2026-06-18: "ja fiz a limpeza da lente" (histórico) NÃO seta', () => {
+  speak('doutor eu ja fiz a limpeza da lente faz uns dois anos');
+  expect(ctx._BRIDGE.opacidadeCapsulaDetectada).toBe(false);
+});
+
+test('[PCO-5] queixa de VISÃO embaçada do paciente NÃO seta opacidade de cápsula', () => {
+  speak('doutor minha vista ta embacada para perto eu enxergo embacado');
+  expect(ctx._BRIDGE.opacidadeCapsulaDetectada).toBe(false);
 });
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -1688,6 +1972,58 @@ test('[GATE-28] conduta NÃO-refrativa sem tratamento continua bloqueada (gate p
   speakSemCaptura('vou te encaminhar para o especialista de retina pode ir na recepção');
   expect(ctx._BRIDGE.stopCommandTimeout).toBe(null);
   expect(ctx._BRIDGE.isRecording).toBe(true);
+});
+
+// ──────────────────────────────────────────────────────────────────────────────
+// 2026-08-05 — ESCOPO DA DECLARAÇÃO DE EXAMES NORMAIS
+// A palavra "fundo" não é o que decide se a fundoscopia entra: o que decide é o
+// ESCOPO da frase. Declaração global cobre o fundo; só frase restrita à
+// biomicroscopia o exclui. Como o hook marca `examesNormaisInjetados`, o
+// injectAll pula o bloco de exames depois — uma omissão aqui não é corrigida.
+// ──────────────────────────────────────────────────────────────────────────────
+
+test('[EXNORM-1] "exames estão todos normais" marca fundoscopiaDetectada (declaração global)', () => {
+  speakSemCaptura('seus exames estao todos normais');
+  expect(ctx._BRIDGE.HOOK_STATE.examesNormaisInjetados).toBe(true);
+  expect(ctx._BRIDGE.HOOK_STATE.fundoscopiaDetectada).toBe(true);
+});
+
+test('[EXNORM-2] "seus olhos estão normais" também é global', () => {
+  speakSemCaptura('seus olhos estao normais');
+  expect(ctx._BRIDGE.HOOK_STATE.fundoscopiaDetectada).toBe(true);
+});
+
+test('[EXNORM-3] "biomicroscopia sem alterações" NÃO marca fundoscopia (escopo anterior)', () => {
+  speakSemCaptura('a biomicroscopia sem alteracoes');
+  expect(ctx._BRIDGE.HOOK_STATE.examesNormaisInjetados).toBe(true);
+  expect(ctx._BRIDGE.HOOK_STATE.fundoscopiaDetectada).toBe(false);
+});
+
+test('[EXNORM-4] "biomicroscopia e fundoscopia normais" marca fundoscopia', () => {
+  speakSemCaptura('biomicroscopia e fundoscopia normais');
+  expect(ctx._BRIDGE.HOOK_STATE.fundoscopiaDetectada).toBe(true);
+});
+
+// 2026-09-29 — nervo óptico/H400 fabricado a partir de exemplo do prompt
+noiseTest('[NERVO-1] sem fala de nervo/glaucoma/pressão → H400 e fundoscopia de nervo removidos', () => {
+  const raw = { tipo_consulta: 'retorno', dados: {
+    diagnostico: 'H521 - Miopia\nH400 - Suspeita de glaucoma',
+    fundoscopia: '[CONFIRMAR OLHO AFETADO] Alteração no nervo óptico, sugestiva de glaucoma',
+    conduta: 'Prescrição de óculos' } };
+  const fala = 'o senhor e miope e tem um pouco de astigmatismo vai precisar do oculos para longe';
+  const d = DecisionEngine.buildDecision(raw, { transcribedText: fala }).clonedAIResponse.dados;
+  expect(d.diagnostico).toBe('H521 - Miopia');
+  expect(d.fundoscopia).toBe(null);
+});
+
+noiseTest('[NERVO-2] fala cita o nervo → diagnóstico e fundoscopia preservados', () => {
+  const raw = { tipo_consulta: 'retorno', dados: {
+    diagnostico: 'H400 - Suspeita de glaucoma',
+    fundoscopia: '[CONFIRMAR OLHO AFETADO] Alteração no nervo óptico' } };
+  const fala = 'o nervo do olho do senhor esta um pouco alterado';
+  const d = DecisionEngine.buildDecision(raw, { transcribedText: fala }).clonedAIResponse.dados;
+  expect(d.diagnostico).toBe('H400 - Suspeita de glaucoma');
+  expect(/nervo/.test(d.fundoscopia)).toBe(true);
 });
 
 // ──────────────────────────────────────────────────────────────────────────────

@@ -23,7 +23,8 @@ Esta skill é focada apenas em `fundoscopia`. Ela pode ser usada dentro da skill
 ## Onde isso REALMENTE roda (autoridade)
 
 > ⚠️ **A cópia que executa em produção é o prompt do Gemini em
-> `src/gemini-interview-agent.js` (seção `fundoscopia`, hoje ~L856-897).**
+> `src/gemini-interview-agent.js` (`_buildConsultationPrompt`, bloco
+> `- fundoscopia:` dentro de `CAMPOS:`).** Regra geral: `skills/user/README.md`.
 > Esta skill é o espelho legível dessas regras — editá-la NÃO muda o comportamento
 > da extensão. Ao mudar uma regra, altere o prompt e esta skill juntos, para não
 > divergirem. A injeção final é feita por `scripts/sidepanel-injection.js`; o
@@ -86,6 +87,33 @@ A escavação aumentada costuma ser **bilateral**:
 - Simétrica nos dois olhos → `AO` (`escavação aumentada e simétrica`).
 - Só um olho com escavação suspeita → por olho (a escavação **é** o achado; a linha do olho afetado descreve a escavação e **omite** o termo `escavação fisiológica`).
 
+## Descritiva, nunca interpretativa (regra do médico, 2026-08-04)
+
+> ⛔ O texto da fundoscopia registra **o que foi visto**, não a leitura diagnóstica do
+> achado. **Proibido** escrever `suspeita de glaucoma`, `sugestivo de glaucoma`,
+> `compatível com glaucoma`, `escavação glaucomatosa`.
+> ✅ Descreva: `escavação aumentada (relação E/D ~0,7)`, `assimetria de escavação entre
+> os olhos`, `rima neural afilada inferiormente`.
+> A suspeita vai para `diagnostico` (`H400 - Suspeita de glaucoma`) e o exame **que o médico
+> pediu e nomeou** para `conduta`. Vale para qualquer doença: descreva o achado, deixe o nome
+> da doença no diagnóstico.
+> ⛔ O par acima diz **onde** o pedido é registrado, não **qual** exame pedir: a suspeita de
+> glaucoma não acompanha exame nenhum por padrão. Sem o nome na fala →
+> `Solicitar exame complementar (não especificado na consulta)`; sem exame anunciado → linha
+> nenhuma (caso 2026-08-17, `[COND-EXAM-1..3]`).
+>
+> 🛡️ **Rede no runtime:** `_avisoFundoscopiaInterpretativa()` em `src/DecisionEngine.js`
+> **avisa** o médico quando a interpretação aparece — e **não** edita o texto. Em
+> "escavação glaucomatosa (0,8)" a interpretação e o achado são a mesma oração;
+> recortar apagaria o achado. Quem corrige a frase é o médico.
+
+## Escavação alterada vai no FINAL da linha (regra do médico, 2026-10-29)
+
+> Quando a fundoscopia descreve alteração de escavação, ela fica no **fim** da linha do olho,
+> depois de retina, mácula e padrão vascular.
+> ❌ `OD: escavação aumentada (relação E/D ~0,7); retina aplicada, mácula em bom aspecto, padrão vascular preservado`
+> ✅ `OD: retina aplicada, mácula em bom aspecto, padrão vascular preservado, escavação aumentada (relação E/D ~0,7)`
+
 ## "Escavação simétrica" vs "escavação fisiológica"
 
 > ⚠️ **`escavação simétrica` é uma comparação ENTRE os olhos** — só faz sentido na forma `AO` (ambos normais/simétricos). Numa linha de **um** olho, use `escavação fisiológica` (sem "simétrica"). No olho cuja escavação **é** o achado (glaucoma), a escavação não é normal — descreva-a e não escreva `fisiológica`.
@@ -104,6 +132,11 @@ OE: fundo sem alterações, retina aplicada, mácula em bom aspecto, padrão vas
 FUNDOSCOPIA INDIRETA: AO [achado]; retina aplicada, escavação simétrica e fisiológica
 ```
 
+> **Ordem dos olhos (regra do médico, 2026-09-04): OD SEMPRE antes de OE.** Vale a ordem
+> do prontuário (direito → esquerdo), nunca a ordem da fala — mesmo quando o achado é do
+> OE. O runtime reordena as duas linhas (`_ordenaOlhosODPrimeiro`, `src/DecisionEngine.js`),
+> mas a saída já deve nascer certa.
+
 Quando usada isoladamente, retorne:
 ```json
 {
@@ -121,16 +154,18 @@ Nevo OE (unilateral por natureza):
 OD: fundo sem alterações, retina aplicada, mácula em bom aspecto, padrão vascular preservado, escavação fisiológica
 OE: nevo de coroide inferotemporal, estável, sem sinais de atividade; retina aplicada, mácula em bom aspecto, padrão vascular preservado, escavação fisiológica"
 
-Glaucoma OD com escavação aumentada (unilateral):
+Glaucoma OD com escavação aumentada (unilateral) — só a DESCRIÇÃO; a suspeita vai
+para o diagnóstico (`H400 - Suspeita de glaucoma OD`) e, se o médico pediu e NOMEOU
+algum exame, o pedido vai para a conduta:
 "FUNDOSCOPIA INDIRETA:
-OD: escavação aumentada (relação E/D ~0,7), suspeita de glaucoma — aguardar campo visual e OCT de nervo óptico; retina aplicada, mácula em bom aspecto, padrão vascular preservado
+OD: retina aplicada, mácula em bom aspecto, padrão vascular preservado, escavação aumentada (relação E/D ~0,7)
 OE: fundo sem alterações, retina aplicada, mácula em bom aspecto, padrão vascular preservado, escavação fisiológica"
 
 Retinopatia diabética (bilateral real):
 "FUNDOSCOPIA INDIRETA: AO sinais de retinopatia diabética leve (microaneurismas), sem edema macular aparente; retina aplicada, escavação simétrica e fisiológica"
 
-Glaucoma bilateral simétrico (AO):
-"FUNDOSCOPIA INDIRETA: AO escavação aumentada e simétrica (relação E/D ~0,7), suspeita de glaucoma — aguardar campo visual e OCT de nervo óptico; retina aplicada, mácula em bom aspecto, padrão vascular preservado"
+Glaucoma bilateral simétrico (AO) — idem, sem a leitura diagnóstica:
+"FUNDOSCOPIA INDIRETA: AO retina aplicada, mácula em bom aspecto, padrão vascular preservado, escavação aumentada e simétrica (relação E/D ~0,7)"
 ```
 
 ## Lista de checagem final
@@ -143,6 +178,7 @@ Antes de finalizar a fundoscopia, confirme:
 - Nenhum achado unilateral por natureza foi descrito como `AO`.
 - Glaucoma: simétrico → `AO`; assimétrico → por olho (não está na lista de "unilaterais por natureza").
 - `escavação simétrica` só em linha `AO`; `escavação fisiológica` em linha de um olho.
+- Nenhuma interpretação diagnóstica no texto (`suspeita/sugestivo/compatível com glaucoma`, `glaucomatosa`) — só a descrição do achado; a suspeita vai para o diagnóstico e os exames para a conduta.
 - Lado veio de TODA a consulta; lado indeterminável → `[CONFIRMAR OLHO AFETADO]`, sem linha do contralateral.
 
 ## Histórico de erros cobertos
@@ -150,3 +186,7 @@ Antes de finalizar a fundoscopia, confirme:
 ### 2026-07-28 — Fundoscopia sem regras de lateralidade (assimetria com a biomicroscopia)
 - **Erro**: a fundoscopia tinha só o formato `OD sem alterações / OE achado` em linha única — sem regra de `AO`-proibido para achado unilateral, sem descritor normal completo do olho contralateral, sem escape de lado indeterminável. Dependia 100% do LLM não bilateralizar um descolamento/nevo/glaucoma.
 - **Correção**: seção reescrita simétrica à biomicroscopia (prompt + skill): formato por olho (`OD:`/`OE:` em linhas separadas), contralateral como `fundo sem alterações`, `AO` proibido em achado posterior unilateral por natureza, `escavação fisiológica` (não "simétrica") em linha de um olho, e regra de flag `injectExamesNormais=false` quando há achado. Glaucoma mantido fora da lista de "unilaterais por natureza" (costuma ser bilateral).
+
+### 2026-08-04 — Fundoscopia injetada afirmando "suspeita de glaucoma"
+- **Erro**: os exemplos canônicos (prompt e skill) mandavam escrever `escavação aumentada (relação E/D ~0,7), suspeita de glaucoma — aguardar campo visual e OCT de nervo óptico` dentro do texto da fundoscopia. O laudo do exame saía carregando a leitura diagnóstica e o plano de exames, que pertencem a `diagnostico` e `conduta`.
+- **Correção**: regra "descritiva, nunca interpretativa" no prompt (`src/gemini-interview-agent.js`, seção `fundoscopia`) e nesta skill; os dois exemplos de glaucoma reescritos só com a descrição. O plano some junto porque estava na mesma oração. Rede no runtime: `_avisoFundoscopiaInterpretativa()` avisa sem editar o texto. Testes `[FUNDO-INTERP-1..4]` em `utils/integration-test.js`.

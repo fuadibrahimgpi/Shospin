@@ -576,7 +576,8 @@ test('[DE-3] Guard rebaixa linha "Associação ATB+corticoide" para genérico se
   expect(trat.includes('Associação')).toBe(false);
   expect(trat.includes('Medicação ocular prescrita')).toBe(true);
   expect(trat.includes('1 gota 3x/dia')).toBe(true); // posologia preservada
-  expect(trat.includes('Lubrificante')).toBe(true);
+  // "lubrificante" dito → registro padrão do médico (Guard 2f), posologia preservada
+  expect(trat.includes('Carmelose sódica ou hialuronato de sódio 6x/dia')).toBe(true);
   // Crítico: a resposta crua NÃO foi mutada
   expect(raw.dados.tratamento.includes('Associação')).toBe(true);
 });
@@ -637,6 +638,65 @@ test('[DE-3f] Guard 2e: sem verbo de manutenção ligado ao remédio, tratamento
     hookFlags: {},
   });
   expect(decision.clonedAIResponse.dados.tratamento).toBe(null);
+});
+
+test('[DE-3g] Guard 2e: em retorno com verbo de manutenção na fala, colírio ativo em uso é preservado no tratamento (caso Consulta 4)', () => {
+  const raw = {
+    tipo_consulta: 'retorno',
+    dados: {
+      retorno: 'Retorno para controle',
+      medicacoes_em_uso: 'trometolol em olho direito três vezes ao dia e lubrificante',
+      tratamento: null,
+    },
+  };
+  const decision = DecisionEngine.buildDecision(raw, {
+    transcribedText: 'vem para controle de tal maneira direito sem queixas no momento usando o trometolol em olho direito três vezes ao dia e biomicroscopia hiperemia conjuntival acuidade visual normal orientacoes mantido oculos retorno para controle',
+    hookFlags: {},
+    tipoConsulta: 'retorno',
+  });
+  const trat = decision.clonedAIResponse.dados.tratamento;
+  expect(trat).toBeTruthy();
+  expect(trat).toContain('trometolol em olho direito três vezes ao dia');
+  expect(trat).toContain('lubrificante');
+  expect(decision.guardsApplied.some(g => g.includes('Guard 2e'))).toBe(true);
+});
+
+test('[DE-3h] Guard 2e: se houver ordem expressa de suspender medicação, ela NÃO é mantida no tratamento', () => {
+  const raw = {
+    tipo_consulta: 'retorno',
+    dados: {
+      retorno: 'Retorno para controle',
+      medicacoes_em_uso: 'timolol 2x/dia\nlubrificante 4x/dia',
+      tratamento: null,
+    },
+  };
+  const decision = DecisionEngine.buildDecision(raw, {
+    transcribedText: 'vamos suspender o timolol, mantido o lubrificante e mantido oculos retorno em 3 meses',
+    hookFlags: {},
+    tipoConsulta: 'retorno',
+  });
+  const trat = decision.clonedAIResponse.dados.tratamento;
+  expect(trat).toBeTruthy();
+  // O Guard 2e traz o lubrificante mantido; o 2f o renomeia ("lubrificante" dito)
+  expect(trat).toContain('Carmelose sódica ou hialuronato de sódio 4x/dia');
+  expect(trat).not.toContain('timolol');
+});
+
+test('[DE-3i] Guard 2e: colírio mantido é mesclado ao tratamento quando outro remédio já foi prescrito', () => {
+  const raw = {
+    tipo_consulta: 'retorno',
+    dados: {
+      medicacoes_em_uso: 'timolol 2x/dia',
+      tratamento: 'Brimonidina 2x/dia',
+    },
+  };
+  const decision = DecisionEngine.buildDecision(raw, {
+    transcribedText: 'vou prescrever brimonidina duas vezes ao dia e manter timolol',
+    hookFlags: {},
+  });
+  const trat = decision.clonedAIResponse.dados.tratamento;
+  expect(trat).toContain('Brimonidina 2x/dia');
+  expect(trat).toContain('timolol 2x/dia');
 });
 
 test('[DE-3b] Guard preserva "Associação ATB+corticoide" quando a classe É mencionada (fora da blefarite)', () => {
@@ -817,7 +877,8 @@ test('[DE-PROT-5] Lubrificante e demais linhas não-colírio nunca são promovid
   });
   const trat = decision.clonedAIResponse.dados.tratamento.split('\n');
   expect(trat[2]).toBe('Tobramicina + dexametasona até o término');
-  expect(trat[3]).toBe('Lubrificante ocular AO ao longo do dia');
+  // Não promovido ao protocolo; só renomeado pelo registro padrão do lubrificante (2f)
+  expect(trat[3]).toBe('Carmelose sódica ou hialuronato de sódio AO ao longo do dia');
   expect(trat[4]).toBe('Ômega 3 (EPA+DHA) 1000 mg');
 });
 
@@ -892,7 +953,7 @@ test('[DE-PROT-8] REGRESSÃO 2026-09-15: Tobramicina sem colírio na fala (só l
   });
   const trat = decision.clonedAIResponse.dados.tratamento;
   expect(trat.includes('Tobramicina')).toBe(false);
-  expect(trat).toBe('Compressa morna\nHigiene palpebral\nLubrificante ocular\nÔmega 3');
+  expect(trat).toBe('Compressa morna\nHigiene palpebral\nCarmelose sódica ou hialuronato de sódio\nÔmega 3');
   // O ASR pode ter comido a palavra — o médico precisa saber que a linha saiu.
   expect(decision.avisos.some(a => a.includes('Tobramicina + dexametasona'))).toBe(true);
   expect(raw.dados.tratamento.includes('Tobramicina')).toBe(true); // resposta crua intacta
@@ -909,7 +970,9 @@ test('[DE-PROT-9] Com colírio (não-lubrificante) na fala, a linha do protocolo
       ' e depois da limpeza pinga esse colirio aqui tres vezes ao dia por uma semana',
     hookFlags: {},
   });
-  expect(decision.clonedAIResponse.dados.tratamento).toBe(TRATAMENTO_2026_09_15);
+  // A linha do protocolo fica; o lubrificante só ganha o registro padrão (2f)
+  expect(decision.clonedAIResponse.dados.tratamento)
+    .toBe(TRATAMENTO_2026_09_15.replace('Lubrificante ocular', 'Carmelose sódica ou hialuronato de sódio'));
 });
 
 test('[DE-PROT-10] "tratamento mais forte" (fala real 2026-07-07) segue valendo como o colírio', () => {
@@ -955,7 +1018,7 @@ test('[DE-PROT-12] Pingar do lubrificante não PROMOVE a linha genérica ao prot
   // Igualdade exata, não só "sem Tobramicina": se a promoção disparasse, o guard 2c
   // apagaria a linha promovida e um includes() seguiria verde sem guardar o 2b.
   expect(decision.clonedAIResponse.dados.tratamento)
-    .toBe('Compressa morna\nMedicação ocular prescrita\nLubrificante ocular');
+    .toBe('Compressa morna\nMedicação ocular prescrita\nCarmelose sódica ou hialuronato de sódio');
 });
 
 test('[DE-PROT-14] "pinga esse aqui depois da limpeza" com lubrificante logo depois continua sendo o colírio', () => {
@@ -1423,7 +1486,13 @@ test('[V51-2] Fallback Y-position é desativado por padrão', () => {
 });
 
 test('[V51-3] injectAll retorna warnings array', () => {
-  expect(contentJsSource).toContain('return { success: fieldsInjected > 0, fieldsInjected, warnings };');
+  expect(contentJsSource).toContain('return { success: fieldsInjected > 0, fieldsInjected, warnings, readback };');
+});
+
+test('[RECHECK-1] recheck de fidelidade roda após a injeção, com o readback do content script', () => {
+  expect(contentJsSource).toContain('readback[t.label] = saveText;');
+  expect(injectionJsSource).toContain('_recheckInjecao(combinedData, injectResp.readback)');
+  expect(injectionJsSource).toContain('RecheckAgent.conferirFidelidade(RecheckAgent.montarEnviado(enviado), readback)');
 });
 
 test('[V51-4] clickTab usa wait ativo pelo container ao invés de timeout fixo', () => {
@@ -1711,8 +1780,86 @@ test('[GCC-3] _guardCondutaContaminada move lubrificante ocular de conduta para 
   };
   const decision = DecisionEngine.buildDecision(raw, { transcribedText: 'lubrificante ocular', hookFlags: {} });
   expect(decision.clonedAIResponse.dados.conduta).not.toContain('Lubrificante');
-  expect(decision.clonedAIResponse.dados.tratamento).toContain('Lubrificante');
+  // Movido para tratamento E renomeado pelo registro padrão (Guard 2f)
+  expect(decision.clonedAIResponse.dados.tratamento).toContain('Carmelose sódica ou hialuronato de sódio');
   expect(decision.clonedAIResponse.dados.conduta).toContain('Solicitar OCT');
+});
+
+// ── Guard 2f: "lubrificante" dito → Carmelose sódica ou hialuronato de sódio ──
+const LUB_PADRAO = 'Carmelose sódica ou hialuronato de sódio';
+const _lubDecision = (tratamento, fala, extra = {}) => DecisionEngine.buildDecision({
+  tipo_consulta: 'retorno',
+  dados: { conduta: 'Retorno 6 meses', tratamento, ...extra },
+}, { transcribedText: fala, hookFlags: {} });
+
+test('[LUB-1] "lubrificante" dito: a linha vira o registro padrão e a posologia sobrevive', () => {
+  const d = _lubDecision('Lubrificante ocular AO 6/6h', 'pode usar lubrificante de seis em seis horas nos dois olhos');
+  expect(d.clonedAIResponse.dados.tratamento).toBe(`${LUB_PADRAO} AO 6/6h`);
+  expect(d.guardsApplied.some(g => g.includes('Guard 2f'))).toBe(true);
+});
+
+test('[LUB-2] o registro do guard é idêntico ao do léxico (cópia sincronizada)', () => {
+  const Lexico = require('../config/medicamentos-lexico.js');
+  expect(Lexico.LUBRIFICANTE_PADRAO).toBe(LUB_PADRAO);
+  const d = _lubDecision('Lubrificante ocular', 'usa um lubrificante');
+  expect(d.clonedAIResponse.dados.tratamento).toBe(Lexico.LUBRIFICANTE_PADRAO);
+});
+
+test('[LUB-3] plural, "colírio lubrificante" e marcador de lista também são renomeados', () => {
+  const fala = 'vai usar lubrificantes e o colirio lubrificante a vontade';
+  expect(_lubDecision('Lubrificantes oculares 4x/dia', fala).clonedAIResponse.dados.tratamento).toBe(`${LUB_PADRAO} 4x/dia`);
+  expect(_lubDecision('Colírio lubrificante 4x/dia', fala).clonedAIResponse.dados.tratamento).toBe(`${LUB_PADRAO} 4x/dia`);
+  expect(_lubDecision('- Lubrificante', fala).clonedAIResponse.dados.tratamento).toBe(`- ${LUB_PADRAO}`);
+});
+
+test('[LUB-4] marca dita vence: "Lubrificante ocular (Systane)" não é tocado', () => {
+  const d = _lubDecision('Lubrificante ocular (Systane) 4x/dia', 'usa o systane que e um lubrificante 4x ao dia');
+  expect(d.clonedAIResponse.dados.tratamento).toBe('Lubrificante ocular (Systane) 4x/dia');
+  expect(d.guardsApplied.some(g => g.includes('Guard 2f'))).toBe(false);
+});
+
+test('[LUB-5] princípio dito vence: "Hialuronato" / "Carmelose" não são tocados', () => {
+  expect(_lubDecision('Hialuronato 4x/dia', 'usa um lubrificante de hialuronato 4x ao dia').clonedAIResponse.dados.tratamento)
+    .toBe('Hialuronato 4x/dia');
+  // Mesmo que o modelo tenha deixado uma linha genérica, a fala nomeou o produto
+  expect(_lubDecision('Lubrificante ocular 4x/dia', 'usa carmelose, um lubrificante, 4x ao dia').clonedAIResponse.dados.tratamento)
+    .toBe('Lubrificante ocular 4x/dia');
+});
+
+test('[LUB-6] sem a palavra "lubrificante" na fala ("lágrima artificial") nada muda', () => {
+  const d = _lubDecision('Lubrificante ocular 4x/dia', 'pode pingar lagrima artificial 4x ao dia');
+  expect(d.clonedAIResponse.dados.tratamento).toBe('Lubrificante ocular 4x/dia');
+});
+
+test('[LUB-7] só NOMEIA: sem linha de lubrificante no tratamento, nada é criado', () => {
+  expect(_lubDecision('Compressa morna 2x/dia', 'faz compressa morna e depois um lubrificante').clonedAIResponse.dados.tratamento)
+    .toBe('Compressa morna 2x/dia');
+  expect(_lubDecision(null, 'o lubrificante que o senhor usa esta certo').clonedAIResponse.dados.tratamento).toBeFalsy();
+});
+
+test('[LUB-8] outras linhas e a resposta crua do modelo ficam intactas', () => {
+  const raw = {
+    tipo_consulta: 'retorno',
+    dados: { conduta: 'Retorno 6 meses', tratamento: 'Compressa morna\nLubrificante ocular AO\nÔmega 3' },
+  };
+  const d = DecisionEngine.buildDecision(raw, { transcribedText: 'compressa morna, lubrificante e omega 3', hookFlags: {} });
+  expect(d.clonedAIResponse.dados.tratamento).toBe(`Compressa morna\n${LUB_PADRAO} AO\nÔmega 3`);
+  expect(raw.dados.tratamento).toBe('Compressa morna\nLubrificante ocular AO\nÔmega 3');
+});
+
+test('[LUB-9] o registro novo escrito pelo modelo na conduta ainda vai para o tratamento', () => {
+  const d = DecisionEngine.buildDecision({
+    tipo_consulta: 'primeira_consulta',
+    dados: { conduta: `Solicitar OCT\n${LUB_PADRAO} AO ao longo do dia`, tratamento: null },
+  }, { transcribedText: 'pede um oct e usa lubrificante ao longo do dia', hookFlags: {} });
+  expect(d.clonedAIResponse.dados.conduta).not.toContain('Carmelose');
+  expect(d.clonedAIResponse.dados.tratamento).toBe(`${LUB_PADRAO} AO ao longo do dia`);
+});
+
+test('[LUB-10] a linha do lubrificante nunca é promovida ao protocolo da blefarite', () => {
+  const d = _lubDecision(`Compressa morna\nMedicação ocular prescrita\n${LUB_PADRAO}`,
+    'a blefarite deixa a palpebra inflamada, faz compressa morna e lava os cilios com shampoo, e um lubrificante que pode pingar');
+  expect(d.clonedAIResponse.dados.tratamento).toBe(`Compressa morna\nMedicação ocular prescrita\n${LUB_PADRAO}`);
 });
 
 test('[GCC-4] _guardCondutaContaminada move ômega 3 de conduta para tratamento', () => {
@@ -2248,6 +2395,24 @@ const _garantir = (conduta, fala, extra = {}) => {
   _intAgent._garantirExamesPedidosNaConduta(r, _intAgent._normalizarSiglasExameAsr(fala));
   return r.dados.conduta;
 };
+
+test('[ASR-NORM-1] _normalizarSiglasExameAsr corrige filoscopia para fundoscopia', () => {
+  const entrada = 'ao exame filoscopia normal apresenta pterígio incipiente';
+  const saida = _intAgent._normalizarSiglasExameAsr(entrada);
+  expect(saida).toContain('fundoscopia');
+  expect(saida).not.toContain('filoscopia');
+});
+
+test('[ASR-NORM-2] _normalizarSiglasExameAsr corrige mal de bicicleta, perimetro conjuntival, acuidade visual e trometolol', () => {
+  const entrada = 'mal de bicicleta perimetro conjuntival e como a cuidar de visual normal usando o trometolol 3x ao dia';
+  const saida = _intAgent._normalizarSiglasExameAsr(entrada);
+  expect(saida).toContain('biomicroscopia');
+  expect(saida).toContain('hiperemia conjuntival');
+  expect(saida).toContain('acuidade visual');
+  expect(saida).toContain('timolol');
+  expect(saida).not.toContain('mal de bicicleta');
+  expect(saida).not.toContain('perimetro conjuntival');
+});
 
 test('[EXAM-CAT-1] pedidos nomeados no futuro/decisão entram', () => {
   expect(_exLabels('vou pedir um OCT para o senhor')).toEqual(['OCT']);
@@ -5309,6 +5474,8 @@ const SKILL_PROMPT_ANCHORS = [
   ['inferência de prescrição em consulta de refração', 'ótica'],
   ['plano de investigação condicional (log 2026-08-04)', 'prosseguir investigação de outras causas'],
   ['lubrificante não aciona o protocolo da blefarite (log 2026-09-15)', 'O lubrificante NÃO é o colírio da blefarite'],
+  ['princípio ativo primeiro, marca dita entre parênteses (2026-10-30)', 'o nome comercial dito vai entre parênteses'],
+  ['"lubrificante" dito vira o registro padrão do médico (2026-11-05)', 'Carmelose sódica ou hialuronato de sódio'],
 ];
 
 for (const [label, anchor] of SKILL_PROMPT_ANCHORS) {
@@ -5330,12 +5497,151 @@ const SKILL_PROMPT_ANCHORS_ENTREVISTA = [
   ['afirmativa de uso de medicação sistêmica', 'Usa medicação sistêmica (doença não especificada)'],
   ['colírio afirmado sem nome não vira negativa', 'Refere uso de colírio (não identificado na consulta)'],
   ['negativa de antecedentes não apaga história prévia', 'Nega diagnósticos e procedimentos oftalmológicos prévios'],
+  ['"lubrificante" dito vira o registro padrão do médico (2026-11-05)', 'Carmelose sódica ou hialuronato de sódio'],
 ];
 
 for (const [label, anchor] of SKILL_PROMPT_ANCHORS_ENTREVISTA) {
   test(`[SKILL-SYNC] "${anchor}" presente na skill de entrevista E no prompt (${label})`, () => {
     expect(transcricaoSkillSource.includes(anchor)).toBe(true);
     expect(geminiSrcFull.includes(anchor)).toBe(true);
+  });
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// 2026-11-07 — SINCRONIA DAS SKILLS SEM COBERTURA (revisão de estrutura)
+// Regra de autoridade em skills/user/README.md: o código manda, a skill documenta.
+// Antes desta revisão biomicroscopia, gatilhos e OCR não tinham teste nenhum, e a
+// skill de gatilhos documentava 6 frases que já não existiam e omitia 2 listas.
+// ──────────────────────────────────────────────────────────────────────────────
+
+const biomicroSkillSource = readSrcNormalized('skills', 'user', 'biomicroscopia-oftalmologia', 'SKILL.md');
+
+const SKILL_PROMPT_ANCHORS_BIOMICRO = [
+  ['diagnóstico atual de segmento anterior não admite exame normal', 'pode descrever o olho afetado como normal.'],
+  ['achado unilateral por natureza não é bilateralizado', 'trauma, corpo estranho, inseto, arranhão / abrasão'],
+  ['achado episódico relatado não vira exame', 'hemorragia subconjuntival recorrente, terçol'],
+  ['opacidade de cápsula em linguagem leiga', '"vai precisar fazer uma limpeza"'],
+  ['lente do pseudofácico', 'sobre a lente do olho pseudofácico'],
+];
+
+for (const [label, anchor] of SKILL_PROMPT_ANCHORS_BIOMICRO) {
+  test(`[SKILL-SYNC] "${anchor}" presente na skill de biomicroscopia E no prompt (${label})`, () => {
+    expect(biomicroSkillSource.includes(anchor)).toBe(true);
+    expect(geminiSrcFull.includes(anchor)).toBe(true);
+  });
+}
+
+// OCR: a skill serve ao Claude lendo o ticket direto e tem schema próprio, então
+// as frases não coincidem — cada âncora é um PAR (texto da skill, texto do prompt)
+// da mesma regra. Divergências conhecidas estão tabeladas na própria skill.
+const ocrSkillSource = readSrcNormalized('skills', 'user', 'ocr-topcon-oftalmologia', 'SKILL.md');
+
+const SKILL_PROMPT_ANCHORS_OCR = [
+  ['<R> é OD', '`<R>` corresponde a OD', '<R> = OD'],
+  ['nunca copiar valor entre olhos', 'Nunca copie valores de OD para OE', 'NUNCA copie valor de um olho para o outro'],
+  ['ceratometria nunca é refração', 'Nunca misture valores de `KRT. DATA`', 'ceratometria — IGNORAR COMPLETAMENTE'],
+  ['cilindro fantasma é o pior erro', 'fantasma gera prescrição errada', 'fantasma gera prescrição errada'],
+  ['S.E. nunca é cópia da esfera', 'Nunca copie a esfera para `se`', 'Não é cópia da esfera.'],
+  ['S.E. igual à esfera com cilindro é impossível', 'é matematicamente impossível', 'é matematicamente IMPOSSÍVEL que se == esfera'],
+  // 2026-11-07 — a skill passou a seguir o runtime nas regras que antes divergiam.
+  ['C 0.00 impresso é null', 'Se o ticket imprime literalmente "0.00", é null (sem astigmatismo).', 'Se o ticket imprime literalmente "0.00", é null (sem astigmatismo).'],
+  ['dúvida traço/−0.25 é null', 'pode ser traço OU −0.25', 'pode ser traço OU −0.25'],
+  ['sinal da esfera invisível é null', 'Se o sinal não aparece visível, null (não chute).', 'Se o sinal não aparece visível, null (não chute).'],
+  ['C sem sinal é negativo', 'Se imprime "0.50" sem sinal, é -0.50 (convenção negativa).', 'Se imprime "0.50" sem sinal, é -0.50 (convenção negativa).'],
+  ['esfera é obrigatória', 'Refração com C presente e S=null é IMPOSSÍVEL clinicamente.', 'Refração com C presente e S=null é IMPOSSÍVEL clinicamente.'],
+  ['cilindro sem eixo não existe', 'Cilindro sem eixo não existe.', 'Cilindro sem eixo não existe.'],
+  ['passo dióptrico de 0.25D', 'múltiplos exatos de 0.25D', 'múltiplos exatos de 0.25D'],
+];
+
+// O schema próprio da skill (aposentado em 2026-11-07) não pode voltar: ele
+// contradizia o runtime em C 0.00, dúvida de cilindro, sinal da esfera e bloqueio.
+test('[SKILL-SYNC] OCR: skill não usa os campos do schema antigo que contradiziam o runtime', () => {
+  const antigos = ['_bloquear_injecao', 'cil_motivo', 'zero_impresso', 'cyl_incerto', '"indeterminado"']
+    .filter(c => ocrSkillSource.includes(c));
+  expect(antigos).toEqual([]);
+});
+
+for (const [label, naSkill, noPrompt] of SKILL_PROMPT_ANCHORS_OCR) {
+  test(`[SKILL-SYNC] OCR: regra "${label}" na skill E no prompt de exames`, () => {
+    expect(ocrSkillSource.includes(naSkill)).toBe(true);
+    expect(examJsSource.includes(noPrompt)).toBe(true);
+  });
+}
+
+// Gatilhos: a skill não copia mais as listas inteiras. Em troca, (1) toda lista
+// exportada por config/clinical-triggers.js é citada pelo nome e (2) todo exemplo
+// entre aspas num bloco "### NOME_DA_LISTA" existe de fato na lista do código
+// (linhas "REMOVIDA(S)" e suas continuações são o registro do que saiu e ficam de fora).
+const gatilhosSkillSource = readSrcNormalized('skills', 'user', 'gatilhos-injecao-oftalmologia', 'SKILL.md');
+const _listasGatilho = Object.keys(ClinicalTriggers)
+  .filter(k => /_(COMMANDS|COMBOS)$/.test(k) && Array.isArray(ClinicalTriggers[k]));
+
+test('[SKILL-SYNC-GATILHOS] toda lista de gatilho exportada é citada na skill pelo nome', () => {
+  const ausentes = _listasGatilho.filter(k => !gatilhosSkillSource.includes(k));
+  expect(ausentes).toEqual([]);
+});
+
+test('[SKILL-SYNC-GATILHOS] toda lista citada na skill existe em clinical-triggers.js', () => {
+  const citadas = [...new Set(gatilhosSkillSource.match(/\b[A-Z][A-Z_]*_(?:COMMANDS|COMBOS)\b/g) || [])];
+  const inexistentes = citadas.filter(k => !Array.isArray(ClinicalTriggers[k]));
+  expect(inexistentes).toEqual([]);
+});
+
+test('[SKILL-SYNC-GATILHOS] todo exemplo da skill existe na lista do código', () => {
+  const blocoRe = /^### ([A-Z][A-Z_]*)\b[^\n]*\n```\n([\s\S]*?)```/gm;
+  const fantasmas = [];
+  let blocos = 0;
+  let m;
+  while ((m = blocoRe.exec(gatilhosSkillSource))) {
+    const lista = ClinicalTriggers[m[1]];
+    if (!Array.isArray(lista)) continue;
+    blocos++;
+    const codigo = new Set(lista.filter(x => typeof x === 'string'));
+    let emRemocao = false;
+    for (const linha of m[2].split('\n')) {
+      if (/REMOVID/.test(linha)) { emRemocao = true; continue; }
+      if (emRemocao && /^\s+(→|'|de )/.test(linha)) continue;
+      emRemocao = false;
+      for (const q of linha.matchAll(/'([^']+)'/g)) {
+        if (!codigo.has(q[1])) fantasmas.push(`${m[1]}: '${q[1]}'`);
+      }
+    }
+  }
+  expect(blocos >= 10).toBe(true);
+  expect(fantasmas).toEqual([]);
+});
+
+// Toda skill clínica declara onde a regra roda de verdade, sem número de linha
+// (que envelhece a cada edição do prompt), e todo arquivo/função que ela cita ali existe.
+const SKILLS_CLINICAS = [
+  'transcricao-consulta-oftalmologia', 'conduta-tratamento-oftalmologia',
+  'biomicroscopia-oftalmologia', 'fundoscopia-oftalmologia', 'cid-oftalmologia',
+  'gatilhos-injecao-oftalmologia', 'ocr-topcon-oftalmologia',
+];
+const _codigoProducao = ['src/content.js', 'src/DecisionEngine.js', 'src/gemini-interview-agent.js',
+  'src/gemini-exam-agent.js', 'config/clinical-triggers.js', 'config/medicamentos-lexico.js',
+  'scripts/sidepanel-constants.js', 'scripts/sidepanel-audio.js', 'scripts/sidepanel-hooks.js',
+  'scripts/sidepanel-hook-runner.js', 'scripts/sidepanel-injection.js']
+  .map(p => readSrcNormalized(...p.split('/'))).join('\n');
+
+for (const nome of SKILLS_CLINICAS) {
+  test(`[SKILL-SYNC-AUTORIDADE] ${nome}: seção de autoridade presente, sem número de linha, com referências vivas`, () => {
+    const src = readSrcNormalized('skills', 'user', nome, 'SKILL.md');
+    const ini = src.indexOf('## Onde isso REALMENTE roda (autoridade)');
+    expect(ini >= 0).toBe(true);
+    const fimRel = src.slice(ini + 3).search(/\n## /);
+    const secao = fimRel < 0 ? src.slice(ini) : src.slice(ini, ini + 3 + fimRel);
+    expect(/~?\bL\d{2,}\b/.test(secao)).toBe(false);
+    const quebradas = [];
+    for (const [, ref] of secao.matchAll(/`([^`\n]+)`/g)) {
+      if (/^(src|scripts|config|skills|utils)\/[\w./-]+\.(js|md)$/.test(ref)) {
+        if (!fs.existsSync(require('path').join(__dirname, '..', ref))) quebradas.push(ref);
+      } else if (/^_?[a-z]+[A-Z][A-Za-z0-9]*$/.test(ref)) {
+        // camelCase = função/método; snake_case (_bloquear_injecao) é campo de JSON da skill
+        if (!_codigoProducao.includes(ref)) quebradas.push(ref);
+      }
+    }
+    expect(quebradas).toEqual([]);
   });
 }
 
@@ -5391,7 +5697,6 @@ function _mockChrome(initialMem = {}) {
     },
   };
 }
-  ['princípio ativo primeiro, marca dita entre parênteses (2026-10-30)', 'o nome comercial dito vai entre parênteses'],
 
 async function testAsync(name, fn) {
   try {

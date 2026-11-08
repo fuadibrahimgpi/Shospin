@@ -92,6 +92,16 @@ const VOICE_HOOKS = [
     commands: LIO_COMMANDS,
     guard: (s) => s.lioDetectada,
     onMatch: (text, s) => {
+      // Veto do TIPO da cirurgia (caso real 2026-09-02): "operou o olho"/"operei os
+      // olhos" são formas genéricas da lista — não dizem de QUÊ. A paciente daquela
+      // consulta tinha sido operada de PTERÍGIO nos dois olhos, e a lente inferida
+      // daí escreveria pseudofacia em olho fácico (e apagaria a presbiopia dela pelo
+      // veto de pseudofacia bilateral). Quando a fala nomeia outra cirurgia e não
+      // cita catarata/lente, a lente não pode ser inferida.
+      if (typeof cirurgiaNomeadaNaoCatarata === 'function' && cirurgiaNomeadaNaoCatarata(text)) {
+        console.log('[Hook] LIO NÃO marcada — a fala nomeia outra cirurgia (não catarata)');
+        return null;
+      }
       s.lioDetectada = true;
       console.log('[Hook] Flag: LIO detectada');
       return { statusMessage: 'LIO detectada!', statusColor: '#eab308' };
@@ -155,7 +165,20 @@ const VOICE_HOOKS = [
     inject: () => injectExamesNormaisDirect(),
     onMatch: (text, s) => {
       s.examesNormaisInjetados = true;
-      s.fundoscopiaDetectada = text.includes('fundo') || text.includes('fundoscop');
+      // O que decide se o FUNDO entra é o ESCOPO da declaração, não a palavra
+      // "fundo" estar presente. A lista tem frases de escopo global ("exames
+      // estão todos normais", "seus olhos estão normais", "sem nenhuma
+      // alteração") e frases restritas ao segmento anterior ("biomicroscopia
+      // sem alterações") — só as segundas devem suprimir a fundoscopia.
+      // Antes, exigir o token "fundo" fazia toda declaração global cair no ramo
+      // restrito: a mesma classe de falha do log 2026-08-05 (o médico declarou
+      // os exames normais e o campo de fundoscopia ficou vazio), agravada aqui
+      // porque `examesNormaisInjetados` faz o injectAll pular o bloco de exames
+      // depois — ninguém corrige a omissão.
+      const _soAnterior =
+        (text.includes('biomicroscopia') || text.includes('segmento anterior')) &&
+        !text.includes('fundo') && !text.includes('fundoscop');
+      s.fundoscopiaDetectada = !_soAnterior;
       s.lastTriggerTime = Date.now();
       return {
         statusMessage: s.fundoscopiaDetectada

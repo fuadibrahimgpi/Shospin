@@ -149,6 +149,24 @@
       <div class="camera-section">
         <div class="video-container">
           <video id="cameraVideo" autoplay playsinline muted></video>
+          <!-- Guia de enquadramento (v5.5.0). O ticket é fotografado DEITADO na
+               mesa (as 14 fotos da pasta da câmera, sem exceção) — a moldura
+               acompanha isso em vez de brigar: deitado, a tira usa a largura
+               toda do quadro e os dígitos ficam maiores. De pé, o comprimento
+               seria limitado pela altura e se perderia ~40% de resolução linear,
+               justo onde a leitura já é marginal.
+               O que a moldura padroniza é o LADO DO CABEÇALHO — e é isso que
+               permite ao OCR partir de uma orientação conhecida. O lado marcado
+               (direita) é o que o médico JÁ usa: girar as fotos reais 270° é o
+               que deixa a REF.DATA legível.
+               ⚠ O lado marcado aqui precisa casar com PRE_ROTACAO_MOLDURA no
+               agente de OCR. -->
+          <div id="cameraFramingGuide" class="framing-guide hidden" aria-hidden="true">
+            <div class="framing-guide-box">
+              <span class="framing-guide-head">data / REF.DATA deste lado</span>
+            </div>
+            <div class="framing-guide-label">Ticket deitado, preenchendo a moldura</div>
+          </div>
           <div id="cameraOverlay" class="camera-overlay">
             <div class="camera-loading">
               <div class="spinner"></div>
@@ -293,6 +311,19 @@
       <button id="clearBtn" class="btn btn-secondary">Limpar Tudo</button>
     </div>
 
+    <!-- Auto-feedback de medicações: palavras de remédio que o léxico não reconheceu -->
+    <details id="medFeedbackBox" style="margin-top:8px;font-size:12px;">
+      <summary style="cursor:pointer;">Medicações a revisar <span id="medFeedbackCount"></span></summary>
+      <div id="medFeedbackLista" style="margin-top:4px;"></div>
+      <div style="border-top:1px solid #e5e7eb;padding-top:6px;margin-top:4px;display:flex;flex-wrap:wrap;gap:4px;align-items:center;">
+        <input id="medFeedbackOuvido" placeholder="nome ouvido errado" style="font-size:11px;width:120px;">
+        <button id="medFeedbackAdicionar" type="button" style="padding:2px 8px;font-size:11px;">Adicionar à fila</button>
+        <button id="medFeedbackExportar" type="button" style="padding:2px 8px;font-size:11px;" disabled>Copiar aprovações</button>
+        <button id="medFeedbackLimpar" type="button" style="padding:2px 8px;font-size:11px;" disabled>Limpar aprovadas</button>
+      </div>
+      <div id="medFeedbackAviso" style="font-size:11px;color:#92400e;margin-top:4px;"></div>
+    </details>
+
     <!-- Mensagem de Sucesso -->
     <div id="successMessage" class="success-message hidden">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -309,6 +340,11 @@
   <!-- AI Engine (ordem importa: utils → agentes → fachada) -->
   <script src="src/Logger.js"></script>
   <script src="src/ApiService.js"></script>
+  <script src="config/medicamentos-lexico.js"></script>
+  <script src="src/agents/agent-contract.js"></script>
+  <script src="src/agents/medicamentos-agent.js"></script>
+  <script src="src/agents/medicamentos-feedback.js"></script>
+  <script src="src/agents/recheck-agent.js"></script>
   <script src="src/DecisionEngine.js"></script>
   <script src="src/gemini-json-utils.js"></script>
   <script src="src/gemini-exam-agent.js"></script>
@@ -322,6 +358,7 @@
   <script src="scripts/sidepanel-hooks.js"></script>
   <script src="scripts/sidepanel-hook-runner.js"></script>
   <script src="scripts/sidepanel-audio.js"></script>
+  <script src="scripts/sidepanel-feedback-med.js"></script>
   <script src="scripts/sidepanel-camera.js"></script>
   <script src="scripts/sidepanel-injection.js"></script>
   <script src="scripts/sidepanel-init.js"></script>

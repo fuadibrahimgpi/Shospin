@@ -229,6 +229,25 @@
         "descartados": 0,
         "tratamento": "Hialuronato quatro vezes ao dia"
       }
+    },
+    {
+      "id": "lubrificante-dito",
+      "origem": "decisão 2026-11-05: o médico disse só \"lubrificante\" → Carmelose sódica ou hialuronato de sódio",
+      "fala": "Pode usar um lubrificante quatro vezes ao dia.",
+      "modelo": [
+        {
+          "nome": "Lubrificante ocular",
+          "nivel": "classe",
+          "status": "novo",
+          "posologia": "quatro vezes ao dia",
+          "evidencia": "um lubrificante quatro vezes ao dia"
+        }
+      ],
+      "esperado": {
+        "aceitos": 1,
+        "descartados": 0,
+        "tratamento": "Carmelose sódica ou hialuronato de sódio quatro vezes ao dia"
+      }
     }
   ],
   "deteccao": [

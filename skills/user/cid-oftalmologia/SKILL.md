@@ -12,6 +12,15 @@ description: >
 
 # Cadastro de CID no Prontuário SHOSP
 
+## Onde isso REALMENTE roda (autoridade)
+
+> ⚠️ **O código que executa em produção é `src/content.js` (`case 'searchCid':`,
+> `fillAndSearch`, `waitForCidRow`, `_pickCidRow`).** O CID que o modelo escolhe vem
+> do bloco `- diagnostico:` do prompt em `src/gemini-interview-agent.js`; o CID
+> refrativo do OCR vem de `_inferCidRefracao` em `src/gemini-exam-agent.js`. A
+> tabela de referência desta skill é conferida contra o subset do SHOSP por teste.
+> Editar esta skill NÃO muda a extensão. Regra geral: `skills/user/README.md`.
+
 ## Fluxo de usuário (comportamento esperado do SHOSP)
 
 1. Clicar em **C.I.D.** no menu lateral esquerdo do prontuário
@@ -52,8 +61,24 @@ description: >
 ```js
 document.querySelector('#formCadProntuario #nomeCid') || document.getElementById('nomeCid')
 ```
-Sem o campo, responde `success: false` imediatamente. (Não há navegação de aba
-aqui: quando este handler roda, a seção C.I.D. já está montada.)
+
+Se o campo não existe **ou está oculto** (`offsetParent === null`), o handler abre
+a seção antes de buscar — a busca do SHOSP não roda com a seção fechada (ver
+"Instabilidade 2026-07-30"). Os candidatos vêm de `_findCidTabCandidates(doc)`:
+
+1. `#tdCadastro-cid` (ID legado, mantido como primeiro palpite);
+2. itens `[id*="tdCadastro"]` cujo **rótulo normalizado é exatamente `cid`**;
+3. qualquer `a|li|td|th|span|button` com o mesmo rótulo.
+
+> ⚠️ A comparação é por **igualdade** do rótulo (só letras: `"C.I.D."` → `"cid"`),
+> nunca por prefixo — `CIDADE` existe em todo cadastro e um clique nele navega a
+> ficha para longe no meio da injeção. Testes `[CIDTAB-1..5]`.
+
+Cada candidato é clicado e a visibilidade de `#nomeCid` é aguardada por **poll**
+(100ms, teto `TAB_LOAD_DELAY * 2` = 1,6s), não por delay cego. Se nenhum abrir a
+seção, o handler falha explicitamente e **dumpa o menu da ficha uma linha por
+item** (`id | tag | texto | visivel`) no console da PÁGINA — é esse dump que
+torna o ID/rótulo verdadeiro conhecível sem adivinhação.
 
 ### Passo 2 — Construir as variantes de BUSCA
 
@@ -220,8 +245,27 @@ saída antiga da IA ainda pode trazê-lo. Testes `[CIDNE-1..3]`.
 com a seção C.I.D. **visível**. Oculta, `buscaCidProntuario()` retorna sem buscar e
 o painel segue mostrando "Últimos CIDs selecionados" — as 6 linhas do histórico,
 que eram lidas como resultado. Por isso só entravam códigos já usados
-recentemente. `searchCid` agora ativa `#tdCadastro-cid` antes de buscar e falha
-explicitamente se a seção não ficar visível. Testes `[CIDVIS-1..2]`.
+recentemente. `searchCid` agora ativa a seção antes de buscar e falha
+explicitamente se ela não ficar visível. Testes `[CIDVIS-1..2]`.
+
+### ⚠️ 2026-07-31 — o caminho de recuperação clicava num ID que não existe
+
+`#tdCadastro-cid` foi **inventado** na correção acima: todas as abas reais da
+ficha são `tdCadastro-<número>` (78073 Atendimento, 78074 Refração, 78726
+Glaucoma…). Com o elemento inexistente, o `if` inteiro era no-op — a recuperação
+nunca podia ter funcionado, e só não aparecia porque a 1ª rodada de CIDs de cada
+consulta pega a seção ainda visível.
+
+Log de 2026-07-31 13:58, mesma ficha: `H520` e `H522` (OCR) entraram às 13:53;
+depois o `injectAll` navegou pelas abas de exame e, na 2ª rodada, `H527` falhou
+com *"seção C.I.D. não ficou visível"*. A âncora passou a ser o **rótulo**
+(`_findCidTabCandidates`) — ver Passo 1.
+
+> Ainda **não verificado na plataforma**: nenhum teste local prova que o clique
+> abre a seção, porque não há DOM real para exercitar. A confirmação é a linha
+> `[searchCid] Seção C.I.D. ativada via …` no console da **página** na próxima
+> consulta; se em vez dela vier `[searchCid] DUMP menu: …`, colar o dump aqui e
+> fixar o ID verdadeiro.
 
 ### Correção 2026-07-30 (tarde) — o discriminador da falha existia só no nome
 
@@ -331,6 +375,7 @@ Formato de saída: `"H00.0 - Descrição"` — sempre use o código exato abaixo
 | H11.8 | Outros transtornos especificados da conjuntiva |
 | H11.9 | Transtorno da conjuntiva, não especificado |
 | H13.1 | Conjuntivite em doenças infecciosas classificadas em outra parte |
+| B30.9 | Conjuntivite viral (adenoviral), não especificada — usar em "virose"/surto; NÃO usar H10.4 (crônica) |
 
 ### H15–H22 Esclera, córnea, íris e corpo ciliar
 

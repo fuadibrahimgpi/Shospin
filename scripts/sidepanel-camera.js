@@ -144,8 +144,11 @@ async function startCameraCapture() {
     startCameraBtn.classList.add('hidden');
     stopCameraBtn.classList.remove('hidden');
     if (manualCaptureBtn) manualCaptureBtn.classList.remove('hidden');
+    // A moldura padroniza a apresentação do ticket; com o cabeçalho sempre do
+    // mesmo lado, o OCR parte de uma orientação conhecida em vez de adivinhar.
+    if (cameraFramingGuide) cameraFramingGuide.classList.remove('hidden');
 
-    cameraStatusText.textContent = 'Câmera pronta! Aponte para o exame e clique em "Capturar Agora"';
+    cameraStatusText.textContent = 'Câmera pronta! Deite o ticket na moldura, cabeçalho à direita, e clique em "Capturar Agora"';
     cameraStatusText.style.color = '#16a34a';
 
   } catch (error) {
@@ -179,6 +182,7 @@ function stopCameraCapture() {
   cameraProgress.classList.add('hidden');
   processingOverlay.classList.add('hidden');
   if (manualCaptureBtn) manualCaptureBtn.classList.add('hidden');
+  if (cameraFramingGuide) cameraFramingGuide.classList.add('hidden');
 
   cameraStatusText.textContent = 'Clique para iniciar câmera';
   cameraStatusText.style.color = '';
@@ -223,27 +227,52 @@ function startCameraCaptureEstatica() {
 // COMPRESSÃO DE IMAGEM
 // ============================================================================
 
-async function compressImageBlob(blob, maxDim = 3840, quality = 0.98) {
+/** Blob → base64 puro, SEM passar por canvas (zero perda de geração JPEG). */
+function blobToBase64(blob) {
+  return new Promise((resolve, reject) => {
+    const fr = new FileReader();
+    fr.onload = () => resolve(String(fr.result).split(',')[1]);
+    fr.onerror = reject;
+    fr.readAsDataURL(blob);
+  });
+}
+
+// Prepara UMA captura em duas versões:
+//   .api  → reduzida a maxDim, é o que vai no payload do Gemini (3 imagens
+//           full-res estourariam o limite de inline data da API).
+//   .full → o blob original em base64, intocado. Serve SOMENTE de fonte para o
+//           recorte da REF.DATA no agente de OCR: recortar uma região pequena
+//           da foto nativa preserva os dígitos que o downscale para 3840 e as
+//           gerações de JPEG seguintes já tinham comido.
+// Devolve também as dimensões, para o log distinguir "foto" de "preview".
+async function prepareCaptureImage(blob, maxDim = 3840, quality = 0.98) {
+  const full = await blobToBase64(blob);
   return new Promise((resolve, reject) => {
     const img = new Image();
     img.onload = () => {
-      const canvas = document.createElement('canvas');
-      let w = img.width, h = img.height;
+      const srcW = img.width, srcH = img.height;
+      let w = srcW, h = srcH;
       // Restringir pela maior dimensão (tickets TOPCON são portrait)
-      // 2048px mantém dígitos legíveis sem ultrapassar o limite da API Gemini
       const largest = Math.max(w, h);
       if (largest > maxDim) {
         const ratio = maxDim / largest;
         w = Math.round(w * ratio);
         h = Math.round(h * ratio);
       }
+      // Sempre reencodar a versão do payload, mesmo quando as dimensões já
+      // cabem: o JPEG nativo da câmera pode vir enorme, e são 3 imagens por
+      // captura contra o limite de inline data da API. A geração extra de JPEG
+      // não custa mais nada aqui — quem precisa de pixel fiel é o recorte, e o
+      // recorte agora sai de `full`.
+      const canvas = document.createElement('canvas');
       canvas.width = w;
       canvas.height = h;
       const ctx = canvas.getContext('2d');
       ctx.imageSmoothingEnabled = true;
       ctx.imageSmoothingQuality = 'high';
       ctx.drawImage(img, 0, 0, w, h);
-      resolve(canvas.toDataURL('image/jpeg', quality).split(',')[1]);
+      const api = canvas.toDataURL('image/jpeg', quality).split(',')[1];
+      resolve({ api, full, srcW, srcH, outW: w, outH: h });
     };
     img.onerror = reject;
     img.src = URL.createObjectURL(blob);
@@ -324,42 +353,75 @@ async function captureAndProcess() {
 
     const videoTrack = cameraStream.getVideoTracks()[0];
     const imageCapture = new ImageCapture(videoTrack);
-    const capabilities = imageCapture.track.getCapabilities();
+
+    // As capacidades de FOTO (imageWidth/imageHeight/fillLightMode) só existem em
+    // getPhotoCapabilities(). track.getCapabilities() devolve MediaTrackCapabilities,
+    // que tem width/height — ler `imageHeight` de lá dava SEMPRE undefined, então a
+    // captura pedia 4032x3024 fixo; onde a câmera não suportava exatamente isso,
+    // takePhoto rejeitava e caíamos silenciosamente no grabFrame, que entrega a
+    // resolução do PREVIEW, não da foto.
+    let photoCaps = null;
+    try {
+      photoCaps = await imageCapture.getPhotoCapabilities();
+    } catch (e) {
+      console.warn('[Camera] getPhotoCapabilities indisponível:', e.message);
+    }
+    const trackSettings = videoTrack.getSettings?.() || {};
+    console.log(
+      `[Camera] preview=${trackSettings.width || '?'}x${trackSettings.height || '?'} ` +
+      `zoom=${trackSettings.zoom ?? 'n/a'} ` +
+      `foto.max=${photoCaps?.imageWidth?.max || '?'}x${photoCaps?.imageHeight?.max || '?'}`
+    );
 
     const NUM_CAPTURES = 3;
     const CAPTURE_DELAY = 200;  // +50ms entre capturas para estabilidade de foco
-    const MAX_IMAGE_DIM = 3840; // resolução altíssima para dígitos de ticket térmico legíveis (300dpi eq)
-    const images = [];
+    const MAX_IMAGE_DIM = 3840; // teto do payload da API; o recorte usa a foto nativa
+    const images = [];      // versões reduzidas → payload do Gemini
+    const fullResImages = []; // fotos nativas → fonte do recorte da REF.DATA
 
     await new Promise(r => setTimeout(r, 1000)); // aguardar foco (era 800ms)
     updateProcessingStep(1);
 
     for (let i = 0; i < NUM_CAPTURES; i++) {
-      let blob;
+      let blob, via;
       try {
-        const settings = {
-          // Ticket TOPCON é portrait: maior dimensão = altura
-          imageHeight: Math.min(capabilities.imageHeight?.max || 4032, 4032),
-          imageWidth:  Math.min(capabilities.imageWidth?.max  || 3024, 3024)
-        };
-        if (capabilities.fillLightMode?.includes('auto')) settings.fillLightMode = 'auto';
-        else if (capabilities.fillLightMode?.includes('flash')) settings.fillLightMode = 'flash';
+        const settings = {};
+        if (photoCaps?.imageWidth?.max)  settings.imageWidth  = photoCaps.imageWidth.max;
+        if (photoCaps?.imageHeight?.max) settings.imageHeight = photoCaps.imageHeight.max;
+        if (photoCaps?.fillLightMode?.includes('auto')) settings.fillLightMode = 'auto';
+        else if (photoCaps?.fillLightMode?.includes('flash')) settings.fillLightMode = 'flash';
         blob = await imageCapture.takePhoto(settings);
+        via = 'takePhoto';
       } catch (e) {
-        // Fallback: grabFrame em resolução máxima disponível
-        const bmp = await imageCapture.grabFrame();
-        const c = captureCanvas;
-        c.width = bmp.width;
-        c.height = bmp.height;
-        const ctx = c.getContext('2d');
-        ctx.imageSmoothingEnabled = true;
-        ctx.imageSmoothingQuality = 'high';
-        ctx.drawImage(bmp, 0, 0);
-        blob = await new Promise(r => c.toBlob(r, 'image/jpeg', 1.0));
+        try {
+          // Alguns drivers rejeitam QUALQUER photoSettings mas aceitam
+          // takePhoto() puro — ainda é foto, e foto é melhor que preview.
+          blob = await imageCapture.takePhoto();
+          via = 'takePhoto(sem settings)';
+        } catch (e2) {
+          // Último recurso: frame do preview. Marcado no log porque explica
+          // sozinho qualquer queda de legibilidade do ticket.
+          const bmp = await imageCapture.grabFrame();
+          const c = captureCanvas;
+          c.width = bmp.width;
+          c.height = bmp.height;
+          const ctx = c.getContext('2d');
+          ctx.imageSmoothingEnabled = true;
+          ctx.imageSmoothingQuality = 'high';
+          ctx.drawImage(bmp, 0, 0);
+          blob = await new Promise(r => c.toBlob(r, 'image/jpeg', 1.0));
+          via = `grabFrame(PREVIEW: ${e2.message})`;
+        }
       }
 
       updateProcessingStep(2);
-      images.push(await compressImageBlob(blob, MAX_IMAGE_DIM));
+      const prepared = await prepareCaptureImage(blob, MAX_IMAGE_DIM);
+      images.push(prepared.api);
+      fullResImages.push(prepared.full);
+      console.log(
+        `[Camera] captura ${i + 1}/${NUM_CAPTURES} via=${via} ` +
+        `nativa=${prepared.srcW}x${prepared.srcH} → payload=${prepared.outW}x${prepared.outH}`
+      );
 
       if (i < NUM_CAPTURES - 1) await new Promise(r => setTimeout(r, CAPTURE_DELAY));
     }
@@ -368,7 +430,7 @@ async function captureAndProcess() {
 
     // Enviar para Gemini (v5.2: single-call, sem TWO-PASS)
     updateProcessingStep(4);
-    const examData = await window.GeminiService.extractExams(images);
+    const examData = await window.GeminiService.extractExams(images, null, false, fullResImages);
 
     updateProcessingStep(5);
 
@@ -391,11 +453,35 @@ async function captureAndProcess() {
     // dilatado para a receita de óculos / refração dinâmica.
     if (validated._captureFailed) {
       showCaptureFailedMessage(validated._reason || 'Captura inválida. Refaça a foto.', captureMode);
+      // Os avisos também valem aqui (v5.5.0): a captura falhou, mas "a foto tem
+      // mais de um ticket" explica POR QUE ela falhou e muda o que o médico faz
+      // na retentativa. Antes deste caminho chamar showExamWarnings, todo aviso
+      // de uma captura reprovada morria no console. O motivo já está no banner
+      // vermelho — não se repete na lista.
+      showExamWarnings((validated._avisos || []).filter(a => a !== validated._reason));
       cameraStatusText.textContent = captureMode === 'estatica'
         ? 'Captura estática falhou — refaça (segue em modo Refração ESTÁTICA)'
         : 'Captura falhou — refaça';
       return;
     }
+
+    // Caminho 1b (v5.4.0): a REFRAÇÃO foi bloqueada mas tono/paqui sobreviveram.
+    // Antes isso caía no _captureFailed acima e o ticket inteiro era descartado
+    // (log 2026-08-03 17:46: tono 15/17 e paqui 517/515, sem conflito nenhum
+    // entre as leituras, perdidas por divergência no cilindro do OE). Agora o
+    // que foi conferido é injetado e o médico vê por que a refração ficou fora.
+    if (validated._refracaoBloqueada) {
+      showRefractionBlockedMessage(
+        validated._refracaoReason || 'Refração não pôde ser conferida.',
+        captureMode
+      );
+    } else {
+      document.getElementById('refractionBlockedBanner')?.remove();
+    }
+
+    // Avisos que não bloqueiam nada, mas incidem sobre valores que VÃO para o
+    // prontuário (cilindro implícito pelo S.E., sinal não confirmado, etc.).
+    showExamWarnings(validated._avisos);
 
     // Caminho 2b: captura pós-dilatação → injeta SOMENTE a refração estática.
     // Não passa por injectAll (nada de dinâmica/receita/tono/paqui/CID) e não
@@ -448,10 +534,20 @@ function displayCameraResults(data) {
   examFieldsContainer.classList.remove('hidden');
 
   // Tonometria
+  //
+  // O `else` existe desde a v5.5.0: a seção só era REVELADA, nunca escondida, e
+  // os campos guardam o valor da captura anterior. Uma foto sem TONO.DATA (ou
+  // com a PIO descartada por estar fora da faixa) deixava a pressão do paciente
+  // anterior na tela, com a aparência de ter sido lida agora. É o mesmo bug que
+  // a refração já corrigiu na v5.4.0 — tono e paqui tinham ficado para trás.
   if (data.tonometria && (data.tonometria.od != null || data.tonometria.oe != null)) {
     tonometriaSection.classList.remove('hidden');
     document.getElementById('tonoOdField').value = data.tonometria.od != null ? data.tonometria.od : 'ERR';
     document.getElementById('tonoOeField').value = data.tonometria.oe != null ? data.tonometria.oe : 'ERR';
+  } else {
+    tonometriaSection.classList.add('hidden');
+    document.getElementById('tonoOdField').value = '';
+    document.getElementById('tonoOeField').value = '';
   }
 
   // Paquimetria
@@ -459,6 +555,10 @@ function displayCameraResults(data) {
     paquimetriaSection.classList.remove('hidden');
     document.getElementById('paquiOdField').value = data.paquimetria.od != null ? data.paquimetria.od : 'ERR';
     document.getElementById('paquiOeField').value = data.paquimetria.oe != null ? data.paquimetria.oe : 'ERR';
+  } else {
+    paquimetriaSection.classList.add('hidden');
+    document.getElementById('paquiOdField').value = '';
+    document.getElementById('paquiOeField').value = '';
   }
 
   // Refração
@@ -486,6 +586,12 @@ function displayCameraResults(data) {
     }
 
     document.getElementById('receitaOculosOption').classList.remove('hidden');
+  } else {
+    // Refração ausente ou bloqueada: esconder a seção e a opção de receita para
+    // que valores de uma captura anterior não fiquem visíveis como se fossem
+    // desta (v5.4.0 — antes, refracao nunca chegava aqui nula sem falha total).
+    refracaoSection.classList.add('hidden');
+    document.getElementById('receitaOculosOption')?.classList.add('hidden');
   }
 
   updateDataSummary();
@@ -519,24 +625,113 @@ function formatCil(value) {
 // detectada), mostramos apenas um aviso claro e um botão "Refazer captura".
 // Sem opções de "swap" ou "limpar OE" — a única ação confiável é nova foto.
 
-function showCaptureFailedMessage(reason, retryMode = 'normal') {
-  const existing = document.getElementById('refractionWarningBanner');
+// v5.4.0 — Avisos da captura que NÃO bloqueiam a injeção.
+//
+// Até aqui nada no sidepanel renderizava _avisos/_validationWarnings: eles eram
+// calculados e descartados, sobrando só no console. É onde mora a informação
+// mais acionável da v5.4.0 — "o S.E. impresso implica C≈-1.00", "o sinal da
+// esfera não foi confirmado" — sobre valores que FORAM para o prontuário.
+const AVISOS_NAO_EXIBIDOS = [
+  'Leituras independentes concordam com a 1ª.',
+];
+
+function showExamWarnings(avisos) {
+  const existing = document.getElementById('examWarningsBanner');
+  if (existing) existing.remove();
+
+  const uteis = (avisos || []).filter(a =>
+    a && !AVISOS_NAO_EXIBIDOS.includes(a) &&
+    // o motivo do bloqueio já aparece, em destaque, no banner âmbar
+    !a.startsWith('Refração NÃO injetada —')
+  );
+  if (uteis.length === 0) return;
+
+  const banner = document.createElement('div');
+  banner.id = 'examWarningsBanner';
+  const box = document.createElement('div');
+  box.setAttribute('style', 'background:#1e3a5f;border:1px solid #3b82f6;border-radius:8px;padding:10px 12px;margin:10px 0;color:#eff6ff');
+  const titulo = document.createElement('div');
+  titulo.setAttribute('style', 'font-weight:700;font-size:12px;margin-bottom:6px');
+  titulo.textContent = uteis.length === 1 ? 'Confira este ponto' : 'Confira estes pontos';
+  box.appendChild(titulo);
+  const lista = document.createElement('ul');
+  lista.setAttribute('style', 'margin:0;padding-left:16px;font-size:11px;line-height:1.5;opacity:0.95');
+  uteis.forEach(a => {
+    const li = document.createElement('li');
+    li.textContent = a;   // textContent: os avisos carregam aspas e sinais
+    lista.appendChild(li);
+  });
+  box.appendChild(lista);
+  banner.appendChild(box);
+
+  // Abaixo do banner de falha, quando os dois aparecem juntos. Sem incluir o
+  // banner vermelho aqui, os avisos azuis são inseridos no mesmo ponto de
+  // ancoragem que ele acabou de ocupar e acabam ACIMA de "Captura inválida" —
+  // a lista de conferência aparecendo antes do motivo de a captura ter falhado.
+  const anchor = document.getElementById('refractionBlockedBanner')
+    || document.getElementById('refractionWarningBanner')
+    || document.getElementById('examFieldsContainer');
+  if (anchor?.parentNode) {
+    anchor.parentNode.insertBefore(banner, anchor.nextSibling);
+  } else {
+    document.body.appendChild(banner);
+  }
+}
+
+// v5.4.0 — Banner NÃO-fatal: a refração não passou na conferência, mas
+// tonometria/paquimetria da mesma captura foram injetadas. Cor âmbar (e não
+// vermelha) porque parte do trabalho foi aproveitada; o botão de refazer segue
+// disponível para quem quiser o grau.
+// Monta um banner de falha com botão de refazer, SEM innerHTML.
+//
+// `reason` carrega texto que veio do OCR — valores lidos do papel, mensagens
+// montadas com o que o modelo transcreveu. showExamWarnings já usava
+// textContent exatamente por isso; estes dois banners tinham ficado com
+// innerHTML e interpolação direta. Conteúdo lido de uma imagem é dado, não
+// marcação: escrever com textContent é o que garante que continue sendo dado.
+function _buildFailureBanner({ id, titulo, reason, dica, cores, retryMode }) {
+  const existing = document.getElementById(id);
   if (existing) existing.remove();
 
   const banner = document.createElement('div');
-  banner.id = 'refractionWarningBanner';
-  banner.innerHTML = `
-    <div style="background:#7c2d12;border:1px solid #dc2626;border-radius:8px;padding:12px 14px;margin:10px 0;color:#fef2f2">
-      <div style="font-weight:700;font-size:13px;margin-bottom:6px">Captura inválida</div>
-      <div style="font-size:12px;opacity:0.95;margin-bottom:8px">${reason}</div>
-      <div style="font-size:11px;opacity:0.75;margin-bottom:10px">
-        Dicas: aproxime a câmera até o ticket ocupar ~70% do enquadramento,
-        evite reflexos no papel térmico e verifique se o ticket está plano.
-      </div>
-      <button id="retryCaptureBtn" style="width:100%;background:#1d4ed8;color:#fff;border:none;border-radius:6px;padding:8px;font-size:13px;font-weight:600;cursor:pointer">
-        Refazer captura
-      </button>
-    </div>`;
+  banner.id = id;
+
+  const box = document.createElement('div');
+  box.setAttribute('style', `background:${cores.fundo};border:1px solid ${cores.borda};border-radius:8px;padding:12px 14px;margin:10px 0;color:${cores.texto}`);
+
+  const tit = document.createElement('div');
+  tit.setAttribute('style', 'font-weight:700;font-size:13px;margin-bottom:6px');
+  tit.textContent = titulo;
+  box.appendChild(tit);
+
+  const motivo = document.createElement('div');
+  motivo.setAttribute('style', 'font-size:12px;opacity:0.95;margin-bottom:8px');
+  motivo.textContent = reason;
+  box.appendChild(motivo);
+
+  const ajuda = document.createElement('div');
+  ajuda.setAttribute('style', 'font-size:11px;opacity:0.8;margin-bottom:10px');
+  ajuda.textContent = dica;
+  box.appendChild(ajuda);
+
+  const btn = document.createElement('button');
+  btn.setAttribute('style', 'width:100%;background:#1d4ed8;color:#fff;border:none;border-radius:6px;padding:8px;font-size:13px;font-weight:600;cursor:pointer');
+  btn.textContent = 'Refazer captura';
+  btn.addEventListener('click', () => {
+    banner.remove();
+    // Preservar o modo original: se a captura que falhou era estática
+    // (pós-dilatação), a retentativa precisa rearmar a estática — senão volta ao
+    // normal e o grau dilatado vaza para a receita/refração dinâmica via
+    // injectAll.
+    if (retryMode === 'estatica' && typeof startCameraCaptureEstatica === 'function') {
+      startCameraCaptureEstatica();
+    } else if (typeof startCameraCapture === 'function') {
+      startCameraCapture();
+    }
+  });
+  box.appendChild(btn);
+
+  banner.appendChild(box);
 
   const container = document.getElementById('examFieldsContainer');
   if (container?.parentNode) {
@@ -544,17 +739,30 @@ function showCaptureFailedMessage(reason, retryMode = 'normal') {
   } else {
     document.body.appendChild(banner);
   }
+  return banner;
+}
 
-  document.getElementById('retryCaptureBtn').addEventListener('click', () => {
-    banner.remove();
-    // Reativar fluxo de câmera para nova captura, PRESERVANDO o modo original.
-    // Se a captura que falhou era estática (pós-dilatação), a retentativa precisa
-    // rearmar a estática — senão volta ao normal e o grau dilatado vaza para a
-    // receita/refração dinâmica via injectAll.
-    if (retryMode === 'estatica' && typeof startCameraCaptureEstatica === 'function') {
-      startCameraCaptureEstatica();
-    } else if (typeof startCameraCapture === 'function') {
-      startCameraCapture();
-    }
+function showRefractionBlockedMessage(reason, retryMode = 'normal') {
+  _buildFailureBanner({
+    id: 'refractionBlockedBanner',
+    titulo: 'Refração não injetada',
+    reason,
+    dica: 'Tonometria e paquimetria desta captura foram injetadas normalmente. ' +
+          'Refaça a foto se quiser o grau, ou digite a refração manualmente.',
+    cores: { fundo: '#78350f', borda: '#d97706', texto: '#fffbeb' },
+    retryMode
+  });
+}
+
+function showCaptureFailedMessage(reason, retryMode = 'normal') {
+  _buildFailureBanner({
+    id: 'refractionWarningBanner',
+    titulo: 'Captura inválida',
+    reason,
+    dica: 'Dicas: deite o ticket preenchendo a moldura, com o cabeçalho (data / ' +
+          'REF.DATA) do lado marcado, evite reflexos no papel térmico e ' +
+          'verifique se o ticket está plano.',
+    cores: { fundo: '#7c2d12', borda: '#dc2626', texto: '#fef2f2' },
+    retryMode
   });
 }

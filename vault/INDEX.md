@@ -20,7 +20,7 @@ Extensão Chrome MV3 (v5.1.5) que automatiza o prontuário oftalmológico no SHO
 ## Como o fluxo se encaixa
 
 1. A voz passa pelos [Hooks de voz](agentes/voice-hooks.md), com listas de [Gatilhos clínicos](modulos/clinical-triggers.md).
-2. A transcrição vai ao [Agente de entrevista](agentes/gemini-interview-agent.md) (regras espelhadas nas [skills](skills/INDEX.md)); o [Agente de medicamentos](agentes/medicamentos-agent.md) cuida do campo tratamento sob o [Contrato dos subagentes](agentes/agent-contract.md).
+2. A transcrição vai ao [Agente de entrevista](agentes/gemini-interview-agent.md) (as [skills](skills/INDEX.md) documentam essas regras; a autoridade é o código); o [Agente de medicamentos](agentes/medicamentos-agent.md) (ainda não ligado em produção) foi desenhado para o campo tratamento sob o [Contrato dos subagentes](agentes/agent-contract.md).
 3. A resposta passa pelo [DecisionEngine](agentes/decision-engine.md) (guards).
 4. Fotos do ticket vão ao [Agente de exames](agentes/gemini-exam-agent.md).
 5. O [Content script](modulos/content-script.md) injeta no SHOSP; a [Fila de dilatação](modulos/dilatacao-pausas.md) trata pacientes em espera.

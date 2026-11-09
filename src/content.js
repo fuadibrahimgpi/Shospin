@@ -589,6 +589,16 @@ function _escolherCampoOct(candidatos) {
   return { campo: null, motivo: casam.length === 0 ? 'nenhum' : 'ambiguo', casam };
 }
 
+// O SHOSP monta o Froala depois de abrir a aba: até lá o campo é só o
+// <textarea class="editorFroala"> cru. Escrever nele com setInputValue e deixar
+// o Froala subir por cima perde as quebras de linha ou o texto inteiro. Pronto =
+// editor Froala montado, ou campo que nunca vai virar Froala. Pura (testada).
+function _campoOctPronto(campo) {
+  if (!campo) return false;
+  if (campo.tipo === 'froala') return true;
+  return !campo.froalaPendente;
+}
+
 // Texto de rótulo de um campo, sem nunca ler conteúdo digitado: ignora qualquer
 // elemento que contenha campo editável (um editor vizinho pode ter texto do
 // paciente curto o bastante para parecer rótulo).
@@ -1071,6 +1081,7 @@ class ShospInjector {
       out.push({
         tipo: f.tagName === 'TEXTAREA' ? 'textarea' : 'input', id: f.id || '', rotulo: _rotuloDoCampoShosp(f), el: f,
         vis: !!f.offsetParent, temConteudo: !!String(f.value || '').trim(),
+        froalaPendente: f.tagName === 'TEXTAREA' && f.classList.contains('editorFroala'),
       });
     }
     return out;
@@ -1085,7 +1096,9 @@ class ShospInjector {
       container = document.querySelector(`[id*="divTextoProntuarioServico${num}"]`);
       if (container) {
         campos = this._camposDaAbaGlaucoma(container);
-        if (campos.some(c => c.rotulo)) break;
+        // Não basta haver rótulo (tonometria aparece antes): espera o campo OCT
+        // único e com o editor já montado.
+        if (_campoOctPronto(_escolherCampoOct(campos).campo)) break;
       }
       await new Promise(r => setTimeout(r, 150));
     }
@@ -1120,6 +1133,10 @@ class ShospInjector {
         : 'Campo OCT não encontrado na aba Glaucoma — nada injetado';
       contentLogger.warn(`[OCT] ${erro}. Campos vistos: ${resumoCampos.join(' ; ')}`);
       return { success: false, erro, campos: resumoCampos };
+    }
+
+    if (!_campoOctPronto(campo)) {
+      return { success: false, erro: 'O editor do campo OCT ainda não carregou — tente de novo em instantes', campos: resumoCampos };
     }
 
     const info = { id: campo.id, rotulo: campo.rotulo, tipo: campo.tipo };

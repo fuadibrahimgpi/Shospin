@@ -217,7 +217,9 @@ Responda SOMENTE com um objeto JSON, sem texto antes ou depois:
     const partes = montarPartes(arquivos);
     // Sem thinkingBudget: ler mapa de setores colorido precisa do raciocínio.
     // O teto de saída inclui o thinking do 2.5 Flash — por isso acima do padrão.
-    const resp = await apiService.callGeminiAPI(partes, { maxOutputTokens: 24576 });
+    // maxRetries 1: um PDF de várias páginas pode estourar os 90s; 4 tentativas
+    // seriam 6 minutos de painel parado.
+    const resp = await apiService.callGeminiAPI(partes, { maxOutputTokens: 24576 }, { maxRetries: 1 });
     const resultado = interpretarResposta(parseJSON(resp.text || '', 'laudo-oct'));
     return { ...resultado, decisao: decidirInjecao(resultado) };
   }

@@ -34,6 +34,7 @@ function extrairFn(src, nome) {
   }
   return src.slice(ini, i);
 }
+const pronto = new Function(extrairFn(contentJs, '_campoOctPronto') + '\nreturn _campoOctPronto;')();
 const escolher = new Function(extrairFn(contentJs, '_escolherCampoOct') + '\nreturn _escolherCampoOct;')();
 
 const LAUDO_OK = [
@@ -118,11 +119,11 @@ const LAUDO_OK = [
 
   // ── gerarLaudo com API falsa ──
   await tAsync('GERAR-1 chama a API sem thinkingBudget e com teto alto', async () => {
-    let cfg = null;
-    const api = { callGeminiAPI: async (p, c) => { cfg = c; return { text: '```json\n' + JSON.stringify({ e_oct: true, laudo: LAUDO_OK, alertas: [] }) + '\n```' }; } };
+    let cfg = null, retry = null;
+    const api = { callGeminiAPI: async (p, c, rc) => { cfg = c; retry = rc; return { text: '```json\n' + JSON.stringify({ e_oct: true, laudo: LAUDO_OK, alertas: [] }) + '\n```' }; } };
     const parse = (txt) => JSON.parse(txt.replace(/```json|```/g, ''));
     const r = await Oct.gerarLaudo([{ mimeType: 'image/png', base64: 'AAAA' }], { apiService: api, parseJSON: parse });
-    return cfg && !('thinkingBudget' in cfg) && cfg.maxOutputTokens >= 16384 && r.decisao.auto && r.laudo === LAUDO_OK;
+    return cfg && !('thinkingBudget' in cfg) && cfg.maxOutputTokens >= 16384 && retry && retry.maxRetries === 1 && r.decisao.auto && r.laudo === LAUDO_OK;
   });
   await tAsync('GERAR-2 sem dependências lança', async () => {
     try { await Oct.gerarLaudo([{ mimeType: 'image/png', base64: 'A' }], {}); return false; } catch (_) { return true; }
@@ -137,6 +138,13 @@ const LAUDO_OK = [
   t('CAMPO-5 palavras que contêm "oct" não casam', escolher([c('Doctor'), c('Octávio'), c('protocolo')]).motivo === 'nenhum');
   t('CAMPO-6 rótulo longo (texto de container) é ignorado', escolher([c('Glaucoma Tonometria OD OE Paquimetria OD OE OCT Campo visual Gonioscopia Observações')]).motivo === 'nenhum');
   t('CAMPO-7 lista vazia/nula', escolher(null).motivo === 'nenhum' && escolher([]).motivo === 'nenhum');
+
+  t('PRONTO-1 Froala montado está pronto', pronto({ tipo: 'froala' }) === true);
+  t('PRONTO-2 textarea editorFroala cru NÃO está pronto', pronto({ tipo: 'textarea', froalaPendente: true }) === false);
+  t('PRONTO-3 textarea/input comum está pronto', pronto({ tipo: 'textarea' }) === true && pronto({ tipo: 'input', froalaPendente: false }) === true);
+  t('PRONTO-4 sem campo não está pronto', pronto(null) === false);
+  t('PRONTO-5 a espera da aba usa a prontidão, não "algum rótulo"',
+    contentJs.includes('_campoOctPronto(_escolherCampoOct(campos).campo)') && !contentJs.includes('if (campos.some(c => c.rotulo)) break;'));
 
   // ── fiação no content.js e no painel ──
   t('FIO-1 content.js responde injectOctLaudo e dumpCamposGlaucoma', contentJs.includes("case 'injectOctLaudo':") && contentJs.includes("case 'dumpCamposGlaucoma':"));

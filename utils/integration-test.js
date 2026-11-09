@@ -1896,6 +1896,19 @@ test('[MED-NOME-7] remédio negado/suspenso ou de alergia não nomeia a linha', 
   }
 });
 
+test('[MED-NOME-7b] negação DEPOIS do nome ("timolol suspenso", "timolol ela não pode usar") também barra', () => {
+  for (const fala of ['o timolol suspenso desde janeiro', 'o timolol ela nao pode usar por causa da asma']) {
+    const d = _medDecision('Colírio hipotensor ocular 1x/dia', null, fala);
+    expect(d.clonedAIResponse.dados.medicacoes_em_uso).toBe('Colírio hipotensor ocular 1x/dia');
+  }
+});
+
+test('[MED-NOME-7c] troca ("trocar o timolol por Xalatan") não põe o remédio NOVO em medicacoes_em_uso', () => {
+  const d = _medDecision('Colírio hipotensor ocular 1x/dia', 'Colírio hipotensor ocular 1x/dia', 'vamos trocar o timolol por xalatan');
+  expect(d.clonedAIResponse.dados.medicacoes_em_uso).toBe('Colírio hipotensor ocular 1x/dia');
+  expect(d.guardsApplied.some(g => g.includes('ambíguo'))).toBe(true);
+});
+
 test('[MED-NOME-8] classe diferente não é promovida (antibiótico dito não nomeia hipotensor)', () => {
   const d = _medDecision('Colírio hipotensor ocular 1x/dia', null, 'usou tobrex semana passada e agora usa colirio para pressao');
   expect(d.clonedAIResponse.dados.medicacoes_em_uso).toBe('Colírio hipotensor ocular 1x/dia');

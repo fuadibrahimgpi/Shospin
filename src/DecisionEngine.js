@@ -437,7 +437,8 @@
    *  • a classe da linha tem que bater com a do remédio citado (hipotensor ↔ hipotensor);
    *  • no máximo 2 remédios da classe ("bimatoprosta com timolol"); 3+ é ambíguo → fica;
    *  • "Medicação ocular prescrita" só é promovida se a fala cita UM remédio;
-   *  • remédio negado/suspenso/alérgico ("sem timolol", "alergia a timolol") é ignorado;
+   *  • remédio negado/suspenso/alérgico/trocado ("sem timolol", "timolol suspenso", "trocar o
+   *    timolol por Xalatan") → o guard inteiro se cala: não sabe qual era "em uso" e qual é novo;
    *  • nome que veio de variante de ASR (não do nome literal) gera aviso para conferir.
    */
   const _CLASSE_LINHA_RE = {
@@ -448,21 +449,23 @@
   };
   const _LINHA_MED_GENERICA_RE = /^(\s*(?:[-•*]\s*)?)medica[çc][ãa]o\s+ocular\s+prescrita\b/i;
   const _MED_NEGADO_ANTES_RE = /\b(?:nao|sem|nunca|parou|parar|pare|suspend\w*|interromp\w*|trocar|troca|trocou|tirar|tire|alergi\w*|intoleran\w*|reacao)\b/;
-  const _MED_SUSPENSO_DEPOIS_RE = /^\s*(?:\w+\s+){0,2}(?:suspend|parar|parou|interromp)/;
+  // Negação DEPOIS do nome: "o timolol suspenso", "o timolol ela não pode usar".
+  const _MED_SUSPENSO_DEPOIS_RE = /^\s*(?:\w+\s+){0,3}(?:nao\s+(?:pode|deve|usa|usar|toler\w*|consegue|funcion\w*|serve)|nunca|suspens\w*|suspend\w*|parar|parou|interromp\w*|contraindic\w*)/;
   const _CLASSES_FORA_DO_GUARD = ['lubrificante', 'ciclopegico'];
 
   function _medicamentosCitadosNaFala(fala) {
     const Lexico = typeof globalThis !== 'undefined' ? globalThis.MedicamentosLexico : null;
-    if (!Lexico || !fala) return [];
+    if (!Lexico || !fala) return { validos: [], excluidos: 0 };
     const t = Lexico.normalizarLexico(fala);
     const validos = [];
+    let excluidos = 0;
     for (const a of Lexico.encontrarMedicamentos(fala)) {
       const antes = t.slice(Math.max(0, a.indice - 50), a.indice).split(' ').slice(-4).join(' ');
-      const depois = t.slice(a.indice + a.termo.length, a.indice + a.termo.length + 30);
-      if (_MED_NEGADO_ANTES_RE.test(antes) || _MED_SUSPENSO_DEPOIS_RE.test(depois)) continue;
+      const depois = t.slice(a.indice + a.termo.length, a.indice + a.termo.length + 40);
+      if (_MED_NEGADO_ANTES_RE.test(antes) || _MED_SUSPENSO_DEPOIS_RE.test(depois)) { excluidos++; continue; }
       if (!validos.some(v => v.id === a.id)) validos.push(a);
     }
-    return validos;
+    return { validos, excluidos };
   }
 
   function _juntarNomesMedicamento(achados, Lexico) {
@@ -476,8 +479,15 @@
     const d = cloned.dados;
     const Lexico = typeof globalThis !== 'undefined' ? globalThis.MedicamentosLexico : null;
     if (!d || !Lexico) return;
-    const citados = _medicamentosCitadosNaFala(ctx.transcribedText);
+    const { validos: citados, excluidos } = _medicamentosCitadosNaFala(ctx.transcribedText);
     if (!citados.length) return;
+    // Remédio negado/suspenso/trocado na mesma fala: não dá para saber, sem o modelo, qual
+    // era "em uso" e qual é o novo ("trocar o timolol por Xalatan"). Nomear o errado em
+    // medicacoes_em_uso seria pior que a classe — o guard se cala e deixa o prompt decidir.
+    if (excluidos) {
+      log.push('Guard 2g: fala cita remédio negado/suspenso/trocado — nomeação deixada ao modelo (ambíguo)');
+      return;
+    }
 
     const usados = [];
     const promoverLinha = (linha) => {

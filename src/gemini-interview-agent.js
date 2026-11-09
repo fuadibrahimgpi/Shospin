@@ -231,6 +231,20 @@ class GeminiInterviewAgent {
     // 7) Blefarite: "blufarite", "blackfarite", "bruxarite"
     out = out.replace(/(?<![a-zà-ú0-9])(?:blufarite|blackfarite|bruxarite)(?![a-zà-ú0-9])/gi, 'blefarite');
 
+    // 8) Nomes de colírio de glaucoma (léxico de medicamentos, entradas `restaurar`):
+    //    "bimato à próstata com timol" / "hematotrófico continua lol" → bimatoprosta / timolol.
+    //    Log 2026-11-09: sem isto o modelo não via nome nenhum e desceu para "Colírio hipotensor".
+    const Lexico = (typeof MedicamentosLexico !== 'undefined')
+      ? MedicamentosLexico
+      : (typeof globalThis !== 'undefined' && globalThis.MedicamentosLexico) || null;
+    if (Lexico && typeof Lexico.restaurarVariantesAsr === 'function') {
+      const r = Lexico.restaurarVariantesAsr(out);
+      if (r.trocas.length) {
+        out = r.texto;
+        this.logger.info(`[ASR-MED] ${r.trocas.length} nome(s) de medicamento restaurado(s): ${r.trocas.map(t => `"${t.de}"→${t.para}`).join(', ')}`);
+      }
+    }
+
     return out;
   }
 
@@ -686,6 +700,10 @@ CAMPOS:
   * Sempre inclua nome + dosagem/posologia quando mencionados
     Ex: "Xalatan OE à noite", "Combigan 2x/dia", "Carmelose 3x/dia"
   * Se dosagem não mencionada, registre só o nome: "Xalatan, Timoptol"
+  * ★ NOME DITO VENCE A CLASSE: se a fala traz o nome comercial ou o princípio ativo (mesmo distorcido
+    pelo reconhecimento de voz: "bimato à próstata com timol" = "Bimatoprosta + timolol"), registre o
+    remédio — "Colírio hipotensor ocular"/"colírio para pressão" só quando NENHUM nome foi dito
+    (ver "NOME DITO VENCE A CLASSE" na hierarquia de nomeação do tratamento).
   * ❌ NÃO inclui medicamentos sistêmicos (insulina, metformina, losartan, etc.) → vão em alteracoes_sistemicas
   * ⚠️ NÃO CONFUNDA com tratamento:
     - medicacoes_em_uso = o que o paciente JÁ USAVA (histórico)
@@ -1300,6 +1318,18 @@ CAMPOS:
      3) GENÉRICO — quando NEM o nome, NEM um protocolo declarado, NEM a classe podem ser identificados,
         mas houve prescrição. Ex.: médico diz só "usa o colírio 3x/dia", fora de qualquer protocolo
         → "Medicação ocular prescrita".
+     ★ NOME DITO VENCE A CLASSE (regra do médico, log 2026-11-09 — "bimato à próstata com timol"
+        virou "Colírio hipotensor ocular" em medicacoes_em_uso E em tratamento):
+        "Colírio hipotensor ocular", "Colírio antibiótico", "Medicação ocular prescrita" etc. SÓ são
+        permitidos quando a fala NÃO trouxe nem o nome comercial NEM o princípio ativo. Se qualquer um
+        dos dois aparece na fala — dito pelo médico OU pelo paciente, em uso ou prescrito — o registro
+        leva o remédio EXPLÍCITO, em medicacoes_em_uso e em tratamento. Antes de descer para a classe,
+        releia a fala inteira procurando o nome. Dois remédios ditos juntos ("bimatoprosta com timolol")
+        → "Bimatoprosta + timolol" numa linha, mantendo a posologia dita.
+        Nome COM erro de reconhecimento de voz, mas reconhecível pelo som (ex.: "bimato à próstata" =
+        bimatoprosta, "timol" = timolol): escreva o princípio ativo da base de conhecimento — isso é
+        ouvir o que foi pronunciado, não inferir pelo diagnóstico. Só quando o trecho é ININTELIGÍVEL
+        ou AMBÍGUO (não aponta UM nome da base, como o "trometolou" abaixo) vale o nível 2/3.
      ⚠️ NUNCA omita uma prescrição porque o nome não foi dito — desça para o nível 2 ou 3, mas REGISTRE.
      ⚠️ Nome que o ASR destruiu (ex.: "trometolou 3 vezes ao dia por 5 dias") NÃO autoriza classe:
         registre "Medicação ocular prescrita" + posologia. É PROIBIDO deduzir a classe pelo contexto

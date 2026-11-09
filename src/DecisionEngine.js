@@ -423,6 +423,104 @@
   }
 
   /**
+   * Guard 2g (log 2026-11-09): remédio NOMEADO na fala não pode sair como classe.
+   *
+   * Regra do médico: havendo nome (comercial ou princípio ativo), o prontuário leva o
+   * remédio EXPLÍCITO; classe ("Colírio hipotensor ocular") e genérico ("Medicação ocular
+   * prescrita") só valem quando a fala não deu nenhum dos dois. Caso real: "bimato à
+   * próstata com timol" (ASR: "hematotrófico continua lol") virou "Colírio hipotensor
+   * ocular 1x/dia" em medicacoes_em_uso E em tratamento. O léxico (com as variantes de
+   * ASR) acha o remédio na fala; este guard só PROMOVE linhas que o modelo já escreveu
+   * em nível de classe — nunca cria linha (promover ≠ criar, REGRA ANTI-INVENÇÃO).
+   *
+   * Limites deliberados:
+   *  • a classe da linha tem que bater com a do remédio citado (hipotensor ↔ hipotensor);
+   *  • no máximo 2 remédios da classe ("bimatoprosta com timolol"); 3+ é ambíguo → fica;
+   *  • "Medicação ocular prescrita" só é promovida se a fala cita UM remédio;
+   *  • remédio negado/suspenso/alérgico ("sem timolol", "alergia a timolol") é ignorado;
+   *  • nome que veio de variante de ASR (não do nome literal) gera aviso para conferir.
+   */
+  const _CLASSE_LINHA_RE = {
+    hipotensor:   /^(\s*(?:[-•*]\s*)?)col[ií]rio\s+hipotensor(?:\s+ocular)?\b/i,
+    antibiotico:  /^(\s*(?:[-•*]\s*)?)col[ií]rio\s+antibi[oó]tico\b/i,
+    antialergico: /^(\s*(?:[-•*]\s*)?)col[ií]rio\s+antial[eé]rgico\b/i,
+    corticoide:   /^(\s*(?:[-•*]\s*)?)col[ií]rio\s+(?:com\s+)?corticoide\b/i,
+  };
+  const _LINHA_MED_GENERICA_RE = /^(\s*(?:[-•*]\s*)?)medica[çc][ãa]o\s+ocular\s+prescrita\b/i;
+  const _MED_NEGADO_ANTES_RE = /\b(?:nao|sem|nunca|parou|parar|pare|suspend\w*|interromp\w*|trocar|troca|trocou|tirar|tire|alergi\w*|intoleran\w*|reacao)\b/;
+  const _MED_SUSPENSO_DEPOIS_RE = /^\s*(?:\w+\s+){0,2}(?:suspend|parar|parou|interromp)/;
+  const _CLASSES_FORA_DO_GUARD = ['lubrificante', 'ciclopegico'];
+
+  function _medicamentosCitadosNaFala(fala) {
+    const Lexico = typeof globalThis !== 'undefined' ? globalThis.MedicamentosLexico : null;
+    if (!Lexico || !fala) return [];
+    const t = Lexico.normalizarLexico(fala);
+    const validos = [];
+    for (const a of Lexico.encontrarMedicamentos(fala)) {
+      const antes = t.slice(Math.max(0, a.indice - 50), a.indice).split(' ').slice(-4).join(' ');
+      const depois = t.slice(a.indice + a.termo.length, a.indice + a.termo.length + 30);
+      if (_MED_NEGADO_ANTES_RE.test(antes) || _MED_SUSPENSO_DEPOIS_RE.test(depois)) continue;
+      if (!validos.some(v => v.id === a.id)) validos.push(a);
+    }
+    return validos;
+  }
+
+  function _juntarNomesMedicamento(achados, Lexico) {
+    return achados
+      .map(a => Lexico.nomeRegistrado(a))
+      .map((n, i) => (i === 0 ? n : n.charAt(0).toLowerCase() + n.slice(1)))
+      .join(' + ');
+  }
+
+  function _guardMedicamentoNomeadoNaFala(cloned, ctx, log) {
+    const d = cloned.dados;
+    const Lexico = typeof globalThis !== 'undefined' ? globalThis.MedicamentosLexico : null;
+    if (!d || !Lexico) return;
+    const citados = _medicamentosCitadosNaFala(ctx.transcribedText);
+    if (!citados.length) return;
+
+    const usados = [];
+    const promoverLinha = (linha) => {
+      for (const [classe, re] of Object.entries(_CLASSE_LINHA_RE)) {
+        const m = linha.match(re);
+        if (!m) continue;
+        const doClasse = citados.filter(a => a.classe === classe);
+        if (!doClasse.length || doClasse.length > 2) return linha;
+        usados.push(...doClasse);
+        return linha.replace(re, m[1] + _juntarNomesMedicamento(doClasse, Lexico));
+      }
+      const g = linha.match(_LINHA_MED_GENERICA_RE);
+      if (g) {
+        const elegiveis = citados.filter(a => !_CLASSES_FORA_DO_GUARD.includes(a.classe));
+        if (elegiveis.length !== 1) return linha;
+        usados.push(elegiveis[0]);
+        return linha.replace(_LINHA_MED_GENERICA_RE, g[1] + _juntarNomesMedicamento(elegiveis, Lexico));
+      }
+      return linha;
+    };
+
+    let alteradas = 0;
+    for (const campo of ['medicacoes_em_uso', 'tratamento']) {
+      const valor = d[campo];
+      if (typeof valor !== 'string' || !valor.trim()) continue;
+      const novo = valor.split('\n').map(promoverLinha).join('\n');
+      if (novo !== valor) { d[campo] = novo; alteradas++; }
+    }
+    if (!alteradas) return;
+
+    const deVariante = usados.filter(a => {
+      const entrada = Lexico.MEDICAMENTOS_LEXICO.find(e => e.id === a.id);
+      return entrada && !entrada.nomes.map(Lexico.normalizarLexico).includes(Lexico.normalizarLexico(a.termo));
+    });
+    if (deVariante.length) {
+      _pushAviso(cloned,
+        'Medicação: o nome do colírio foi reconhecido por semelhança de som ' +
+        `(${deVariante.map(a => `"${a.termo}" → ${a.principio}`).join(', ')}). Confira se é esse mesmo.`);
+    }
+    log.push(`Guard 2g: remédio nomeado na fala promovido de classe/genérico para o nome (${[...new Set(usados.map(a => a.principio))].join(', ')}; ${alteradas} campo(s))`);
+  }
+
+  /**
    * Guard 2e (log 2026-10-22): colírio MANTIDO some do tratamento.
    *
    * "o paciente está em uso de timolol duas vezes ao dia, mantido timolol": o modelo
@@ -1738,6 +1836,9 @@
       _guardBlefariteLiteral(cloned, ctx, guardsApplied);
       _guardAssociacaoATB(cloned, ctx, guardsApplied);
       _guardClasseAntibioticoSemFala(cloned, ctx, guardsApplied);
+      // Antes do 2e: ele copia linhas de medicacoes_em_uso para o tratamento, e a
+      // cópia tem que levar o nome, não a classe (log 2026-11-09).
+      _guardMedicamentoNomeadoNaFala(cloned, ctx, guardsApplied);
       _guardColirioMantidoSemTratamento(cloned, ctx, guardsApplied);
       // Depois do rebaixamento da "Associação": promove o colírio genérico da
       // blefarite ao protocolo declarado (Tobramicina + dexametasona).

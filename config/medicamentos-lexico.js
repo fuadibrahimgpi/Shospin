@@ -45,8 +45,12 @@ const MEDICAMENTOS_LEXICO = [
   // ── Glaucoma: monoterapias ──
   { id: 'latanoprosta', principio: 'Latanoprosta', classe: 'hipotensor', nomes: ['latanoprosta', 'xalatan', 'xalaprost'], marcas: ['Xalatan', 'Xalaprost'], asr: [] },
   { id: 'travoprosta',  principio: 'Travoprosta',  classe: 'hipotensor', nomes: ['travoprosta', 'travatan'], marcas: ['Travatan'], asr: [] },
-  { id: 'bimatoprosta', principio: 'Bimatoprosta', classe: 'hipotensor', nomes: ['bimatoprosta', 'lumigan'], marcas: ['Lumigan'], asr: [] },
-  { id: 'timolol',      principio: 'Timolol',      classe: 'hipotensor', nomes: ['timolol', 'timoptol', 'glaucotrat'], marcas: ['Timoptol', 'Glaucotrat'], asr: [] },
+  // ASR (log 2026-11-09): "bimatoprosta com timolol" saiu como "bimato à próstata com timol" e
+  // "hematotrófico continua lol". `restaurar` = a transcrição enviada ao modelo recebe o nome certo.
+  { id: 'bimatoprosta', principio: 'Bimatoprosta', classe: 'hipotensor', nomes: ['bimatoprosta', 'lumigan'], marcas: ['Lumigan'],
+    asr: ['bimato\\w*(?:\\s+(?:a|e|de)?\\s*prosta\\w*)?', 'hematotr\\w*'], restaurar: true },
+  { id: 'timolol',      principio: 'Timolol',      classe: 'hipotensor', nomes: ['timolol', 'timoptol', 'glaucotrat'], marcas: ['Timoptol', 'Glaucotrat'],
+    asr: ['timol\\w*', 'lol'], restaurar: true },
   { id: 'brimonidina',  principio: 'Brimonidina',  classe: 'hipotensor', nomes: ['brimonidina', 'alphagan'], marcas: ['Alphagan'], asr: [] },
   { id: 'dorzolamida',  principio: 'Dorzolamida',  classe: 'hipotensor', nomes: ['dorzolamida', 'trusopt'], marcas: ['Trusopt'], asr: [] },
   { id: 'brinzolamida', principio: 'Brinzolamida', classe: 'hipotensor', nomes: ['brinzolamida', 'azopt'], marcas: ['Azopt'], asr: [] },
@@ -164,7 +168,40 @@ function encontrarMedicamentos(texto) {
   return achados.sort((a, b) => a.indice - b.indice);
 }
 
-const MedicamentosLexico = { MEDICAMENTOS_LEXICO, LUBRIFICANTE_PADRAO, normalizarLexico, encontrarMedicamentos, nomeRegistrado };
+/**
+ * Reescreve, na transcrição que vai ao modelo, as variantes de ASR das entradas
+ * marcadas `restaurar` pelo nome certo ("bimato à próstata" → "bimatoprosta").
+ * Só reconhecimento fonético do que foi PRONUNCIADO — nunca dedução por diagnóstico.
+ * Casa na forma sem acento e devolve o texto original com os trechos trocados.
+ * @returns {{texto: string, trocas: Array<{de: string, para: string}>}}
+ */
+function restaurarVariantesAsr(texto) {
+  const original = String(texto || '');
+  const t = normalizarLexico(original);
+  // normalizarLexico colapsa espaços: sem índices alinhados, não arrisca reescrever.
+  const alinhado = original.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+  if (alinhado.length !== original.length || alinhado !== t) return { texto: original, trocas: [] };
+  const alvos = [];
+  for (const entrada of MEDICAMENTOS_LEXICO) {
+    if (!entrada.restaurar || !entrada.asr || !entrada.asr.length) continue;
+    const re = new RegExp(`\\b(?:${entrada.asr.join('|')})\\b`, 'g');
+    let m;
+    while ((m = re.exec(t))) {
+      const ini = m.index, fim = ini + m[0].length;
+      if (alvos.some(a => ini < a.fim && fim > a.ini)) continue;
+      alvos.push({ ini, fim, de: original.slice(ini, fim), para: entrada.nomes[0] });
+    }
+  }
+  alvos.sort((a, b) => b.ini - a.ini);
+  let out = original;
+  for (const a of alvos) {
+    if (normalizarLexico(a.de) === a.para) continue; // já está certo
+    out = out.slice(0, a.ini) + a.para + out.slice(a.fim);
+  }
+  return { texto: out, trocas: alvos.filter(a => normalizarLexico(a.de) !== a.para).reverse().map(a => ({ de: a.de, para: a.para })) };
+}
+
+const MedicamentosLexico = { MEDICAMENTOS_LEXICO, LUBRIFICANTE_PADRAO, normalizarLexico, encontrarMedicamentos, nomeRegistrado, restaurarVariantesAsr };
 
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = MedicamentosLexico;

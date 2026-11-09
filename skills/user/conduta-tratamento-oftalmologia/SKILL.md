@@ -127,6 +127,8 @@ Ao registrar um medicamento que o médico **prescreve**, use o nível mais espec
 - ⚠️ O nível 1 sempre vence: se o médico nomeou **outro** remédio, registre o que ele disse.
 - ⚠️ O protocolo apenas **nomeia** um colírio cuja prescrição já foi confirmada na fala — ele nunca cria uma prescrição que não existe (ver regra anti-invenção abaixo).
 
+**Regra do médico (2026-11-09) — nome dito vence a classe.** Nível 2 e 3 só valem quando a fala NÃO trouxe nem o nome comercial nem o princípio ativo. Se qualquer um dos dois foi dito (pelo médico ou pelo paciente, em uso ou prescrito), o remédio vai EXPLÍCITO em `medicacoes_em_uso` e em `tratamento`; dois ditos juntos ("bimatoprosta com timolol") → `Bimatoprosta + timolol`. Nome com erro do reconhecimento de voz mas reconhecível pelo som ("bimato à próstata", "timol") conta como nome dito. Backstops: variantes no léxico (`restaurar`) + `_normalizarSiglasExameAsr` passo 8 e Guard 2g do DecisionEngine (promove linha de classe/genérico; nunca cria linha).
+
 **Nível 2 — Grupo / classe.** Quando o remédio não foi nomeado, nenhum protocolo declarado se aplica, mas a classe é identificável pela fala (finalidade dita ou tratamento inequívoco). Ex.: "colírio para pressão" → `Colírio hipotensor ocular`; "colírio de alergia" → `Colírio antialérgico`; "colírio de antibiótico" (sem marca nem princípio) → `Colírio antibiótico`.
 
 **Nível 3 — Genérico.** Quando nem o nome, nem um protocolo, nem a classe podem ser identificados, mas houve prescrição. Ex.: "usa o colírio, 3x/dia" → `Medicação ocular prescrita`.

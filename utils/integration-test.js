@@ -1837,6 +1837,81 @@ test('[LUB-3] plural, "colírio lubrificante" e marcador de lista também são r
   expect(_lubDecision('- Lubrificante', fala).clonedAIResponse.dados.tratamento).toBe(`- ${LUB_PADRAO}`);
 });
 
+// ──────────────────────────────────────────────────────────────────────────────
+// 2026-11-09 — "bimato à próstata com timol" (ASR: "hematotrófico continua lol") saiu como
+// "Colírio hipotensor ocular 1x/dia" em medicacoes_em_uso E em tratamento. Regra do médico:
+// nome (comercial ou princípio) dito → remédio EXPLÍCITO; classe/genérico só sem nome.
+// ──────────────────────────────────────────────────────────────────────────────
+const _medDecision = (em_uso, tratamento, fala) => DecisionEngine.buildDecision({
+  tipo_consulta: 'retorno',
+  dados: { medicacoes_em_uso: em_uso, conduta: 'Retorno 1 mês', tratamento },
+}, { transcribedText: fala, hookFlags: {} });
+const _LexMed = require('../config/medicamentos-lexico.js');
+const _FALA_BIMATO = 'a senhora usava bimato a prostata com timol ela precisa continuar usando colirio uma vez por dia';
+const _FALA_HEMATO = 'a pressao ficou boa com o remedio hematotrofico continua lol ela precisa continuar usando colirio uma vez por dia';
+
+test('[MED-NOME-1] léxico reconhece as variantes de ASR de bimatoprosta + timolol', () => {
+  for (const fala of [_FALA_BIMATO, _FALA_HEMATO]) {
+    const ids = _LexMed.encontrarMedicamentos(fala).map(a => a.id);
+    expect(ids.includes('bimatoprosta')).toBe(true);
+    expect(ids.includes('timolol')).toBe(true);
+  }
+});
+
+test('[MED-NOME-3] classe nos dois campos vira o nome, com a posologia', () => {
+  const d = _medDecision('Colírio hipotensor ocular 1x/dia', 'Colírio hipotensor ocular 1x/dia', _FALA_BIMATO);
+  const dados = d.clonedAIResponse.dados;
+  expect(dados.medicacoes_em_uso).toBe('Bimatoprosta + timolol 1x/dia');
+  expect(dados.tratamento).toBe('Bimatoprosta + timolol 1x/dia');
+  expect(d.guardsApplied.some(g => g.includes('Guard 2g'))).toBe(true);
+  // nome vindo de variante de voz → o médico é avisado para conferir
+  expect(d.avisos.some(a => a.includes('semelhança de som'))).toBe(true);
+});
+
+test('[MED-NOME-4] nome literal dito: promove sem aviso; marca dita vai entre parênteses', () => {
+  const d = _medDecision('Colírio hipotensor ocular 1x/dia', null, 'usa lumigan uma vez por dia a noite');
+  expect(d.clonedAIResponse.dados.medicacoes_em_uso).toBe('Bimatoprosta (Lumigan) 1x/dia');
+  expect(d.avisos.some(a => a.includes('semelhança de som'))).toBe(false);
+});
+
+test('[MED-NOME-5] sem nome na fala, a classe continua valendo (nada é inventado)', () => {
+  const d = _medDecision('Colírio hipotensor ocular 1x/dia', 'Colírio hipotensor ocular 1x/dia',
+    'a pressao ficou boa com o remedio precisa continuar usando colirio uma vez por dia');
+  expect(d.clonedAIResponse.dados.medicacoes_em_uso).toBe('Colírio hipotensor ocular 1x/dia');
+  expect(d.clonedAIResponse.dados.tratamento).toBe('Colírio hipotensor ocular 1x/dia');
+  expect(d.guardsApplied.some(g => g.includes('Guard 2g'))).toBe(false);
+});
+
+test('[MED-NOME-6] promover não cria: sem linha de classe, nada é acrescentado', () => {
+  const d = _medDecision('Nega uso de medicações oculares', null, _FALA_BIMATO);
+  expect(d.clonedAIResponse.dados.medicacoes_em_uso).toBe('Nega uso de medicações oculares');
+  expect(d.clonedAIResponse.dados.tratamento).toBe(null);
+});
+
+test('[MED-NOME-7] remédio negado/suspenso ou de alergia não nomeia a linha', () => {
+  for (const fala of ['ela tem alergia a timolol e usa colirio uma vez por dia', 'nao usa timolol mais usa colirio uma vez por dia',
+    'vou suspender o timolol e manter o colirio']) {
+    const d = _medDecision('Colírio hipotensor ocular 1x/dia', null, fala);
+    expect(d.clonedAIResponse.dados.medicacoes_em_uso).toBe('Colírio hipotensor ocular 1x/dia');
+  }
+});
+
+test('[MED-NOME-8] classe diferente não é promovida (antibiótico dito não nomeia hipotensor)', () => {
+  const d = _medDecision('Colírio hipotensor ocular 1x/dia', null, 'usou tobrex semana passada e agora usa colirio para pressao');
+  expect(d.clonedAIResponse.dados.medicacoes_em_uso).toBe('Colírio hipotensor ocular 1x/dia');
+});
+
+test('[MED-NOME-9] "Medicação ocular prescrita" só é promovida com UM remédio na fala', () => {
+  const um = _medDecision(null, 'Medicação ocular prescrita 3x/dia', 'vai usar acular tres vezes ao dia');
+  expect(um.clonedAIResponse.dados.tratamento).toBe('Cetorolaco (Acular) 3x/dia');
+  const dois = _medDecision(null, 'Medicação ocular prescrita 3x/dia', 'usa acular e tobrex tres vezes ao dia');
+  expect(dois.clonedAIResponse.dados.tratamento).toBe('Medicação ocular prescrita 3x/dia');
+});
+
+test('[MED-NOME-10] o prompt carrega a regra "nome dito vence a classe" nos dois campos', () => {
+  expect((geminiJsSource.match(/NOME DITO VENCE A CLASSE/g) || []).length >= 2).toBe(true);
+});
+
 test('[LUB-4] marca dita vence: "Lubrificante ocular (Systane)" não é tocado', () => {
   const d = _lubDecision('Lubrificante ocular (Systane) 4x/dia', 'usa o systane que e um lubrificante 4x ao dia');
   expect(d.clonedAIResponse.dados.tratamento).toBe('Lubrificante ocular (Systane) 4x/dia');
@@ -2437,6 +2512,18 @@ test('[ASR-NORM-2] _normalizarSiglasExameAsr corrige mal de bicicleta, perimetro
   expect(saida).toContain('timolol');
   expect(saida).not.toContain('mal de bicicleta');
   expect(saida).not.toContain('perimetro conjuntival');
+});
+
+test('[MED-NOME-2] _normalizarSiglasExameAsr restaura os nomes antes de o texto ir ao modelo', () => {
+  const a = _intAgent._normalizarSiglasExameAsr('ela usa bimato à próstata com timol uma vez por dia');
+  expect(a).toContain('bimatoprosta');
+  expect(a).toContain('timolol');
+  expect(a).not.toContain('próstata');
+  const b = _intAgent._normalizarSiglasExameAsr('hematotrófico continua lol');
+  expect(b).toBe('bimatoprosta continua timolol');
+  // texto já certo e outros remédios ficam intactos
+  expect(_intAgent._normalizarSiglasExameAsr('usa bimatoprosta com timolol e xalatan'))
+    .toBe('usa bimatoprosta com timolol e xalatan');
 });
 
 test('[EXAM-CAT-1] pedidos nomeados no futuro/decisão entram', () => {

@@ -57,15 +57,19 @@ for (const c of corpus.casos) {
 }
 
 
-// Modo sombra no DecisionEngine: só registra, nunca altera o tratamento
+// Modo sombra no DecisionEngine: só registra, nunca altera o tratamento. O que o Guard 2g
+// já resolve (UM remédio nomeado + linha de classe/genérico) é promovido de verdade e a
+// sombra se cala; a sombra segue valendo para o que o guard não cobre (2+ remédios).
 const DecisionEngine = require('../src/DecisionEngine.js');
 function sombra(fala, tratamento) {
   const raw = { dados: { tratamento }, tipo_consulta: 'retorno' };
   const d = DecisionEngine.buildDecision(raw, { transcribedText: fala });
   return { log: d.guardsApplied.filter(g => g.startsWith('[sombra:medicamentos]')), trat: d.clonedAIResponse.dados.tratamento };
 }
-const s1 = sombra('Vou passar o Xalatan à noite.', 'Medicação ocular prescrita');
+const s1 = sombra('Vou passar o Xalatan à noite e o Tobrex de dia.', 'Medicação ocular prescrita');
 t('SOMBRA-1', s1.log.length === 1 && s1.trat === 'Medicação ocular prescrita', JSON.stringify(s1));
+const s1b = sombra('Vou passar o Xalatan à noite.', 'Medicação ocular prescrita à noite');
+t('SOMBRA-1b', s1b.log.length === 0 && s1b.trat === 'Latanoprosta (Xalatan) à noite', 'Guard 2g promove o genérico: ' + JSON.stringify(s1b));
 const s2 = sombra('Vou passar o Xalatan à noite.', 'Latanoprosta à noite');
 t('SOMBRA-2', s2.log.length === 0, JSON.stringify(s2));
 const s3 = sombra('Exame normal, volta em um ano.', null);
@@ -150,8 +154,10 @@ t('DIAG-2', /trat=∅ → "Colírio lubrificante"/.test(dg1.texto) && /Guard 2e/
 const dg1b = diag('Eu estou usando o colírio só para hidratar. Toma ômega 3.', { medicacoes_em_uso: 'Colírio lubrificante', tratamento: null });
 t('DIAG-3', /ATENÇÃO: trat vazio/.test(dg1b.texto), 'tratamento vazio + palavra de medicação deve avisar o placeholder: ' + dg1b.texto);
 t('DIAG-3b', dg1b.intacto && dg1b.final.tratamento === null, 'o diagnóstico não pode alterar nada');
-const dg2 = diag('Vou passar o Xalatan à noite.', { medicacoes_em_uso: 'Nega uso de medicações oculares', tratamento: 'Medicação ocular prescrita' });
+const dg2 = diag('Vou passar o Xalatan à noite e o Tobrex de dia.', { medicacoes_em_uso: 'Nega uso de medicações oculares', tratamento: 'Medicação ocular prescrita' });
 t('DIAG-4', /ALERTA: fala cita Latanoprosta/.test(dg2.texto), dg2.texto);
+const dg2b = diag('Vou passar o Xalatan à noite.', { medicacoes_em_uso: 'Nega uso de medicações oculares', tratamento: 'Medicação ocular prescrita' });
+t('DIAG-4b', /→ "Latanoprosta \(Xalatan\)"/.test(dg2b.texto) && !/ALERTA/.test(dg2b.texto), dg2b.texto);
 const dg3 = diag('Vou passar o Xalatan à noite.', { medicacoes_em_uso: 'Nega uso de medicações oculares', tratamento: 'Latanoprosta (Xalatan) à noite' });
 t('DIAG-5', !/ALERTA/.test(dg3.texto) && !/ATENÇÃO/.test(dg3.texto), dg3.texto);
 const dg4 = diag('Suspende o Xalatan e começa Timoptol.', { conduta: 'Suspender Xalatan', tratamento: 'Timolol' });

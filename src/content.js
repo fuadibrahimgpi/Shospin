@@ -567,6 +567,66 @@ function _syncFroalaSourceTextarea(frElement) {
   return true;
 }
 
+// ============================================================================
+// CAMPO OCT DA ABA GLAUCOMA (laudo de OCT, 2026-11-09)
+// ============================================================================
+// O ID do campo OCT nunca foi lido do DOM real. Em vez de inventar um ID (o erro
+// do `#tdCadastro-cid`), o campo é achado pelo RÓTULO, dentro do container da
+// aba Glaucoma, e precisa ser ÚNICO: 0 ou 2+ candidatos → não injeta. Nada de
+// fallback por índice/posição — `findEditorByLabel` casaria o `td` que embrulha
+// a aba inteira e cairia no índice global, escrevendo o laudo em outro campo.
+
+// Escolhe o campo OCT entre os candidatos {rotulo, ...}. Pura (testada em
+// utils/oct-test.js). Sem chaves em regex: o extrator dos testes conta chaves.
+function _escolherCampoOct(candidatos) {
+  const ROTULO_OCT = /(^|[^a-z0-9à-ÿ])o\.?\s?c\.?\s?t\.?($|[^a-z0-9à-ÿ])|tomografia/i;
+  const lista = Array.isArray(candidatos) ? candidatos : [];
+  const casam = lista.filter(c => {
+    const r = String((c && c.rotulo) || '').trim();
+    return r && r.length <= 60 && ROTULO_OCT.test(r);
+  });
+  if (casam.length === 1) return { campo: casam[0], motivo: null, casam };
+  return { campo: null, motivo: casam.length === 0 ? 'nenhum' : 'ambiguo', casam };
+}
+
+// Texto de rótulo de um campo, sem nunca ler conteúdo digitado: ignora qualquer
+// elemento que contenha campo editável (um editor vizinho pode ter texto do
+// paciente curto o bastante para parecer rótulo).
+function _rotuloDoCampoShosp(el) {
+  const temCampo = (n) => n.matches?.('input, textarea, select, .fr-box, [contenteditable]') ||
+    !!n.querySelector?.('input, textarea, select, .fr-box, [contenteditable]');
+  const curto = (n) => {
+    if (!n || temCampo(n)) return '';
+    const t = String(n.textContent || '').replace(/\s+/g, ' ').trim();
+    return t.length > 0 && t.length <= 60 ? t : '';
+  };
+  // 1) <label for=id> — do próprio campo ou do textarea fonte do Froala
+  const alvoId = el.id || (el.classList?.contains('fr-box') ? (_findFroalaSourceTextarea(el.querySelector('.fr-element') || el)?.id || '') : '');
+  if (alvoId) {
+    const lab = document.querySelector(`label[for="${CSS.escape(alvoId)}"]`);
+    const t = lab ? String(lab.textContent || '').replace(/\s+/g, ' ').trim() : '';
+    if (t && t.length <= 60) return t;
+  }
+  // 2) <label> do wrapper SHOSP (<div.botaoTextoPadrao> <label> <div.fr-box>…)
+  const wrap = el.closest('.botaoTextoPadrao');
+  if (wrap) {
+    for (const lab of wrap.querySelectorAll('label')) {
+      const t = curto(lab);
+      if (t) return t;
+    }
+  }
+  // 3) irmão anterior curto, subindo até 3 níveis
+  let node = el;
+  for (let i = 0; i < 3 && node; i++, node = node.parentElement) {
+    let sib = node.previousElementSibling;
+    for (let j = 0; j < 2 && sib; j++, sib = sib.previousElementSibling) {
+      const t = curto(sib);
+      if (t) return t;
+    }
+  }
+  return '';
+}
+
 function setFroalaValue(element, value) {
   if (!element) return;
 
@@ -987,6 +1047,101 @@ class ShospInjector {
     }
 
     return success;
+  }
+
+  /**
+   * Campos de texto da aba Glaucoma, com rótulo e tipo. `el` é o alvo da escrita
+   * (o .fr-element para Froala). Não lê valores — só `temConteudo` (booleano).
+   */
+  _camposDaAbaGlaucoma(container) {
+    const out = [];
+    const fontes = new Set();
+    for (const box of container.querySelectorAll('.fr-box')) {
+      const el = box.querySelector('.fr-element');
+      if (!el) continue;
+      const ta = _findFroalaSourceTextarea(el);
+      if (ta) fontes.add(ta);
+      out.push({
+        tipo: 'froala', id: ta?.id || '', rotulo: _rotuloDoCampoShosp(box), el,
+        vis: !!box.offsetParent, temConteudo: !!String(el.textContent || '').trim(),
+      });
+    }
+    for (const f of container.querySelectorAll('textarea, input[type="text"], input:not([type])')) {
+      if (fontes.has(f)) continue;
+      out.push({
+        tipo: f.tagName === 'TEXTAREA' ? 'textarea' : 'input', id: f.id || '', rotulo: _rotuloDoCampoShosp(f), el: f,
+        vis: !!f.offsetParent, temConteudo: !!String(f.value || '').trim(),
+      });
+    }
+    return out;
+  }
+
+  async _abrirAbaGlaucoma() {
+    const tabId = this.detector.getTabId('glaucoma') || TAB_IDS.glaucoma;
+    if (!(await this.clickTab(tabId))) return { container: null, campos: [] };
+    const num = extractTabNumber(tabId);
+    let container = null, campos = [];
+    for (let w = 0; w < 3000; w += 150) {
+      container = document.querySelector(`[id*="divTextoProntuarioServico${num}"]`);
+      if (container) {
+        campos = this._camposDaAbaGlaucoma(container);
+        if (campos.some(c => c.rotulo)) break;
+      }
+      await new Promise(r => setTimeout(r, 150));
+    }
+    return { container, campos };
+  }
+
+  /** Dump estrutural (sem valores) dos campos da aba Glaucoma. */
+  async dumpCamposGlaucoma() {
+    const { container, campos } = await this._abrirAbaGlaucoma();
+    return {
+      container: container ? container.id : null,
+      campos: campos.map((c, i) => ({ i, tipo: c.tipo, id: c.id, rotulo: c.rotulo, vis: c.vis, temConteudo: c.temConteudo })),
+    };
+  }
+
+  /**
+   * Escreve o laudo de OCT no campo OCT da aba Glaucoma.
+   * Não sobrescreve campo com conteúdo sem `substituir: true`.
+   */
+  async injectOctLaudo({ laudo, substituir } = {}) {
+    const texto = String(laudo || '').trim();
+    if (!texto) return { success: false, erro: 'Laudo vazio' };
+
+    const { container, campos } = await this._abrirAbaGlaucoma();
+    if (!container) return { success: false, erro: 'Aba Glaucoma não abriu — a ficha do paciente está aberta?' };
+
+    const { campo, motivo, casam } = _escolherCampoOct(campos);
+    const resumoCampos = campos.map(c => `${c.tipo}:${c.rotulo || '(sem rótulo)'}`);
+    if (!campo) {
+      const erro = motivo === 'ambiguo'
+        ? `Mais de um campo com rótulo de OCT na aba Glaucoma (${casam.map(c => c.rotulo).join(' | ')}) — nada injetado`
+        : 'Campo OCT não encontrado na aba Glaucoma — nada injetado';
+      contentLogger.warn(`[OCT] ${erro}. Campos vistos: ${resumoCampos.join(' ; ')}`);
+      return { success: false, erro, campos: resumoCampos };
+    }
+
+    const info = { id: campo.id, rotulo: campo.rotulo, tipo: campo.tipo };
+    if (campo.temConteudo && !substituir) {
+      return { success: false, ocupado: true, campo: info, erro: `O campo "${campo.rotulo}" já tem texto` };
+    }
+
+    if (campo.tipo === 'froala') {
+      // Escapa antes de virar HTML: "E/D < 0,5" seria comido pelo sanitizador de tags.
+      const html = texto.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br>');
+      await setFroalaValueSynced(campo.el, html);
+    } else {
+      setInputValue(campo.el, texto);
+    }
+    highlightElement(campo.el);
+
+    // Readback: o que o SHOSP vai salvar (textarea fonte), depois do re-sync de 150ms.
+    await new Promise(r => setTimeout(r, 400));
+    const fonte = campo.tipo === 'froala' ? _findFroalaSourceTextarea(campo.el) : campo.el;
+    const salvo = fonte ? String(fonte.value || '') : '';
+    contentLogger.success(`[OCT] laudo injetado em "${campo.rotulo}" (${campo.id || 'sem id'}); fonte com ${salvo.length} chars`);
+    return { success: true, campo: info, readback: { fonte: !!fonte, chars: salvo.length } };
   }
 
   /**
@@ -1749,6 +1904,19 @@ window.__shospMessageListener = (message, _sender, sendResponse) => {
       })();
       return true;
     }
+
+    // Laudo de OCT (painel → modo OCT): escreve SÓ o campo OCT da aba Glaucoma.
+    case 'injectOctLaudo':
+      injector.injectOctLaudo(message.data || {})
+        .then(r => sendResponse(r))
+        .catch(err => sendResponse({ success: false, erro: err.message }));
+      return true;
+
+    case 'dumpCamposGlaucoma':
+      injector.dumpCamposGlaucoma()
+        .then(r => sendResponse({ success: true, ...r }))
+        .catch(err => sendResponse({ success: false, erro: err.message }));
+      return true;
 
     case 'searchCid':
       (async () => {

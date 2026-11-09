@@ -724,3 +724,27 @@ body {
   flex: 1;
   font-weight: 500;
 }
+/* ========== MODO OCT (laudo de glaucoma) ========== */
+.mode-selector .mode-btn { min-width: 0; padding-left: 8px; padding-right: 8px; }
+.oct-drop {
+  border: 2px dashed #94a3b8;
+  border-radius: 12px;
+  background: white;
+  padding: 18px 12px;
+  text-align: center;
+  cursor: pointer;
+  color: #334155;
+}
+.oct-drop:hover, .oct-drop:focus, .oct-drop.arrastando { border-color: #3b82f6; background: #eff6ff; outline: none; }
+.oct-drop p { margin: 2px 0; }
+.oct-hint { font-size: 12px; color: #64748b; }
+.oct-arquivos { display: flex; flex-wrap: wrap; gap: 6px; }
+.oct-arquivos .oct-chip { font-size: 11px; background: #e2e8f0; border-radius: 999px; padding: 3px 10px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.oct-auto { font-size: 12px; }
+.oct-alertas { display: flex; flex-direction: column; gap: 4px; }
+.oct-alerta { font-size: 12px; border-radius: 8px; padding: 6px 10px; background: #fef3c7; color: #92400e; }
+.oct-alerta.bloqueio { background: #fee2e2; color: #991b1b; }
+.oct-botoes { display: flex; gap: 8px; flex-wrap: wrap; }
+.oct-botoes .btn { flex: 1; }
+.oct-dump { font-size: 11px; padding: 4px 8px; align-self: flex-start; }
+#octLaudo { font-family: inherit; font-size: 12px; line-height: 1.4; }

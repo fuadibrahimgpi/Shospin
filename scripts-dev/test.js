@@ -13,6 +13,7 @@ const SUITES = [
   ['hooks',       path.join(ROOT, 'utils', 'hooks-test.js')],
   ['agents',      path.join(ROOT, 'utils', 'agents-test.js')],
   ['readback',    path.join(ROOT, 'utils', 'readback-e2e-test.js')],
+  ['oct',         path.join(ROOT, 'utils', 'oct-test.js')],
 ];
 
 let failed = 0;

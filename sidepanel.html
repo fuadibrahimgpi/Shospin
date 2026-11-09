@@ -27,6 +27,14 @@
         </svg>
         <span>Câmera</span>
       </button>
+      <button id="octModeBtn" class="mode-btn" data-mode="oct" title="Laudo de OCT (glaucoma) → aba Glaucoma, campo OCT">
+        <svg class="mode-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="12" cy="12" r="9" />
+          <circle cx="12" cy="12" r="4" />
+          <line x1="3" y1="12" x2="8" y2="12" />
+        </svg>
+        <span>OCT</span>
+      </button>
     </div>
 
     <!-- ========== MODO ÁUDIO ========== -->
@@ -295,6 +303,33 @@
       </div>
     </div>
 
+    <!-- ========== MODO OCT (laudo de glaucoma) ========== -->
+    <div id="octSection" class="section hidden">
+      <div id="octDropZone" class="oct-drop" tabindex="0">
+        <p><strong>Carregue o exame de OCT</strong></p>
+        <p class="oct-hint">Imagem ou PDF — clique, arraste ou cole (Ctrl+V). Várias páginas de uma vez.</p>
+        <input type="file" id="octFileInput" accept="image/*,application/pdf" multiple hidden>
+      </div>
+      <div id="octArquivos" class="oct-arquivos hidden"></div>
+      <label class="checkbox-label oct-auto">
+        <input type="checkbox" id="octAutoInject" checked>
+        <span>Injetar automaticamente no campo OCT (aba Glaucoma)</span>
+      </label>
+      <div id="octStatus" class="status-text"></div>
+      <div id="octAlertas" class="oct-alertas hidden"></div>
+      <div id="octResultado" class="field hidden">
+        <label for="octLaudo">Laudo (editável antes de injetar)</label>
+        <textarea id="octLaudo" rows="16"></textarea>
+        <p class="oct-hint">Confira os valores com o exame original antes de salvar a ficha.</p>
+      </div>
+      <div class="oct-botoes">
+        <button id="octGerarBtn" class="btn btn-primary hidden">Gerar laudo</button>
+        <button id="octInjetarBtn" class="btn btn-primary hidden">Injetar no campo OCT</button>
+        <button id="octLimparBtn" class="btn btn-secondary hidden">Limpar</button>
+      </div>
+      <button id="octDumpBtn" class="btn btn-secondary oct-dump" type="button">Diagnóstico do campo OCT</button>
+    </div>
+
     <!-- ========== ÁREA COMUM ========== -->
     <!-- Resumo de Dados Coletados -->
     <div id="dataSummary" class="data-summary hidden">
@@ -349,6 +384,7 @@
   <script src="src/gemini-json-utils.js"></script>
   <script src="src/gemini-exam-agent.js"></script>
   <script src="src/gemini-interview-agent.js"></script>
+  <script src="src/gemini-oct-agent.js"></script>
   <script src="src/geminiService.js"></script>
 
   <!-- Side Panel Modules (ordem importa!) -->
@@ -362,6 +398,7 @@
   <script src="scripts/sidepanel-camera.js"></script>
   <script src="scripts/sidepanel-injection.js"></script>
   <script src="scripts/sidepanel-init.js"></script>
+  <script src="scripts/sidepanel-oct.js"></script>
 </body>
 
 </html>

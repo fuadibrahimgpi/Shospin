@@ -8061,6 +8061,76 @@ test('[RECHECK-VIVO] recheck ausente AVISA, e falha do recheck não derruba a in
 });
 
 // ──────────────────────────────────────────────────────────────────────────────
+// DOCUMENTAÇÃO QUE NÃO MENTE (análise de estrutura 2026-11-10, itens 10 e 11)
+// ──────────────────────────────────────────────────────────────────────────────
+// O README descrevia um projeto em TypeScript, com `npm run build` e pastas que
+// nunca existiram. Estes testes não julgam o texto — só o que dá para conferir:
+// arquivo citado existe, versão citada é a do manifesto, comando citado existe.
+
+const _DOCS_RAIZ = ['README.md', 'CLAUDE.md'];
+
+// Caminhos do repositório citados entre crases: têm "/" ou terminam em extensão
+// conhecida, sem espaço, curinga, barra invertida nem "://".
+const _caminhosCitados = (texto) =>
+  [...new Set([...texto.matchAll(/`([^`\n]+)`/g)].map(m => m[1]))]
+    .filter(t => !/[\s*<>\\(){}=,]|:\/\//.test(t))
+    .filter(t => /\//.test(t) || /\.(js|json|md|html|css)$/.test(t))
+    .filter(t => !/^chrome:/.test(t));
+
+test('[DOC-1] todo arquivo ou pasta citado no README e no CLAUDE.md existe', () => {
+  const pathMod = require('path');
+  const faltando = [];
+  for (const doc of _DOCS_RAIZ) {
+    const citados = _caminhosCitados(readSrcNormalized(doc));
+    expect(citados.length > 10).toBe(true); // o extrator está de fato achando caminhos
+    for (const c of citados) {
+      if (!fs.existsSync(pathMod.join(__dirname, '..', c))) faltando.push(`${doc} → ${c}`);
+    }
+  }
+  expect(faltando).toEqual([]);
+});
+
+test('[DOC-2] a versão dita no README é a do manifest.json e a do package.json', () => {
+  const manifesto = JSON.parse(readSrcNormalized('manifest.json'));
+  const pacote = JSON.parse(readSrcNormalized('package.json'));
+  expect(pacote.version).toBe(manifesto.version);
+  expect(readSrcNormalized('README.md')).toContain(`(hoje ${manifesto.version})`);
+});
+
+test('[DOC-3] todo `npm run X` citado existe no package.json, e o README não promete build nem TypeScript', () => {
+  const scripts = JSON.parse(readSrcNormalized('package.json')).scripts || {};
+  for (const doc of _DOCS_RAIZ) {
+    const texto = readSrcNormalized(doc);
+    for (const m of texto.matchAll(/npm run ([a-z:-]+)/g)) {
+      if (!scripts[m[1]]) throw new Error(`${doc} cita "npm run ${m[1]}", que não existe`);
+    }
+  }
+  const readme = readSrcNormalized('README.md');
+  expect(/npm run build|tsconfig|\.ts\b/.test(readme)).toBe(false);
+});
+
+test('[DOC-4] os atalhos e os limites de pedidos do README batem com o código', () => {
+  const readme = readSrcNormalized('README.md');
+  const comandos = JSON.parse(readSrcNormalized('manifest.json')).commands;
+  for (const nome of Object.keys(comandos)) {
+    expect(readme).toContain(comandos[nome].suggested_key.default);
+  }
+  const api = readSrcNormalized('src', 'ApiService.js');
+  const porMinuto = api.match(/maxRequestsPerMinute:\s*(\d+)/)[1];
+  const porHora = api.match(/maxRequestsPerHour:\s*(\d+)/)[1];
+  expect(readme).toContain(`${porMinuto} pedidos por minuto e ${porHora} por hora`);
+});
+
+test('[DOC-5] os testes citados no CLAUDE.md como travas existem de fato', () => {
+  const estaSuite = readSrcNormalized('utils', 'integration-test.js');
+  const citados = [...readSrcNormalized('CLAUDE.md').matchAll(/`\[([A-Z]+-\d+)\]`/g)].map(m => m[1]);
+  expect(citados.length > 0).toBe(true);
+  for (const id of citados) {
+    if (!estaSuite.includes(`'[${id}]`)) throw new Error(`CLAUDE.md cita o teste [${id}], que não existe`);
+  }
+});
+
+// ──────────────────────────────────────────────────────────────────────────────
 // RELATÓRIO FINAL
 // ──────────────────────────────────────────────────────────────────────────────
 

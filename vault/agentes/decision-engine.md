@@ -12,28 +12,49 @@ aliases: ["decision-engine"]
 
 Guards pós-LLM centralizados (v6): recebem a resposta JSON do [Agente de entrevista](gemini-interview-agent.md) e o contexto (transcrição, flags dos hooks) e devolvem uma DECISÃO derivada, sem mutar a resposta crua. Cada guard é determinístico e cobre uma falha real que já aconteceu.
 
-## Guards no pipeline (ordem de execução)
+## Passos do pipeline (ordem de execução)
 
-1. `_guardTranscricaoIncoerente`
-2. `_guardExamesNormaisFase2`
-3. `_guardDilatacao`
-4. `_guardBlefariteLiteral`
-5. `_guardAssociacaoATB`
-6. `_guardClasseAntibioticoSemFala`
-7. `_guardColirioMantidoSemTratamento`
-8. `_guardColirioBlefariteProtocolo`
-9. `_guardColirioBlefariteSemPrescricao`
-10. `_guardCondutaContaminada`
-11. `_guardMultifocalSemEvidencia`
-12. `_guardManutencaoOculos`
-13. `_guardAntecedentesNegativaFabricada`
-14. `_guardComorbidadesNegativaFabricada`
-15. `_guardPseudofaciaSemEvidencia`
-16. `_guardNervoOpticoSemEvidencia`
-17. `_guardOculosNaConduta`
-18. `_guardPresbiopiaObrigatoria`
+Lista tirada do código em 2026-11-10. Inclui a normalização de tipos, os guards, a reconciliação das flags e os avisos.
 
-O histórico de cada falha que gerou um guard está nas memórias relacionadas abaixo e na [linha do tempo](../historico/linha-do-tempo.md). O [Agente de medicamentos](medicamentos-agent.md) roda em modo sombra ao lado deste pipeline.
+1. `_normalizarTiposDados`
+2. `_guardTranscricaoIncoerente`
+3. `_guardExamesNormaisFase2`
+4. `_guardDilatacao`
+5. `_guardBlefariteLiteral`
+6. `_guardAssociacaoATB`
+7. `_guardClasseAntibioticoSemFala`
+8. `_guardMedicamentoNomeadoNaFala`
+9. `_guardColirioMantidoSemTratamento`
+10. `_guardColirioBlefariteProtocolo`
+11. `_guardColirioBlefariteSemPrescricao`
+12. `_guardCondutaContaminada`
+13. `_guardLubrificanteGenerico`
+14. `_guardMultifocalSemEvidencia`
+15. `_guardManutencaoOculos`
+16. `_guardAntecedentesNegativaFabricada`
+17. `_guardComorbidadesNegativaFabricada`
+18. `_guardPseudofaciaSemEvidencia`
+19. `_guardNervoOpticoSemEvidencia`
+20. `_guardOculosNaConduta`
+21. `_guardPresbiopiaObrigatoria`
+22. `_ordenaOlhosODPrimeiro`
+23. `_sombraMedicamentos`
+24. `_reconcileInjectFlags`
+25. `_avisoBiomicroscopiaOrfa`
+26. `_avisoFundoscopiaInterpretativa`
+
+## Não falha aberto (2026-11-10)
+
+Antes, os guards rodavam em fila sem isolamento: uma exceção em qualquer um derrubava todos, e o painel recuava para a resposta crua do modelo e a injetava. Bastava `diagnostico` vir como lista.
+
+- **Tipos normalizados antes dos guards.** Lista de textos é unida sem perda; objeto, número ou lista de objetos vira texto e é marcado como inesperado.
+- **Cada passo roda isolado.** O que falha é registrado em `guardsFalhos` e os outros seguem.
+- **Verificação incompleta segura a injeção.** A decisão devolve `segurarInjecao` e `motivoSegurar`; o painel mostra os campos com aviso e não injeta sozinho.
+- **Porta única no painel.** `_aplicarDecisionEngine` (em `scripts/sidepanel-audio.js`) serve o fluxo normal e o "Não era dilatação"; motor ausente ou que lança também segura a injeção.
+
+Testes `[DE-ABERTO-1]` a `[DE-ABERTO-9]`.
+
+O histórico de cada falha que gerou um guard está nas memórias relacionadas abaixo e na [linha do tempo](../historico/linha-do-tempo.md). O "modo sombra" de medicamentos deste pipeline usa só o [Léxico](../modulos/medicamentos-lexico.md); o [Agente de medicamentos](medicamentos-agent.md) está estacionado.
 
 ## Memórias relacionadas
 

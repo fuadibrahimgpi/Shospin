@@ -12,6 +12,8 @@ aliases: ["content-script"]
 
 Content script que injeta os dados nos campos do SHOSP. A v5.1.4 corrigiu o salvamento de Atendimento/Conduta/Retorno: o SHOSP salva lendo o `<textarea>` oculto `prontuario_resp_<servico>_<campo>`, que o Froala só sincroniza na digitação real; `setFroalaValue` agora grava também esse textarea. Ver [Froala model-desync](../memorias/froala-model-desync-saving.md).
 
+Desde 2026-11-09 também escreve o laudo de OCT no campo OCT da aba Glaucoma (`injectOctLaudo`), achando o campo pelo rótulo — ver [Agente de OCT](../agentes/gemini-oct-agent.md). As ações que ele trata estão registradas em [Mensagens entre as peças](mensagens.md); os handlers `getFieldMapping` e `refreshFieldDetector`, que ninguém enviava, saíram em 2026-11-10 (para depurar, `window.ShospExtension.fieldDetector` no console da aba).
+
 ## Memórias relacionadas
 
 - [cid-busca-exige-secao-visivel](../memorias/cid-busca-exige-secao-visivel.md): A busca de CID do SHOSP só executa com a seção C.I.D. VISÍVEL — oculta, o painel mostra o histórico e ele era lido como resultado

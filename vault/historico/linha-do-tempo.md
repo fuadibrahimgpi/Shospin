@@ -1,6 +1,6 @@
 ---
 title: Linha do tempo
-date: 2026-10-22
+date: 2026-11-10
 tags: [historico]
 ---
 
@@ -11,8 +11,40 @@ Commits do repositório e memórias de log, do mais recente ao mais antigo.
 Up: [Histórico](INDEX.md) · Related: [Changelog v5.1](changelog-v5.1.md)
 
 
+## 2026-11
+
+- 2026-11-10 · commit: `ddfda66` docs: README reescrito sobre o projeto real e CLAUDE.md com as regras de trabalho
+- 2026-11-10 · commit: `8ad3c9b` fix(agentes): agente de medicamentos estacionado — e o recheck volta a carregar no painel
+- 2026-11-10 · commit: `df488b7` refactor(mensagens): contrato unico das mensagens entre painel, aba, background e paginas
+- 2026-11-10 · commit: `94a36e7` feat(camera): permissao negada leva a pagina de liberacao, como ja acontecia com o microfone
+- 2026-11-10 · commit: `13778a6` fix(permissao): paginas de microfone e camera ganham os scripts que nunca existiram
+- 2026-11-10 · commit: `3968fa7` fix(painel,mensagens): painel unico apos o worker dormir e limite de tempo no sendToTab
+- 2026-11-10 · commit: `835bb8a` fix(decision-engine): verificador clinico nao falha mais aberto — guards isolados e injecao segurada
+- 2026-11-10 · commit: `c245163` fix(guards,ocr,asr): pendencias de 2026-11-09 — achados F4-F6 da simulacao, resgate de S.E. e mapeamento de retina
+- 2026-11-10 · nota: [Análise de estrutura e correções](../analise-estrutura-2026-11-10.md): 15 achados; verificador que falhava aberto, painel duplicado, recheck que não carregava
+- 2026-11-09 · commit: `fc703ab` fix(oct): espera o editor Froala do campo OCT antes de injetar
+- 2026-11-09 · commit: `85a49c6` feat(oct): laudo de OCT para glaucoma injetado no campo OCT da aba Glaucoma
+- 2026-11-09 · commit: `dfa334b` fix(guard-2g): negacao depois do nome e troca de remedio deixam o guard em silencio
+- 2026-11-09 · commit: `054decf` fix(medicamentos): nome dito vence a classe; variantes de ASR de bimatoprosta/timolol
+- 2026-11-09 · memória: [laudo-oct-modo-painel](../memorias/laudo-oct-modo-painel.md): Modo OCT do painel (2026-11-09) injeta o laudo da skill de OCT glaucoma no campo OCT da aba Glaucoma; rótulo/ID real do campo NUNCA conferido no DOM — PENDENTE
+- 2026-11-08 · commit: `3b1ace9` fix(gatilhos,guard-8): condicional nao injeta exames normais; laser e outro medico derrubam negativa
+- 2026-11-08 · commit: `c12d2a8` fix(guard-5c): fundoscopia perde so o trecho de nervo que afirma doenca
+- 2026-11-07 · commit: `d0dae6f` fix(skills): conduta nao cita skill-melhoria-continua (aposentada no skills-claude)
+- 2026-11-07 · commit: `734ada7` fix(skills): descricoes cobrem os 3 erros de roteamento da simulacao
+- 2026-11-07 · commit: `adb2b10` feat(skills): revisao-final antes do passo final de cada skill
+- 2026-11-07 · commit: `9de9479` feat: OCR v5.5.0, guards clinicos, mic mudo e skills subordinadas ao codigo
+- 2026-11-07 · nota: [Revisão da estrutura do agente e das skills](../revisao-estrutura-agente-2026-11-07.md): autoridade única (o código), testes de sincronia para todas as skills
+- 2026-11-07 · memória: [simulacao-coordenador-skills](../memorias/simulacao-coordenador-skills.md): Simulação 2026-11-07 de agente coordenador das skills clínicas — descartado; descrições ajustadas dão 48/48; `mestre` é a ATUAL (consultorio-evidencia é a aposentada)
+- 2026-11-05 · commit: `484cfb2` fix(camera): abertura automatica tolera webcams abaixo de 1920x1080
+- 2026-11-05 · memória: [lubrificante-registro-padrao](../memorias/lubrificante-registro-padrao.md): "lubrificante(s)" dito pelo médico vira "Carmelose sódica ou hialuronato de sódio" no tratamento (decisão 2026-11-05); marca/princípio dito vence
+
 ## 2026-10
 
+- 2026-10-30 · commit: `29ac5b8` feat(medicamentos): auto-feedback - captura de palavras novas e fila de revisao
+- 2026-10-30 · commit: `d9a9cb3` feat(medicamentos): principio ativo primeiro, marca dita entre parenteses
+- 2026-10-30 · commit: `fc14cd3` perf(injecao): paraleliza sondagem de abas e leitura do slot; remove esperas fixas
+- 2026-10-23 · commit: `97c90c7` fix(antecedentes/cid): resposta sistêmica embolada com indício não vira "Nega comorbidades"
+- 2026-10-23 · commit: `9e9df8e` docs(vault): cofre Obsidian com agentes, skills, modulos, memorias e historico vinculados
 - 2026-10-22 · commit: `b6bacef` feat(conduta/exames): catalogo unico de exames + rede deterministica para o OCT omitido
 
 ## 2026-09

@@ -1,17 +1,20 @@
 ---
 title: Agentes
-date: 2026-10-22
+date: 2026-11-10
 tags: [indice, agentes]
 ---
 
 # Agentes
 
-Agentes e subagentes do projeto: os dois agentes Gemini (entrevista e exames), o motor de guards, o contrato dos subagentes e o runner de voz.
+Agentes e subagentes do projeto: os três agentes Gemini (entrevista, exames e OCT), o motor de guards, o recheck de fidelidade, o auto-feedback de medicações, o contrato dos subagentes e o runner de voz.
 
 Up: [Cofre](../INDEX.md)
 
 - [Agente de entrevista (Gemini)](gemini-interview-agent.md): Analisa a transcrição da consulta e devolve JSON (HDA, diagnóstico, conduta, tratamento…); contém o prompt clínico completo.
 - [Agente de exames (OCR Gemini)](gemini-exam-agent.md): Lê o ticket do autorefrator TOPCON por imagem: refração, tonometria, paquimetria, com validações e bloqueio por incerteza.
+- [Agente de OCT (laudo de glaucoma)](gemini-oct-agent.md): Lê imagem ou PDF de OCT de glaucoma e gera o laudo do campo OCT da aba Glaucoma, com alertas que seguram a injeção.
+- [Auto-feedback de medicações](medicamentos-feedback.md): Captura palavras que parecem remédio e o léxico não conhece; fila de revisão do médico. Nunca altera o léxico sozinho.
+- [Recheck de fidelidade](recheck-agent.md): Compara o enviado com o que ficou no prontuário; só relata. Não carregava no painel até 2026-11-10.
 - [Agente de medicamentos](medicamentos-agent.md): **ESTACIONADO desde 2026-11-10** — fora do painel, só os testes o chamam (falta `analisar()`). Subagente planejado para o campo tratamento: roteamento, validação por léxico e hierarquia de nomeação (princípio, protocolo, classe, genérico).
 - [Contrato dos subagentes](agent-contract.md): Forma comum de todo subagente da conduta (nome, campo, detectar, validar, formatar, analisar) e a defesa por evidência literal.
 - [DecisionEngine (guards pós-LLM)](decision-engine.md): Ponto autoritativo de segurança clínica: aplica guards determinísticos à resposta do Gemini sem mutar a resposta crua.

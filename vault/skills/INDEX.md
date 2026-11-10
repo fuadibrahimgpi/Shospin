@@ -1,6 +1,6 @@
 ---
 title: Skills
-date: 2026-10-22
+date: 2026-11-10
 tags: [indice, skills]
 ---
 
@@ -17,5 +17,6 @@ Up: [Cofre](../INDEX.md)
 - [Fundoscopia (skill)](fundoscopia-oftalmologia.md): Descreve o campo fundoscopia (segmento posterior / fundo de olho) em consultas oftalmológicas a partir de transcrições
 - [Gatilhos e injeção (skill)](gatilhos-injecao-oftalmologia.md): Regras e exemplos dos gatilhos de voz e da injeção automática; listas completas em config/clinical-triggers.js
 - [OCR TOPCON (skill)](ocr-topcon-oftalmologia.md): Interpreta e organiza dados de tickets de autorefrator TOPCON para prontuários oftalmológicos
+- [Revisão final (skill)](revisao-final.md): Revisão obrigatória antes do passo final de qualquer outra skill; não tem regra clínica própria
 - [Simulador (skill)](simulador-oftalmologia.md): Contexto do simulador de consulta para alunos (projeto de ensino, não da extensão)
 - [Transcrição da consulta (skill)](transcricao-consulta-oftalmologia.md): Extrai HDA, antecedentes, diagnóstico e flags de injeção da transcrição; delega conduta, biomicroscopia e fundoscopia

@@ -8131,6 +8131,79 @@ test('[DOC-5] os testes citados no CLAUDE.md como travas existem de fato', () =>
 });
 
 // ──────────────────────────────────────────────────────────────────────────────
+// VAULT ACOMPANHA O CÓDIGO (análise de estrutura 2026-11-10, item 12)
+// ──────────────────────────────────────────────────────────────────────────────
+// O vault ficou três semanas sem saber do agente de OCT, do recheck, do
+// auto-feedback e da skill revisao-final. Estes testes não julgam o texto das
+// páginas — só garantem que peça nova não fica sem página.
+
+const _todoOVault = (() => {
+  const pathMod = require('path');
+  const raiz = pathMod.join(__dirname, '..', 'vault');
+  const textos = [];
+  (function andar(dir) {
+    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (e.name.startsWith('.')) continue;
+      const p = pathMod.join(dir, e.name);
+      if (e.isDirectory()) andar(p);
+      else if (e.name.endsWith('.md')) textos.push(fs.readFileSync(p, 'utf8'));
+    }
+  })(raiz);
+  return textos.join('\n');
+})();
+
+test('[VAULT-1] todo agente, todo arquivo de config/ e toda skill tem página no vault', () => {
+  const pathMod = require('path');
+  const raiz = pathMod.join(__dirname, '..');
+  const semPagina = [];
+
+  // Agentes e config: alguma página precisa citar o caminho do arquivo-fonte.
+  const fontes = [
+    ...fs.readdirSync(pathMod.join(raiz, 'src', 'agents')).filter(f => f.endsWith('.js')).map(f => 'src/agents/' + f),
+    ...fs.readdirSync(pathMod.join(raiz, 'src')).filter(f => /^gemini-.*-agent\.js$/.test(f)).map(f => 'src/' + f),
+    ...fs.readdirSync(pathMod.join(raiz, 'config')).filter(f => f.endsWith('.js')).map(f => 'config/' + f),
+    'src/DecisionEngine.js', 'src/content.js', 'src/background.js',
+  ];
+  for (const f of fontes) {
+    if (!_todoOVault.includes('`' + f + '`')) semPagina.push(f);
+  }
+
+  // Skills: uma página com o mesmo nome da pasta.
+  const pastaSkills = pathMod.join(raiz, 'skills', 'user');
+  for (const e of fs.readdirSync(pastaSkills, { withFileTypes: true })) {
+    if (!e.isDirectory()) continue;
+    if (!fs.existsSync(pathMod.join(raiz, 'vault', 'skills', e.name + '.md'))) semPagina.push('skills/user/' + e.name);
+  }
+  expect(semPagina).toEqual([]);
+});
+
+test('[VAULT-2] o índice do vault conta as skills e as memórias que existem de fato', () => {
+  const pathMod = require('path');
+  const raiz = pathMod.join(__dirname, '..');
+  const indice = readSrcNormalized('vault', 'INDEX.md');
+  const nSkills = fs.readdirSync(pathMod.join(raiz, 'skills', 'user'), { withFileTypes: true }).filter(e => e.isDirectory()).length;
+  const nMemorias = fs.readdirSync(pathMod.join(raiz, 'vault', 'memorias')).filter(f => f.endsWith('.md') && f !== 'INDEX.md').length;
+  expect(indice).toContain(`as ${nSkills} skills`);
+  expect(indice).toContain(`${nMemorias} notas`);
+});
+
+test('[VAULT-3] a página do DecisionEngine lista os passos que o código roda, na mesma ordem', () => {
+  const de = readSrcNormalized('src', 'DecisionEngine.js');
+  const noCodigo = [...de.slice(de.indexOf('  function buildDecision(')).matchAll(/rodar\('(_[A-Za-z0-9]+)'/g)].map(m => m[1]);
+  const pagina = readSrcNormalized('vault', 'agentes', 'decision-engine.md');
+  const naPagina = [...pagina.matchAll(/^\d+\. `(_[A-Za-z0-9]+)`$/gm)].map(m => m[1]);
+  expect(noCodigo.length > 20).toBe(true);
+  expect(naPagina).toEqual(noCodigo);
+});
+
+test('[VAULT-4] o vault não carrega nome próprio nem caminho de pasta da máquina nas notas novas', () => {
+  for (const nota of ['lubrificante-registro-padrao', 'laudo-oct-modo-painel', 'simulacao-coordenador-skills']) {
+    const texto = readSrcNormalized('vault', 'memorias', nota + '.md');
+    expect(/[A-Z]:\\/.test(texto)).toBe(false);
+  }
+});
+
+// ──────────────────────────────────────────────────────────────────────────────
 // RELATÓRIO FINAL
 // ──────────────────────────────────────────────────────────────────────────────
 

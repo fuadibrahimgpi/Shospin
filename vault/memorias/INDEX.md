@@ -1,12 +1,14 @@
 ---
 title: Memórias
-date: 2026-10-22
+date: 2026-11-10
 tags: [indice, memoria]
 ---
 
 # Memórias
 
 Cópia das memórias persistentes do Claude Code deste projeto. Cada nota liga aos agentes, skills e módulos que ela afeta.
+
+Sincronizada em 2026-11-10. Três notas de rotina não foram copiadas: as regras de commit e de onde editar estão no `CLAUDE.md` da raiz do repositório, e o inventário de pastas da máquina não é conhecimento do projeto.
 
 Up: [Cofre](../INDEX.md)
 
@@ -29,8 +31,11 @@ Up: [Cofre](../INDEX.md)
 - [exame-nomeado-por-deducao](exame-nomeado-por-deducao.md): nome de exame na conduta só pode vir da fala do médico; H400 não acompanha OCT/campo visual por padrão
 - [ordem-olhos-od-antes-de-oe](ordem-olhos-od-antes-de-oe.md): Em qualquer descrição por olho, OD vem sempre antes de OE — ordem do prontuário, nunca a da fala
 
-## Projeto (estado e logs) (37)
+## Projeto (estado e logs) (40)
 
+- [lubrificante-registro-padrao](lubrificante-registro-padrao.md): "lubrificante(s)" dito pelo médico vira "Carmelose sódica ou hialuronato de sódio" no tratamento (decisão 2026-11-05); marca/princípio dito vence
+- [laudo-oct-modo-painel](laudo-oct-modo-painel.md): Modo OCT do painel (2026-11-09) injeta o laudo da skill de OCT glaucoma no campo OCT da aba Glaucoma; rótulo/ID real do campo NUNCA conferido no DOM — PENDENTE
+- [simulacao-coordenador-skills](simulacao-coordenador-skills.md): Simulação 2026-11-07 de agente coordenador das skills clínicas — descartado; descrições ajustadas dão 48/48; `mestre` é a ATUAL (consultorio-evidencia é a aposentada)
 - [nested-duplicate-folder](project_nested_duplicate.md): A pasta aninhada shosp-extension-v5.1.0/ é uma cópia stale — editar apenas os scripts da raiz
 - [froala-model-desync-saving](froala-model-desync-saving.md): Por que Atendimento/Conduta não salvavam e o fix da ponte Froala (mundo principal)
 - [gemini-service-modularizado](gemini-service-modularizado.md): Prompt clínico e regras de conduta agora vivem em src/gemini-interview-agent.js, não mais em geminiService.js (que virou fachada)

@@ -53,6 +53,7 @@ OCT ──► Gemini (laudo) ──► alertas ──► injeção no campo OCT
 | Background | `src/background.js` | abre o painel (um só) e repassa os atalhos |
 | Fila de dilatação | `scripts/dilatacao-pausas.js` | guarda a consulta de quem está dilatando |
 | Chamada ao Gemini | `src/ApiService.js` | repetição com espera crescente, limite de 30 pedidos por minuto e 200 por hora |
+| Configuração do Gemini | `config/gemini.js` | modelo, endereço e chave num lugar só; a chave vai no cabeçalho e fica só neste navegador |
 
 Três princípios seguram a segurança clínica:
 
@@ -68,7 +69,7 @@ O agente em `src/agents/medicamentos-agent.js` está estacionado: fica no reposi
 |---|---|
 | `src/` | agentes, DecisionEngine, content script, background |
 | `scripts/` | scripts do painel e das páginas de configuração e permissão |
-| `config/` | gatilhos de voz, léxico de medicamentos, registro das mensagens |
+| `config/` | gatilhos de voz, léxico de medicamentos, registro das mensagens, configuração do Gemini |
 | `utils/` | testes |
 | `scripts-dev/` | executores de `npm test` e `npm run check` |
 | `skills/user/` | skills que documentam as regras clínicas |

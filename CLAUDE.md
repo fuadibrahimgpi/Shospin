@@ -52,6 +52,7 @@ O dono do projeto é médico oftalmologista e não programa. Responda em portugu
 |---|---|
 | frases que disparam ações na gravação | `config/clinical-triggers.js` |
 | nomes de medicamentos | `config/medicamentos-lexico.js` |
+| modelo, endereço e chave do Gemini | `config/gemini.js` |
 | regras que o modelo segue | `src/gemini-interview-agent.js`, `src/gemini-exam-agent.js`, `src/gemini-oct-agent.js` |
 | correções depois do modelo | `src/DecisionEngine.js` |
 | textos-padrão injetados e estado da sessão | `scripts/sidepanel-constants.js` |

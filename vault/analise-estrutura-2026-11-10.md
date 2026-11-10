@@ -31,7 +31,7 @@ A linha principal conversa bem: voz → entrevista → guards → injeção → 
 | 11 | Sem `CLAUDE.md`: regras de trabalho só na memória privada do assistente | criado |
 | 12 | Vault era retrato de 2026-10-22 | atualizado nesta data |
 | 13 | Pendências da revisão de 07/11 nas skills (tamanho, referências antigas, skills de ensino) | pendente |
-| 14 | Chave do Gemini na URL e em armazenamento sincronizado; modelo fixo em três lugares | pendente |
+| 14 | Chave do Gemini na URL e em armazenamento sincronizado; modelo fixo em três lugares | corrigido — ver [Configuração do Gemini](modulos/gemini-config.md) |
 | 15 | Ferramentas: teste de integração num arquivo só, sem CI, sem `.gitattributes` | pendente (a checagem de sintaxe já cobre `config/`) |
 
 ## O achado que a análise não previu

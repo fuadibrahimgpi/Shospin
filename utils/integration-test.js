@@ -8204,6 +8204,148 @@ test('[VAULT-4] o vault não carrega nome próprio nem caminho de pasta da máqu
 });
 
 // ──────────────────────────────────────────────────────────────────────────────
+// GEMINI: MODELO NUM LUGAR SÓ, CHAVE NO CABEÇALHO E SÓ NO NAVEGADOR (item 14)
+// ──────────────────────────────────────────────────────────────────────────────
+
+const ShospGeminiT = require('../config/gemini.js');
+
+// Todos os .js e .html de produção (sem testes, sem .bak).
+const _fontesDeProducao = () => {
+  const pathMod = require('path');
+  const raiz = pathMod.join(__dirname, '..');
+  const lista = [];
+  for (const dir of ['src', 'src/agents', 'scripts', 'config']) {
+    for (const f of fs.readdirSync(pathMod.join(raiz, dir))) {
+      if (f.endsWith('.js')) lista.push(dir + '/' + f);
+    }
+  }
+  for (const f of fs.readdirSync(raiz)) if (f.endsWith('.html')) lista.push(f);
+  return lista;
+};
+
+// Storage falso: dois compartimentos, com falhas programáveis.
+function _fakeStorageGemini({ local = {}, sync = {}, falhaSetLocal = false, setLocalNaoGrava = false, falhaSync = false } = {}) {
+  const log = { removidasDoSync: [] };
+  const area = (dados, opcoes) => ({
+    get: async (chaves) => {
+      if (opcoes.falha) throw new Error('indisponível');
+      const out = {};
+      for (const k of chaves) if (k in dados) out[k] = dados[k];
+      return out;
+    },
+    set: async (obj) => {
+      if (opcoes.falhaSet) throw new Error('quota');
+      if (!opcoes.naoGrava) Object.assign(dados, obj);
+    },
+    remove: async (k) => {
+      if (opcoes.falha) throw new Error('indisponível');
+      if (opcoes.registra) log.removidasDoSync.push(k);
+      delete dados[k];
+    },
+  });
+  return {
+    log, local, sync,
+    storage: {
+      local: area(local, { falhaSet: falhaSetLocal, naoGrava: setLocalNaoGrava }),
+      sync: area(sync, { falha: falhaSync, registra: true }),
+    },
+  };
+}
+
+test('[GEMINI-1] o nome do modelo aparece em UM arquivo só', () => {
+  const comModelo = _fontesDeProducao().filter(f => /gemini-\d/.test(readSrcNormalized(...f.split('/'))));
+  expect(comModelo).toEqual(['config/gemini.js']);
+  expect(ShospGeminiT.endpoint('v1')).toBe(`https://generativelanguage.googleapis.com/v1/models/${ShospGeminiT.MODELO}:generateContent`);
+  expect(ShospGeminiT.endpoint('v1beta').includes('/v1beta/models/' + ShospGeminiT.MODELO)).toBe(true);
+});
+
+test('[GEMINI-2] nenhuma fonte monta URL com a chave nem usa storage.sync fora de config/gemini.js', () => {
+  const comChaveNaUrl = _fontesDeProducao()
+    .filter(f => readSrcNormalized(...f.split('/')).split('\n').some(l => /[?&]key=/.test(l) && !/^\s*(\/\/|\*|\/\*)/.test(l)));
+  expect(comChaveNaUrl).toEqual([]);
+  const comSync = _fontesDeProducao().filter(f => /storage\.sync/.test(readSrcNormalized(...f.split('/'))));
+  expect(comSync).toEqual(['config/gemini.js']);
+  // Os dois HTML carregam a configuração ANTES de quem a usa.
+  const painel = readSrcNormalized('sidepanel.html');
+  expect(painel.indexOf('config/gemini.js') > 0 && painel.indexOf('config/gemini.js') < painel.indexOf('src/ApiService.js')).toBe(true);
+  const opcoes = readSrcNormalized('config.html');
+  expect(opcoes.indexOf('config/gemini.js') > 0 && opcoes.indexOf('config/gemini.js') < opcoes.indexOf('scripts/config.js')).toBe(true);
+});
+
+async function _geminiTests() {
+  const K = ShospGeminiT.CHAVE_STORAGE;
+
+  await testAsync('[GEMINI-3] a requisição REAL do ApiService leva a chave no cabeçalho e não na URL', async () => {
+    const vm = require('vm');
+    const chamadas = [];
+    const fake = _fakeStorageGemini({ local: { [K]: 'AIza-chave-de-teste' } });
+    const ctx = vm.createContext({
+      console: { log() {}, warn() {}, error() {}, info() {} },
+      chrome: { storage: fake.storage },
+      setTimeout, clearTimeout, AbortController,
+      fetch: async (url, init) => {
+        chamadas.push({ url, init });
+        return { ok: true, json: async () => ({ candidates: [{ finishReason: 'STOP', content: { parts: [{ text: '{"ok":true}' }] } }] }) };
+      },
+    });
+    for (const arq of ['src/Logger.js', 'config/gemini.js', 'src/ApiService.js']) {
+      vm.runInContext(readSrcNormalized(...arq.split('/')), ctx, { filename: arq });
+    }
+    const resp = await vm.runInContext("apiService.callGeminiAPI([{ text: 'oi' }], { responseMimeType: 'application/json' })", ctx);
+    expect(resp.text).toBe('{"ok":true}');
+    expect(chamadas.length).toBe(1);
+    expect(chamadas[0].url.includes('AIza')).toBe(false);
+    expect(/[?&]key=/.test(chamadas[0].url)).toBe(false);
+    expect(chamadas[0].url).toBe(ShospGeminiT.endpoint('v1beta')); // JSON pede o endpoint beta
+    expect(chamadas[0].init.headers['x-goog-api-key']).toBe('AIza-chave-de-teste');
+    expect(chamadas[0].init.headers['Content-Type']).toBe('application/json');
+    expect(JSON.parse(chamadas[0].init.body).contents[0].parts[0].text).toBe('oi');
+  });
+
+  await testAsync('[GEMINI-4] migração: chave do sync vai para o local, é conferida e só então sai do sync', async () => {
+    const f = _fakeStorageGemini({ sync: { [K]: 'AIza-antiga' } });
+    expect(await ShospGeminiT.lerChave(f.storage)).toBe('AIza-antiga');
+    expect(f.local[K]).toBe('AIza-antiga');
+    expect(K in f.sync).toBe(false);
+    expect(f.log.removidasDoSync).toEqual([K]);
+    // Segunda leitura: vem do local, sem tocar no sync.
+    expect(await ShospGeminiT.lerChave(f.storage)).toBe('AIza-antiga');
+    expect(f.log.removidasDoSync.length).toBe(1);
+    // Local e sync diferentes: o local manda.
+    const g = _fakeStorageGemini({ local: { [K]: 'AIza-nova' }, sync: { [K]: 'AIza-velha' } });
+    expect(await ShospGeminiT.lerChave(g.storage)).toBe('AIza-nova');
+    // Nenhuma chave em lugar nenhum.
+    expect(await ShospGeminiT.lerChave(_fakeStorageGemini().storage)).toBe(null);
+  });
+
+  await testAsync('[GEMINI-5] migração que falha NUNCA deixa o médico sem chave', async () => {
+    // Não conseguiu gravar no local: devolve a chave e mantém no sync.
+    const a = _fakeStorageGemini({ sync: { [K]: 'AIza-antiga' }, falhaSetLocal: true });
+    expect(await ShospGeminiT.lerChave(a.storage)).toBe('AIza-antiga');
+    expect(a.sync[K]).toBe('AIza-antiga');
+    // "Gravou" mas a releitura não confirma: não apaga do sync.
+    const b = _fakeStorageGemini({ sync: { [K]: 'AIza-antiga' }, setLocalNaoGrava: true });
+    expect(await ShospGeminiT.lerChave(b.storage)).toBe('AIza-antiga');
+    expect(b.sync[K]).toBe('AIza-antiga');
+    expect(b.log.removidasDoSync).toEqual([]);
+    // Sync indisponível: sem chave local, devolve null sem lançar.
+    const c = _fakeStorageGemini({ falhaSync: true });
+    expect(await ShospGeminiT.lerChave(c.storage)).toBe(null);
+  });
+
+  await testAsync('[GEMINI-6] salvar grava só no navegador e tira a cópia antiga do sync', async () => {
+    const f = _fakeStorageGemini({ sync: { [K]: 'AIza-velha' } });
+    expect(await ShospGeminiT.salvarChave(f.storage, 'AIza-nova')).toBe(true);
+    expect(f.local[K]).toBe('AIza-nova');
+    expect(K in f.sync).toBe(false);
+    // Sync fora do ar não impede salvar.
+    const g = _fakeStorageGemini({ falhaSync: true });
+    expect(await ShospGeminiT.salvarChave(g.storage, 'AIza-nova')).toBe(true);
+    expect(g.local[K]).toBe('AIza-nova');
+  });
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
 // RELATÓRIO FINAL
 // ──────────────────────────────────────────────────────────────────────────────
 
@@ -8216,6 +8358,7 @@ test('[VAULT-4] o vault não carrega nome próprio nem caminho de pasta da máqu
   _estaticaRetryTests();
   await _painelUnicoETimeoutTests();
   await _paginasPermissaoTests();
+  await _geminiTests();
 
   console.log('\n');
   console.log('═══════════════════════════════════════════════════');

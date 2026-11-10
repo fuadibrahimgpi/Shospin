@@ -22,6 +22,11 @@
  *   - injectFlags       — { injectExamesNormais, injectBlefarite, dilatacao }
  *                         JÁ reconciliados com hooks (mutual exclusion aplicado)
  *   - guardsApplied     — array de strings descrevendo o que foi alterado
+ *   - guardsFalhos      — [{ guard, erro }] guards que lançaram exceção (os demais rodaram)
+ *   - camposInesperados — campos de `dados` que não vieram como texto nem lista de textos
+ *   - segurarInjecao    — true quando a verificação ficou incompleta: o painel mostra
+ *                         os campos para conferência e NÃO injeta sozinho
+ *   - motivoSegurar     — texto do motivo (null quando segurarInjecao é false)
  *   - metadata          — { requestId, timestamp, engineVersion, tipoConsulta }
  *
  * Uso:
@@ -1833,67 +1838,147 @@
     }
   }
 
+  // ------------------------------------------------------------------
+  // Tipos dos campos + isolamento dos guards (o motor NÃO pode falhar aberto)
+  // ------------------------------------------------------------------
+  // Antes: os guards rodavam em fila, sem isolamento. Uma exceção em qualquer um
+  // derrubava buildDecision inteiro, e o painel recuava para a resposta CRUA do
+  // modelo e a injetava — a rede contra alucinação sumia justamente quando o
+  // modelo saía do formato. Bastava `diagnostico` vir como lista
+  // (`diagnostico.split is not a function`).
+  //
+  // Agora: (1) os campos de `dados` são normalizados para texto antes dos guards;
+  // (2) cada guard roda isolado — o que falha é registrado e os outros seguem;
+  // (3) qualquer falha, ou campo em formato inesperado, levanta `segurarInjecao`,
+  // e o painel mostra os campos para conferência em vez de injetar sozinho.
+
+  function _achatarEmTexto(v, prefixo) {
+    if (v == null) return '';
+    if (typeof v !== 'object') return (prefixo ? prefixo + ': ' : '') + String(v);
+    const linhas = [];
+    if (Array.isArray(v)) {
+      for (const item of v) { const t = _achatarEmTexto(item, prefixo); if (t) linhas.push(t); }
+    } else {
+      for (const k of Object.keys(v)) {
+        const t = _achatarEmTexto(v[k], prefixo ? `${prefixo} ${k}` : k);
+        if (t) linhas.push(t);
+      }
+    }
+    return linhas.join('\n');
+  }
+
+  /**
+   * O prompt declara TODO campo de `dados` como "string ou null". Lista de textos
+   * é só outro jeito de escrever "um item por linha": une sem perda. Qualquer
+   * outra forma (objeto, lista de objetos, número, booleano) vira texto no melhor
+   * esforço e é devolvida como INESPERADA — o conteúdo pede olho humano.
+   * @returns {string[]} nomes dos campos em formato inesperado
+   */
+  function _normalizarTiposDados(cloned, log) {
+    const inesperados = [];
+    const dados = cloned && cloned.dados;
+    if (!dados || typeof dados !== 'object' || Array.isArray(dados)) return inesperados;
+    const textual = (x) => x == null || typeof x === 'string' || typeof x === 'number';
+    for (const campo of Object.keys(dados)) {
+      const v = dados[campo];
+      if (v == null || typeof v === 'string') continue;
+      if (Array.isArray(v) && v.every(textual)) {
+        const texto = v.filter(x => x != null && String(x).trim()).map(String).join('\n');
+        dados[campo] = texto || null;
+        log.push(`[tipos] dados.${campo} veio como lista — unido em texto, um item por linha`);
+        continue;
+      }
+      const forma = Array.isArray(v) ? 'lista de objetos' : typeof v;
+      dados[campo] = _achatarEmTexto(v) || null;
+      inesperados.push(campo);
+      log.push(`[tipos] dados.${campo} veio em formato inesperado (${forma}) — convertido em texto; conferir antes de injetar`);
+    }
+    return inesperados;
+  }
+
   function buildDecision(rawAIResponse, context) {
     const ctx = context || {};
     const cloned = _shallowCloneAIResponse(rawAIResponse);
     const guardsApplied = [];
+    const guardsFalhos = [];
+
+    // Executor isolado: um guard que lança não leva os outros junto.
+    const rodar = (nome, fn) => {
+      try {
+        return fn();
+      } catch (e) {
+        const erro = (e && e.message) || String(e);
+        guardsFalhos.push({ guard: nome.replace(/^_/, ''), erro });
+        guardsApplied.push(`[FALHA] ${nome.replace(/^_/, '')} não rodou: ${erro}`);
+        return undefined;
+      }
+    };
+
+    // Antes de qualquer guard: eles usam .split/.replace direto nos campos.
+    const camposInesperados = rodar('_normalizarTiposDados', () => _normalizarTiposDados(cloned, guardsApplied)) || [];
 
     // Guard 0: ruído/incoerência — roda ANTES e fora do bloco dados (dados pode ser null)
     if (cloned) {
-      _guardTranscricaoIncoerente(cloned, ctx, guardsApplied);
+      rodar('_guardTranscricaoIncoerente', () => _guardTranscricaoIncoerente(cloned, ctx, guardsApplied));
       // Guard 7: fase 2 pós-dilatação. Fora do bloco `dados` porque
       // injectExamesNormais vive na raiz da resposta. Precede _reconcileInjectFlags.
-      _guardExamesNormaisFase2(cloned, ctx, guardsApplied);
+      rodar('_guardExamesNormaisFase2', () => _guardExamesNormaisFase2(cloned, ctx, guardsApplied));
     }
 
     if (cloned && cloned.dados) {
-      _guardDilatacao(cloned, ctx, guardsApplied);
-      _guardBlefariteLiteral(cloned, ctx, guardsApplied);
-      _guardAssociacaoATB(cloned, ctx, guardsApplied);
-      _guardClasseAntibioticoSemFala(cloned, ctx, guardsApplied);
+      rodar('_guardDilatacao', () => _guardDilatacao(cloned, ctx, guardsApplied));
+      rodar('_guardBlefariteLiteral', () => _guardBlefariteLiteral(cloned, ctx, guardsApplied));
+      rodar('_guardAssociacaoATB', () => _guardAssociacaoATB(cloned, ctx, guardsApplied));
+      rodar('_guardClasseAntibioticoSemFala', () => _guardClasseAntibioticoSemFala(cloned, ctx, guardsApplied));
       // Antes do 2e: ele copia linhas de medicacoes_em_uso para o tratamento, e a
       // cópia tem que levar o nome, não a classe (log 2026-11-09).
-      _guardMedicamentoNomeadoNaFala(cloned, ctx, guardsApplied);
-      _guardColirioMantidoSemTratamento(cloned, ctx, guardsApplied);
+      rodar('_guardMedicamentoNomeadoNaFala', () => _guardMedicamentoNomeadoNaFala(cloned, ctx, guardsApplied));
+      rodar('_guardColirioMantidoSemTratamento', () => _guardColirioMantidoSemTratamento(cloned, ctx, guardsApplied));
       // Depois do rebaixamento da "Associação": promove o colírio genérico da
       // blefarite ao protocolo declarado (Tobramicina + dexametasona).
-      _guardColirioBlefariteProtocolo(cloned, ctx, guardsApplied);
+      rodar('_guardColirioBlefariteProtocolo', () => _guardColirioBlefariteProtocolo(cloned, ctx, guardsApplied));
       // O inverso: a linha do protocolo que o modelo escreveu sem colírio na fala sai.
-      _guardColirioBlefariteSemPrescricao(cloned, ctx, guardsApplied);
-      _guardCondutaContaminada(cloned, ctx, guardsApplied);
+      rodar('_guardColirioBlefariteSemPrescricao', () => _guardColirioBlefariteSemPrescricao(cloned, ctx, guardsApplied));
+      rodar('_guardCondutaContaminada', () => _guardCondutaContaminada(cloned, ctx, guardsApplied));
       // Depois da contaminada (traz o lubrificante da conduta) e do protocolo da
       // blefarite (que ainda lê "Lubrificante ocular" como não-colírio).
-      _guardLubrificanteGenerico(cloned, ctx, guardsApplied);
+      rodar('_guardLubrificanteGenerico', () => _guardLubrificanteGenerico(cloned, ctx, guardsApplied));
       // Antes do guard de presbiopia: PADRAO_MULTIFOCAL lê a conduta, e uma
       // conduta com tipo fabricado arrastaria H524 junto (log 2026-08-05).
-      _guardMultifocalSemEvidencia(cloned, ctx, guardsApplied);
-      _guardManutencaoOculos(cloned, ctx, guardsApplied);
-      _guardAntecedentesNegativaFabricada(cloned, ctx, guardsApplied);
-      _guardComorbidadesNegativaFabricada(cloned, ctx, guardsApplied);
+      rodar('_guardMultifocalSemEvidencia', () => _guardMultifocalSemEvidencia(cloned, ctx, guardsApplied));
+      rodar('_guardManutencaoOculos', () => _guardManutencaoOculos(cloned, ctx, guardsApplied));
+      rodar('_guardAntecedentesNegativaFabricada', () => _guardAntecedentesNegativaFabricada(cloned, ctx, guardsApplied));
+      rodar('_guardComorbidadesNegativaFabricada', () => _guardComorbidadesNegativaFabricada(cloned, ctx, guardsApplied));
       // Antes do guard de presbiopia: o veto de pseudofacia bilateral é regente
       // lá dentro — desfazer a lente depois deixaria a H52.4 apagada por uma
       // pseudofacia que já não existe (log 2026-09-02).
-      _guardPseudofaciaSemEvidencia(cloned, ctx, guardsApplied);
-      _guardNervoOpticoSemEvidencia(cloned, ctx, guardsApplied);
+      rodar('_guardPseudofaciaSemEvidencia', () => _guardPseudofaciaSemEvidencia(cloned, ctx, guardsApplied));
+      rodar('_guardNervoOpticoSemEvidencia', () => _guardNervoOpticoSemEvidencia(cloned, ctx, guardsApplied));
       // Guard de óculos e presbiopia só se não há dilatação
       const flags = ctx.hookFlags || {};
       const dilatacao = !!(cloned.dilatacaoDetectada || flags.dilatacaoDetectada);
       if (!dilatacao) {
-        _guardOculosNaConduta(cloned, ctx, guardsApplied);
-        _guardPresbiopiaObrigatoria(cloned, ctx, guardsApplied);
+        rodar('_guardOculosNaConduta', () => _guardOculosNaConduta(cloned, ctx, guardsApplied));
+        rodar('_guardPresbiopiaObrigatoria', () => _guardPresbiopiaObrigatoria(cloned, ctx, guardsApplied));
       }
       // POR ÚLTIMO no bloco `dados`: guards acima reescrevem o texto da
       // biomicroscopia (blefarite literal, lente narrativa da pseudofacia).
       // Reordenar antes deixaria a reescrita pousando na ordem antiga.
-      _ordenaOlhosODPrimeiro(cloned, guardsApplied);
-      _sombraMedicamentos(cloned, ctx, guardsApplied);
+      rodar('_ordenaOlhosODPrimeiro', () => _ordenaOlhosODPrimeiro(cloned, guardsApplied));
+      rodar('_sombraMedicamentos', () => _sombraMedicamentos(cloned, ctx, guardsApplied));
     }
 
-    const injectFlags = _reconcileInjectFlags(cloned || {}, ctx);
-    _avisoBiomicroscopiaOrfa(rawAIResponse, cloned, injectFlags, ctx, guardsApplied);
+    // Se a reconciliação falhar, nenhum template é injetado: é o lado seguro.
+    const injectFlags = rodar('_reconcileInjectFlags', () => _reconcileInjectFlags(cloned || {}, ctx)) || {
+      injectExamesNormais: false,
+      injectBlefarite: false,
+      dilatacao: !!((cloned && cloned.dilatacaoDetectada) || (ctx.hookFlags && ctx.hookFlags.dilatacaoDetectada)),
+      blefariteDescritaNoExame: false,
+    };
+    rodar('_avisoBiomicroscopiaOrfa', () => _avisoBiomicroscopiaOrfa(rawAIResponse, cloned, injectFlags, ctx, guardsApplied));
     // Depois dos guards que podem ZERAR a fundoscopia (dilatação, fase 2): não avisar
     // sobre um texto que nem vai ser injetado.
-    _avisoFundoscopiaInterpretativa(cloned, guardsApplied);
+    rodar('_avisoFundoscopiaInterpretativa', () => _avisoFundoscopiaInterpretativa(cloned, guardsApplied));
 
     const requestId = ctx.requestId ||
       (typeof crypto !== 'undefined' && crypto.randomUUID
@@ -1907,10 +1992,23 @@
       tipoConsulta:  ctx.tipoConsulta || (rawAIResponse && rawAIResponse.tipo_consulta) || null,
     };
 
+    // Verificação incompleta = o painel não injeta sozinho (ver bloco de isolamento).
+    const motivos = [];
+    if (guardsFalhos.length) {
+      motivos.push(`${guardsFalhos.length} verificação(ões) automática(s) não rodaram (${guardsFalhos.map(f => f.guard).join(', ')})`);
+    }
+    if (camposInesperados.length) {
+      motivos.push(`campo(s) em formato inesperado: ${camposInesperados.join(', ')}`);
+    }
+
     return {
       clonedAIResponse: cloned,
       injectFlags,
       guardsApplied,
+      guardsFalhos,
+      camposInesperados,
+      segurarInjecao: motivos.length > 0,
+      motivoSegurar: motivos.length ? motivos.join('; ') : null,
       diagMedicacao: _diagMedicacao(rawAIResponse, cloned, ctx, guardsApplied),
       avisos: (cloned && Array.isArray(cloned.avisos)) ? cloned.avisos : [],
       metadata,

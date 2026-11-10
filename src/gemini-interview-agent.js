@@ -323,6 +323,12 @@ class GeminiInterviewAgent {
     };
     result.dados.conduta   = _toString(result.dados.conduta);
     result.dados.tratamento = _toString(result.dados.tratamento);
+    // Lista de CIDs em vez de texto: une aqui para a troca "H52.2 → H522" abaixo
+    // alcançar todos. (Formas mais estranhas ficam para o DecisionEngine, que as
+    // converte e segura a injeção automática.)
+    if (Array.isArray(result.dados.diagnostico) && result.dados.diagnostico.every(x => typeof x === 'string')) {
+      result.dados.diagnostico = result.dados.diagnostico.filter(Boolean).join('\n') || null;
+    }
     if (typeof result.dados.diagnostico === 'string') {
       result.dados.diagnostico = result.dados.diagnostico.replace(/\b([A-Z]\d{2})\.(\d)\b/g, '$1$2');
     }

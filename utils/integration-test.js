@@ -2741,9 +2741,12 @@ test('[PRES-28] wiring: sidepanel-audio passa `pseudofacia` nas DUAS chamadas do
   // Sem esta ponte o veto nunca roda no sidepanel: o parser canônico vive em
   // sidepanel-constants e o DE não tem parser próprio de propósito.
   const src = readSrcNormalized('scripts', 'sidepanel-audio.js');
-  const chamadas = (src.match(/pseudofacia:\s*\(typeof parsePseudofaciaFromDados/g) || []).length;
-  expect(chamadas).toBe(2);
-  expect((src.match(/DecisionEngine\.buildDecision\(/g) || []).length).toBe(2);
+  // 2026-11-10: as duas chamadas viraram UMA porta (_aplicarDecisionEngine), usada
+  // pelo fluxo normal e pelo "desfazer dilatação". A ponte vive dentro dela.
+  const porta = _extractFn(src, '_aplicarDecisionEngine');
+  expect(/pseudofacia:\s*\(typeof parsePseudofaciaFromDados/.test(porta)).toBe(true);
+  expect((src.match(/DecisionEngine\.buildDecision\(/g) || []).length).toBe(1);
+  expect((src.match(/= _aplicarDecisionEngine\(data, analysisText,/g) || []).length).toBe(2);
 });
 
 test('[PRES-27] Sem contexto de pseudofacia o guard segue idêntico (não regride PRES-13/14)', () => {
@@ -6291,12 +6294,13 @@ test('[BLEF-ROTINA-6] injetor: template de blefarite gated por blefariteDescrita
 
 test('[BLEF-ROTINA-7] plumbing: a flag chega ao workingData nos DOIS sites do DecisionEngine', () => {
   const audioSrc = readSrcNormalized('scripts', 'sidepanel-audio.js');
-  const copias = audioSrc.match(
-    /workingData\.blefariteDescritaNoExame\s*=\s*decision\.injectFlags\.blefariteDescritaNoExame/g
-  ) || [];
-  expect(copias.length).toBe(2);
+  // 2026-11-10: a cópia da flag vive na porta única (_aplicarDecisionEngine), que
+  // os dois sites chamam — não há mais duas cópias para divergirem.
+  const porta = _extractFn(audioSrc, '_aplicarDecisionEngine');
+  expect(/workingData\.blefariteDescritaNoExame\s*=\s*decision\.injectFlags\.blefariteDescritaNoExame/.test(porta)).toBe(true);
+  expect((audioSrc.match(/= _aplicarDecisionEngine\(data, analysisText,/g) || []).length).toBe(2);
   // E o banner de avisos é exibido nos dois caminhos (análise normal + pós-dilatação)
-  expect((audioSrc.match(/_showClinicalWarnings\(decision\.avisos\)/g) || []).length).toBe(2);
+  expect((audioSrc.match(/_showClinicalWarnings\((?:_de\.)?decision\.avisos\)/g) || []).length).toBe(2);
 });
 
 test('[BLEF-ROTINA-8] "secreção espessa" saiu do template e dos exemplos do prompt', () => {
@@ -7327,6 +7331,132 @@ test('[AUTOSTOP-2] Despedida presente no texto ainda encerra como consulta (hook
   expect(s.get('encerrada')).toBe(true);
 });
 
+
+// ──────────────────────────────────────────────────────────────────────────────
+// O VERIFICADOR NÃO FALHA ABERTO (análise de estrutura 2026-11-10)
+// ──────────────────────────────────────────────────────────────────────────────
+// Antes: uma exceção em qualquer guard derrubava buildDecision, e o painel
+// recuava para a resposta CRUA do modelo e a injetava. Bastava `diagnostico`
+// vir como lista. Agora: tipos normalizados, guards isolados e, com verificação
+// incompleta, o painel mostra os campos e NÃO injeta sozinho.
+
+const _FALA_ABERTO = 'paciente com olho seco; prescrevi compressa morna e oculos para perto';
+
+test('[DE-ABERTO-1] diagnostico como LISTA de textos não derruba o motor e vira texto', () => {
+  const raw = {
+    tipo_consulta: 'primeira_consulta',
+    dados: { hda: 'olho seco', diagnostico: ['H041 - Olho seco', 'H524 - Presbiopia'], conduta: 'Prescrição de óculos para perto', tratamento: 'Compressa morna' },
+  };
+  const decision = DecisionEngine.buildDecision(raw, { transcribedText: _FALA_ABERTO, hookFlags: {} });
+  expect(typeof decision.clonedAIResponse.dados.diagnostico).toBe('string');
+  expect(decision.clonedAIResponse.dados.diagnostico.includes('H041 - Olho seco\n')).toBe(true);
+  expect(decision.guardsFalhos.length).toBe(0);
+  // Lista de textos é conversão sem perda: não segura a injeção.
+  expect(decision.segurarInjecao).toBe(false);
+  // A resposta crua não foi mutada.
+  expect(Array.isArray(raw.dados.diagnostico)).toBe(true);
+});
+
+test('[DE-ABERTO-2] campo como OBJETO é convertido e SEGURA a injeção automática', () => {
+  const raw = {
+    tipo_consulta: 'primeira_consulta',
+    dados: { diagnostico: { cid: 'H522', descricao: 'Astigmatismo' }, conduta: 'Prescrição de óculos', tratamento: 'Compressa morna' },
+  };
+  const decision = DecisionEngine.buildDecision(raw, { transcribedText: _FALA_ABERTO, hookFlags: {} });
+  expect(typeof decision.clonedAIResponse.dados.diagnostico).toBe('string');
+  expect(decision.clonedAIResponse.dados.diagnostico.includes('H522')).toBe(true);
+  expect(decision.camposInesperados).toEqual(['diagnostico']);
+  expect(decision.segurarInjecao).toBe(true);
+  expect(decision.motivoSegurar.includes('diagnostico')).toBe(true);
+});
+
+test('[DE-ABERTO-3] número, booleano e lista de objetos também seguram a injeção', () => {
+  const raw = {
+    tipo_consulta: 'primeira_consulta',
+    dados: { conduta: 123, tratamento: [{ nome: 'Carmelose', uso: '4x/dia' }], biomicroscopia: true },
+  };
+  const decision = DecisionEngine.buildDecision(raw, { transcribedText: _FALA_ABERTO, hookFlags: {} });
+  const d = decision.clonedAIResponse.dados;
+  expect(typeof d.conduta).toBe('string');
+  expect(typeof d.tratamento).toBe('string');
+  expect(d.tratamento.includes('Carmelose')).toBe(true);
+  expect(decision.camposInesperados.slice().sort()).toEqual(['biomicroscopia', 'conduta', 'tratamento']);
+  expect(decision.segurarInjecao).toBe(true);
+});
+
+test('[DE-ABERTO-4] guard que lança fica ISOLADO: os outros rodam e a injeção é segurada', () => {
+  const raw = {
+    tipo_consulta: 'primeira_consulta',
+    dados: { hda: 'olho seco', conduta: 'Prescrição de óculos para perto', tratamento: 'Compressa morna' },
+    injectBlefarite: true,
+  };
+  // Contexto armadilhado: o guard de presbiopia lê ctx.pseudofacia e explode.
+  const ctx = { transcribedText: _FALA_ABERTO, hookFlags: {} };
+  Object.defineProperty(ctx, 'pseudofacia', { enumerable: true, get() { throw new Error('boom'); } });
+  const decision = DecisionEngine.buildDecision(raw, ctx);
+  expect(decision.guardsFalhos.length > 0).toBe(true);
+  expect(decision.guardsFalhos.every(f => f.erro === 'boom')).toBe(true);
+  expect(decision.guardsApplied.some(g => g.startsWith('[FALHA]'))).toBe(true);
+  expect(decision.segurarInjecao).toBe(true);
+  // O guard de blefarite (independente do que falhou) rodou mesmo assim — é o [DE-1].
+  expect(decision.injectFlags.injectBlefarite).toBe(false);
+});
+
+test('[DE-ABERTO-5] consulta sadia NÃO segura a injeção (sem falso alarme)', () => {
+  const raw = {
+    tipo_consulta: 'primeira_consulta',
+    dados: { hda: 'olho seco', diagnostico: 'H041 - Olho seco', conduta: 'Prescrição de óculos para perto', tratamento: 'Compressa morna', biomicroscopia: null },
+  };
+  const decision = DecisionEngine.buildDecision(raw, { transcribedText: _FALA_ABERTO, hookFlags: {} });
+  expect(decision.guardsFalhos).toEqual([]);
+  expect(decision.camposInesperados).toEqual([]);
+  expect(decision.segurarInjecao).toBe(false);
+  expect(decision.motivoSegurar).toBe(null);
+});
+
+// _aplicarDecisionEngine é a porta do painel para o motor: extraída do fonte e
+// exercitada com motores falsos (ausente, que lança, que pede para segurar).
+const _fabricaAplicarDE = (motor, parsePseudofacia) => new Function(
+  'DecisionEngine', 'parsePseudofaciaFromDados',
+  _extractFn(audioJsSource, '_aplicarDecisionEngine') + '\nreturn _aplicarDecisionEngine;'
+)(motor, parsePseudofacia);
+
+const _DADO_CRU_ABERTO = () => ({ tipo_consulta: 'retorno', dados: { conduta: 'x', tratamento: 'y' } });
+
+test('[DE-ABERTO-6] painel SEM motor carregado segura a injeção (antes: injetava cru)', () => {
+  const r = _fabricaAplicarDE(undefined, undefined)(_DADO_CRU_ABERTO(), 'fala', {});
+  expect(r.segurar).toBe(true);
+  expect(r.decision).toBe(null);
+  expect(/não foi carregado/.test(r.motivo)).toBe(true);
+});
+
+test('[DE-ABERTO-7] motor que LANÇA segura a injeção (antes: catch "não-fatal" + dado cru)', () => {
+  const motor = { buildDecision() { throw new Error('quebrou por dentro'); } };
+  const r = _fabricaAplicarDE(motor, undefined)(_DADO_CRU_ABERTO(), 'fala', {});
+  expect(r.segurar).toBe(true);
+  expect(r.motivo.includes('quebrou por dentro')).toBe(true);
+});
+
+test('[DE-ABERTO-8] motor real + resposta malformada: painel segura; resposta sadia: painel libera', () => {
+  const aplicar = _fabricaAplicarDE(DecisionEngine, undefined);
+  const ruim = aplicar({ tipo_consulta: 'retorno', dados: { diagnostico: { cid: 'H522' }, conduta: 'x', tratamento: 'y' } }, _FALA_ABERTO, {});
+  expect(ruim.segurar).toBe(true);
+  expect(typeof ruim.workingData.dados.diagnostico).toBe('string');
+
+  const boa = aplicar({ tipo_consulta: 'retorno', dados: { diagnostico: 'H041 - Olho seco', conduta: 'Orientado retorno', tratamento: 'Compressa morna' }, injectExamesNormais: true }, _FALA_ABERTO, { blefariteInjetada: true });
+  expect(boa.segurar).toBe(false);
+  expect(boa.motivo).toBe(null);
+  // Flags reconciliadas pelo motor chegam ao dado de trabalho (hook de blefarite já injetou).
+  expect(boa.workingData.injectExamesNormais).toBe(false);
+});
+
+test('[DE-ABERTO-9] o painel não recua mais para o dado cru e barra os 3 pontos de injeção', () => {
+  // O recuo antigo: `workingData = data;` dentro de um catch.
+  expect(/workingData\s*=\s*data\s*;/.test(audioJsSource)).toBe(false);
+  // Fluxo normal, fluxo de dilatação e "desfazer dilatação".
+  expect((audioJsSource.match(/if \(_de\.segurar\)/g) || []).length).toBe(3);
+  expect((audioJsSource.match(/= _aplicarDecisionEngine\(data, analysisText,/g) || []).length).toBe(2);
+});
 
 // ──────────────────────────────────────────────────────────────────────────────
 // RELATÓRIO FINAL

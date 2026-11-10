@@ -470,6 +470,79 @@ function _showClinicalWarnings(avisos) {
   }
 }
 
+/**
+ * Passa a resposta do modelo pelo DecisionEngine e devolve o dado de trabalho.
+ *
+ * NUNCA devolve a resposta crua como se estivesse verificada. Antes, motor ausente
+ * ou exceção caíam num `catch` "não-fatal" que seguia com o dado cru e o injetava:
+ * a rede contra alucinação sumia em silêncio. Agora os três casos sem verificação
+ * completa (motor não carregado, motor lançou, motor pediu para segurar) voltam
+ * com `segurar: true`, e quem chama mostra os campos em vez de injetar.
+ *
+ * Autocontida (só argumentos + globais conferidos por typeof) para ser exercitada
+ * por _extractFn nos testes. Usada pelo fluxo normal e pelo "desfazer dilatação".
+ *
+ * @returns {{ workingData: object, decision: object|null, segurar: boolean, motivo: string|null }}
+ */
+function _aplicarDecisionEngine(data, analysisText, hookFlags) {
+  if (typeof DecisionEngine === 'undefined' || !DecisionEngine || typeof DecisionEngine.buildDecision !== 'function') {
+    return { workingData: data, decision: null, segurar: true, motivo: 'o verificador clínico (DecisionEngine) não foi carregado' };
+  }
+  try {
+    const decision = DecisionEngine.buildDecision(data, {
+      transcribedText: analysisText,
+      hookFlags: hookFlags || {},
+      // Pseudofacia AO veta H52.4 (guard de presbiopia). Calculada aqui porque
+      // o parser canônico vive no sidepanel; o DE não tem parser próprio.
+      pseudofacia: (typeof parsePseudofaciaFromDados === 'function')
+        ? parsePseudofaciaFromDados(data.dados) : null,
+      tipoConsulta: data.tipo_consulta,
+    });
+    // Resposta tratada pelo DE é a fonte autoritativa, com as flags reconciliadas.
+    const workingData = decision.clonedAIResponse;
+    workingData.injectExamesNormais = decision.injectFlags.injectExamesNormais;
+    workingData.injectBlefarite     = decision.injectFlags.injectBlefarite;
+    workingData.blefariteDescritaNoExame = decision.injectFlags.blefariteDescritaNoExame;
+    return {
+      workingData,
+      decision,
+      segurar: !!decision.segurarInjecao,
+      motivo: decision.segurarInjecao ? (decision.motivoSegurar || 'verificação automática incompleta') : null,
+    };
+  } catch (e) {
+    return { workingData: data, decision: null, segurar: true, motivo: 'o verificador clínico falhou: ' + ((e && e.message) || e) };
+  }
+}
+
+/**
+ * Verificação clínica incompleta: mostra os campos para o médico conferir e NÃO
+ * injeta. Nada se perde — os campos ficam editáveis e o botão "Injetar" segue
+ * funcionando; o que muda é que a decisão de gravar no prontuário passa a ser dele.
+ */
+function _segurarInjecaoAutomatica(workingData, transcribedText, motivo, avisos) {
+  console.warn('[DecisionEngine] Injeção automática SUSPENSA — ' + motivo);
+
+  displayAudioResults(workingData);
+
+  const transcriptionEl = document.getElementById('transcription-text');
+  if (transcriptionEl && transcribedText) transcriptionEl.value = transcribedText;
+
+  // O banner é montado com innerHTML, e o motivo pode carregar nome de campo vindo
+  // do modelo ou mensagem de exceção: escapar antes de exibir.
+  const motivoSeguro = String(motivo || 'verificação automática incompleta')
+    .replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+  _showClinicalWarnings([
+    'Injeção automática suspensa: ' + motivoSeguro + '. Confira todos os campos abaixo e clique em Injetar.',
+    ...(Array.isArray(avisos) ? avisos : []),
+  ]);
+
+  processingStatus.textContent = 'Não injetado — confira os campos e clique em Injetar';
+  statusText.textContent = 'Injeção suspensa — conferir antes de injetar';
+  statusText.style.color = '#ef4444';
+  statusText.style.fontWeight = 'bold';
+}
+
 async function processAudioInBackground(audioBlob, capturedText) {
   processingIndicator.classList.remove('hidden');
   _analiseEmAndamento = true;
@@ -625,44 +698,27 @@ async function processAudioInBackground(audioBlob, capturedText) {
       }
 
       // DecisionEngine v6 — ponto autoritativo: aplica guards clínicos e reconcilia flags.
-      // clonedAIResponse substitui `data` daqui em diante para exibição e injeção.
-      let workingData = data;
-      try {
-        if (typeof DecisionEngine !== 'undefined' && DecisionEngine.buildDecision) {
-          const decision = DecisionEngine.buildDecision(data, {
-            transcribedText: analysisText,
-            hookFlags: {
-              blefariteInjetada:      SessionFlags.blefariteInjetada,
-              examesNormaisInjetados: SessionFlags.examesNormaisInjetados,
-              dilatacaoDetectada:     SessionFlags.dilatacaoDetectada,
-            },
-            // Pseudofacia AO veta H52.4 (guard de presbiopia). Calculada aqui porque
-            // o parser canônico vive no sidepanel; o DE não tem parser próprio.
-            pseudofacia: (typeof parsePseudofaciaFromDados === 'function')
-              ? parsePseudofaciaFromDados(data.dados) : null,
-            tipoConsulta: data.tipo_consulta,
-          });
-          if (decision.guardsApplied.length > 0) {
-            // Texto, não array: o DevTools colapsa "Array(4)" e a cópia do console
-            // perde o conteúdo (log 2026-11-04).
-            console.log('[DecisionEngine] Guards aplicados:\n  ' + decision.guardsApplied.join('\n  '));
-          }
-          if (decision.diagMedicacao) console.log(decision.diagMedicacao);
-          console.log('[DecisionEngine] Flags reconciliadas:', decision.injectFlags,
-            '| requestId:', decision.metadata.requestId);
-          _showClinicalWarnings(decision.avisos);
-
-          // Usar resposta tratada pelo DE como fonte autoritativa
-          workingData = decision.clonedAIResponse;
-          // Copiar flags reconciliadas de volta para o objeto de trabalho
-          workingData.injectExamesNormais = decision.injectFlags.injectExamesNormais;
-          workingData.injectBlefarite     = decision.injectFlags.injectBlefarite;
-          workingData.blefariteDescritaNoExame = decision.injectFlags.blefariteDescritaNoExame;
-          if (decision.injectFlags.dilatacao) SessionFlags.dilatacaoDetectada = true;
+      // workingData substitui `data` daqui em diante para exibição e injeção.
+      // Se a verificação ficar incompleta, _de.segurar barra a injeção automática
+      // nos dois pontos de injeção abaixo (dilatação e fluxo normal).
+      const _de = _aplicarDecisionEngine(data, analysisText, {
+        blefariteInjetada:      SessionFlags.blefariteInjetada,
+        examesNormaisInjetados: SessionFlags.examesNormaisInjetados,
+        dilatacaoDetectada:     SessionFlags.dilatacaoDetectada,
+      });
+      const workingData = _de.workingData;
+      if (_de.decision) {
+        const decision = _de.decision;
+        if (decision.guardsApplied.length > 0) {
+          // Texto, não array: o DevTools colapsa "Array(4)" e a cópia do console
+          // perde o conteúdo (log 2026-11-04).
+          console.log('[DecisionEngine] Guards aplicados:\n  ' + decision.guardsApplied.join('\n  '));
         }
-      } catch (e) {
-        console.warn('[DecisionEngine] Falha ao calcular decisão (não-fatal):', e.message);
-        workingData = data;
+        if (decision.diagMedicacao) console.log(decision.diagMedicacao);
+        console.log('[DecisionEngine] Flags reconciliadas:', decision.injectFlags,
+          '| requestId:', decision.metadata.requestId);
+        _showClinicalWarnings(decision.avisos);
+        if (decision.injectFlags.dilatacao) SessionFlags.dilatacaoDetectada = true;
       }
 
       // Auto-feedback: palavra de remédio que o léxico não conhece vai para a fila de
@@ -717,6 +773,12 @@ async function processAudioInBackground(audioBlob, capturedText) {
           return;
         }
 
+        // Depois de persistir a fase 1: a transcrição fica salva mesmo sem injeção.
+        if (_de.segurar) {
+          _segurarInjecaoAutomatica(workingData, textToProcess, _de.motivo, _de.decision && _de.decision.avisos);
+          return;
+        }
+
         displayAudioResults(workingData);
         processingStatus.textContent = 'Dilatação detectada — injetando dados coletados...';
         statusText.textContent = 'Finalizando (paciente em dilatação)...';
@@ -746,6 +808,11 @@ async function processAudioInBackground(audioBlob, capturedText) {
             }
           }
         }
+        return;
+      }
+
+      if (_de.segurar) {
+        _segurarInjecaoAutomatica(workingData, textToProcess, _de.motivo, _de.decision && _de.decision.avisos);
         return;
       }
 
@@ -962,37 +1029,29 @@ async function cancelarDilatacao() {
     if (!data || !data.dados) throw new Error('Reprocessamento retornou resposta inválida');
 
     // DecisionEngine com dilatação forçada em false.
-    let workingData = data;
-    try {
-      if (typeof DecisionEngine !== 'undefined' && DecisionEngine.buildDecision) {
-        const decision = DecisionEngine.buildDecision(data, {
-          transcribedText: analysisText,
-          hookFlags: {
-            blefariteInjetada:      SessionFlags.blefariteInjetada,
-            examesNormaisInjetados: SessionFlags.examesNormaisInjetados,
-            dilatacaoDetectada:     false,
-          },
-          pseudofacia: (typeof parsePseudofaciaFromDados === 'function')
-            ? parsePseudofaciaFromDados(data.dados) : null,
-          tipoConsulta: data.tipo_consulta,
-        });
-        if (decision.guardsApplied.length > 0) {
-          console.log('[Dilatacao] Reprocessamento — guards:', decision.guardsApplied);
-        }
-        // O banner é o ÚNICO sinal visível quando um template é suprimido (ex.: blefarite
-        // sem inflamação descrita deixa a biomicroscopia em branco). Sem esta chamada, a
-        // fase 2 volta a falhar em silêncio como no log 2026-07-29.
-        _showClinicalWarnings(decision.avisos);
-        workingData = decision.clonedAIResponse;
-        workingData.injectExamesNormais = decision.injectFlags.injectExamesNormais;
-        workingData.injectBlefarite     = decision.injectFlags.injectBlefarite;
-        workingData.blefariteDescritaNoExame = decision.injectFlags.blefariteDescritaNoExame;
+    const _de = _aplicarDecisionEngine(data, analysisText, {
+      blefariteInjetada:      SessionFlags.blefariteInjetada,
+      examesNormaisInjetados: SessionFlags.examesNormaisInjetados,
+      dilatacaoDetectada:     false,
+    });
+    const workingData = _de.workingData;
+    if (_de.decision) {
+      if (_de.decision.guardsApplied.length > 0) {
+        console.log('[Dilatacao] Reprocessamento — guards:\n  ' + _de.decision.guardsApplied.join('\n  '));
       }
-    } catch (e) {
-      console.warn('[Dilatacao] DecisionEngine falhou no reprocessamento (não-fatal):', e.message);
-      workingData = data;
+      // O banner é o ÚNICO sinal visível quando um template é suprimido (ex.: blefarite
+      // sem inflamação descrita deixa a biomicroscopia em branco). Sem esta chamada, a
+      // fase 2 volta a falhar em silêncio como no log 2026-07-29.
+      _showClinicalWarnings(_de.decision.avisos);
     }
     workingData.dilatacaoDetectada = false; // garante placeholder correto em displayAudioResults
+
+    // Verificação incompleta: mostra para conferência e NÃO reinjeta. A pausa fica
+    // na sala de espera — a transcrição só sai da fila depois de uma injeção feita.
+    if (_de.segurar) {
+      _segurarInjecaoAutomatica(workingData, analysisText, _de.motivo, _de.decision && _de.decision.avisos);
+      return;
+    }
 
     displayAudioResults(workingData);
     await injectAll(true); // force: sobrescreve a injeção da fase 1

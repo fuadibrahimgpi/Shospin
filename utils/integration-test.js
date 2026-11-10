@@ -4796,6 +4796,89 @@ test('[SECT-3c] captura 11:41 do log: OD incoerente não leva o OE bom junto', (
   expect(out.refracao.oe != null).toBe(true);
 });
 
+test('[SE-RESCUE-1] log 2026-11-09 (pós-dilatação): S.E. com sinal trocado na 1ª leitura é resgatado quando 2ª confirma S, C, A e S.E.', () => {
+  const out = _examAgent._postProcessRefraction({
+    refracao: {
+      od: {
+        medicoes: [
+          { s: '+0.75', c: -2, a: 170 },
+          { s: '+0.75', c: -2, a: 170 },
+          { s: '+0.75', c: -2, a: 170 }
+        ],
+        media: { s: '+0.75', c: -2, a: 170 },
+        se: '+0.25'
+      },
+      oe: {
+        medicoes: [
+          { s: 'plano', c: -0.75, a: 165 },
+          { s: 'plano', c: -0.75, a: 165 },
+          { s: 'plano', c: -0.75, a: 165 }
+        ],
+        media: { s: 'plano', c: -0.75, a: 165 },
+        se: '-0.50'
+      }
+    }
+  });
+  // Em isolamento, _postProcessRefraction marca OD como falho por S.E., mas guarda em _olhosFalhosPorSE
+  expect(out.refracao.od).toBe(null);
+  expect(out._olhosFalhosPorSE.od != null).toBe(true);
+
+  const verify = {
+    od: { s: '+0.75', c: -2, a: 170, se: '-0.25' },
+    oe: { s: '-0.00', c: -0.75, a: 165, se: '-0.50' }
+  };
+  const resgatou = _examAgent._rescueEyesFailedBySE(out, verify);
+  expect(resgatou).toBe(true);
+  expect(out.refracao.od != null).toBe(true);
+  expect(out.refracao.od.esf).toBe('+0.75');
+  expect(out.refracao.od.cil).toBe(-2);
+  expect(out.refracao.od.eixo).toBe(170);
+  expect(out.refracao.od.se).toBe('-0.25');
+  expect(out._olhosBloqueados === undefined).toBe(true);
+  expect(out._avisos.some(a => a.includes('NÃO injetada'))).toBe(false);
+  expect(out._avisos.some(a => a.includes('Olho preservado'))).toBe(true);
+});
+
+test('[SE-RESCUE-2] flip de sinal do S.E. também é resgatado quando 2ª confirma S/C/A e leitura ampliada confirma sinal da esfera', () => {
+  const out = _examAgent._postProcessRefraction({
+    refracao: {
+      od: {
+        medicoes: [{ s: '+0.75', c: -2, a: 170 }],
+        media: { s: '+0.75', c: -2, a: 170 },
+        se: '+0.25'
+      },
+      oe: null
+    }
+  });
+  expect(out._refracaoBloqueada).toBe(true);
+  expect(out._captureFailed).toBe(true);
+
+  const verify = { od: { s: '+0.75', c: -2, a: 170, se: '+0.25' }, oe: null };
+  const signsCandidates = [{ od: { sinal: '+', magnitude: '0.75', c: '-2.00', a: '170' } }];
+  const resgatou = _examAgent._rescueEyesFailedBySE(out, verify, signsCandidates);
+  expect(resgatou).toBe(true);
+  expect(out._refracaoBloqueada).toBe(false);
+  expect(out._captureFailed).toBe(false);
+  expect(out.refracao.od.esf).toBe('+0.75');
+  expect(out.refracao.od.se).toBe('-0.25');
+});
+
+test('[SE-RESCUE-3] olho genuinamente incoerente (2ª discorda de C) NÃO é resgatado e não gera falso erro de olho ausente', () => {
+  const out = _examAgent._postProcessRefraction({
+    refracao: {
+      od: { medicoes: [], media: { s: '+0.75', c: -2, a: 170 }, se: '+0.25' },
+      oe: { medicoes: [], media: { s: 'plano', c: -0.75, a: 165 }, se: '-0.50' }
+    }
+  });
+  const verify = {
+    od: { s: '+0.75', c: -1, a: 170, se: '+0.25' }, // C realmente era -1.00, 1ª errou C=-2.00
+    oe: { s: 'plano', c: -0.75, a: 165, se: '-0.50' }
+  };
+  expect(_examAgent._rescueEyesFailedBySE(out, verify)).toBe(false);
+  expect(out.refracao.od).toBe(null);
+  expect(out._olhosBloqueados.od).toContain('S.E. lido (0.25) não bate');
+});
+
 // ──────────────────────────────────────────────────────────────────────────────
 // 2026-08-03 (v5.4.0) — S.E. impresso recupera o cilindro NÃO LIDO.
 // Log 17:47:13: OD -5.00 com C não lido e S.E. -5.50 → captura reprovada por

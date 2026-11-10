@@ -875,7 +875,10 @@ class GeminiExamAgent {
           // foi descartado. Resultado: dois avisos de "sinal não confirmado"
           // numa captura correta, com a confirmação parada em _signsCandidates.
           // Aviso espúrio em captura boa é como o médico aprende a ignorar aviso.
-          const ref = processed.refracao;
+          const ref = {
+            od: processed.refracao?.od || processed._olhosFalhosPorSE?.od?.eye || null,
+            oe: processed.refracao?.oe || processed._olhosFalhosPorSE?.oe?.eye || null
+          };
           if (this._signsUsable(cropSigns, ref)) return cropSigns;
           if (this._signsUsable(fullSigns, ref)) {
             this.logger.warn('[OCR] Leitura ampliada do recorte não caiu na linha da esfera — usando a leitura paralela do ticket inteiro.');
@@ -901,8 +904,10 @@ class GeminiExamAgent {
     // captura já bloqueada não deve gastar chamadas que ninguém vai ler.
     // O .catch() aqui só evita "unhandled rejection" do disparo solto — quem
     // consome getSigns() continua recebendo a rejeição e tratando no try de lá.
-    const refracaoViva = !processed._captureFailed && processed.refracao &&
-      (processed.refracao.od || processed.refracao.oe);
+    const temOlhoFalhoPorSE = !!(processed._olhosFalhosPorSE &&
+      (processed._olhosFalhosPorSE.od || processed._olhosFalhosPorSE.oe));
+    const refracaoViva = (!processed._captureFailed && processed.refracao &&
+      (processed.refracao.od || processed.refracao.oe)) || temOlhoFalhoPorSE;
     if (refracaoViva) getSigns().catch(() => {});
 
     // ── DEFESA: 2ª chamada independente para verificar refração ────────────
@@ -933,6 +938,7 @@ class GeminiExamAgent {
         this.logger.info('[OCR] Verificação retornou:\n' + JSON.stringify(verify, null, 2));
         this.logger.info(`[OCR] ⏱ verificação: ${Date.now() - _tV}ms`);
         verifyData = verify;
+        this._rescueEyesFailedBySE(processed, verify);
         mismatchByEye = this._compareEyesAgainstVerify(processed.refracao, verify);
         verifyOk = true;
       } catch (err) {
@@ -957,6 +963,16 @@ class GeminiExamAgent {
         let resolvidoPorConferencia = false;
         const _signs = await getSigns();
         this.logger.info(`[OCR] ⏱ espera pelo sinal: ${Date.now() - _tS}ms`);
+        if (this._rescueEyesFailedBySE(processed, verifyData, _signsCandidates)) {
+          mismatchByEye = this._compareEyesAgainstVerify(processed.refracao, verifyData);
+        }
+        // Olho que já foi bloqueado no pós-processamento (e não foi resgatado)
+        // não deve gerar o falso erro de "1ª leitura disse olho ausente".
+        if (processed._olhosBloqueados) {
+          for (const lado of ['od', 'oe']) {
+            if (processed._olhosBloqueados[lado]) mismatchByEye[lado] = null;
+          }
+        }
         const _preSinal = { od: mismatchByEye.od, oe: mismatchByEye.oe };
         mismatchByEye = await this._applySignPolicy(processed, mismatchByEye, _signs, _signsCandidates);
 
@@ -971,7 +987,7 @@ class GeminiExamAgent {
         // cilindro (1ª=-0.50 vs 2ª=-1.50) entrou no prontuário sem conferência.
         // Cada descarte agora custa uma releitura do comparador com a dimensão
         // resolvida marcada — até acabarem as dimensões ou algo bloquear.
-        let houveDisputa = false;
+        let houveDisputa = !!(processed._resgatouPorSE || processed._olhosBloqueados?.od || processed._olhosBloqueados?.oe);
         for (const lado of ['od', 'oe']) {
           const dimsResolvidas = [];
           let mismatch = mismatchByEye[lado];
@@ -1804,6 +1820,89 @@ Responda APENAS JSON puro (sem markdown). Exemplo de formato:
   }
 
   /**
+   * Resgata olho reprovado pelo cross-check de S.E. da 1ª leitura quando a 2ª
+   * chamada independente confirma exatamente S, C e A da 1ª leitura e fecha a
+   * conta S + C/2 ≈ S.E. (ou quando o S.E. da 1ª teve apenas inversão de sinal
+   * e tanto a 2ª chamada quanto a leitura ampliada confirmam S, C e A).
+   *
+   * Caso real 2026-11-09 (pós-dilatação): 1ª leitura leu OD +0.75 -2.00 x170
+   * nas 3 medições e na média, mas leu S.E. "+0.25" em vez de "-0.25" (flip de
+   * sinal na linha S.E.). A 2ª leitura leu +0.75 -2.00 x170 com S.E. "-0.25" e
+   * as leituras ampliadas (#3 e #4) confirmaram "+0.75 -2.00 x170". Sem este
+   * resgate, o olho era descartado antes da verificação e ainda gerava falso
+   * erro de "1ª leitura disse olho ausente".
+   */
+  _rescueEyesFailedBySE(processed, verify, signsCandidates = null) {
+    if (!processed || !processed._olhosFalhosPorSE || !verify || typeof verify !== 'object') {
+      return false;
+    }
+    let resgatou = false;
+    for (const lado of ['od', 'oe']) {
+      const falho = processed._olhosFalhosPorSE[lado];
+      const v = verify[lado];
+      if (!falho || !falho.eye || !v || typeof v !== 'object' || v.s == null) continue;
+
+      const eye = falho.eye;
+      const pEsf = String(eye.esf).toLowerCase() === 'plano' ? 0 : parseFloat(eye.esf);
+      const vEsfStr = String(v.s).toLowerCase().trim();
+      const vEsf = /^(plano|pl)$/.test(vEsfStr) ? 0 : parseFloat(vEsfStr);
+      if (isNaN(pEsf) || isNaN(vEsf) || Math.abs(pEsf - vEsf) > 0.01) continue;
+      if (pEsf !== 0 && (pEsf > 0) !== (vEsf > 0)) continue;
+
+      const pCil = eye.cil != null ? parseFloat(eye.cil) : null;
+      const vCil = this._parseCil(v.c);
+      if ((pCil === null) !== (vCil === null)) continue;
+      if (pCil !== null && Math.abs(pCil - vCil) > 0.01) continue;
+
+      const vSeStr = v.se != null ? String(v.se).toLowerCase().trim() : null;
+      const vSe = vSeStr != null ? (/^(plano|pl)$/.test(vSeStr) ? 0 : parseFloat(vSeStr)) : NaN;
+      const seCalc = falho.seCalculado;
+      const verifySeOk = !isNaN(vSe) && Math.abs(vSe - seCalc) <= OCR_TOL.MATH_CONSISTENT;
+
+      const se1SignFlip = seCalc !== 0 && Math.abs(falho.seNum + seCalc) <= OCR_TOL.MATH_CONSISTENT;
+      const ampliadaConfirma = Array.isArray(signsCandidates) &&
+        this._signWitnessesConfirm(lado, eye, signsCandidates);
+
+      if (!verifySeOk && !(se1SignFlip && ampliadaConfirma)) continue;
+
+      const seCorrigido = verifySeOk
+        ? String(v.se)
+        : (seCalc >= 0 ? `+${seCalc.toFixed(2)}` : seCalc.toFixed(2));
+      const candidateEye = { ...eye, se: seCorrigido };
+
+      if (this._compareEye(lado, candidateEye, v) !== null) continue;
+
+      processed.refracao = processed.refracao || { od: null, oe: null };
+      processed.refracao[lado] = candidateEye;
+      delete processed._olhosFalhosPorSE[lado];
+      if (processed._olhosBloqueados) {
+        delete processed._olhosBloqueados[lado];
+        if (Object.keys(processed._olhosBloqueados).length === 0) {
+          delete processed._olhosBloqueados;
+        }
+      }
+      processed._refracaoBloqueada = false;
+      processed._refracaoReason = null;
+      processed._captureFailed = false;
+      processed._blockAutoInject = false;
+      processed._reason = null;
+
+      processed._avisos = (processed._avisos || []).filter(a =>
+        a !== falho.avisoCil &&
+        a !== falho.motivo &&
+        !a.includes(falho.motivo)
+      );
+      const avisoResgate = `${lado.toUpperCase()}: S.E. da 1ª leitura (${eye.se}) divergia de S+C/2 (${seCalc.toFixed(2)}), mas a 2ª leitura confirmou S=${eye.esf}, C=${eye.cil ?? 'null'}, A=${eye.eixo ?? 'null'}° com S.E.=${seCorrigido}. Olho preservado — confira no ticket.`;
+      this.logger.info('[OCR] ' + avisoResgate);
+      processed._avisos.push(avisoResgate);
+      processed._validationWarnings = processed._avisos.slice();
+      processed._resgatouPorSE = true;
+      resgatou = true;
+    }
+    return resgatou;
+  }
+
+  /**
    * @param {string[]} skipDims dimensões já julgadas neste olho ('esfera',
    *   'cilindro', 'eixo'). Existe porque um veredito devolvido — e depois
    *   descartado pelo caller — ESCONDIA as dimensões seguintes: o comparador
@@ -2391,8 +2490,12 @@ Responda APENAS com o JSON. Sem texto antes, sem texto depois, sem markdown.
           // A conta do próprio ticket aponta qual cilindro fecharia — informação
           // que o médico usa para decidir se vale refazer a foto ou digitar.
           const cilImplicito = 2 * (seNum - esfNum);
-          result._avisos.push(`${lado.toUpperCase()}: com o S.E. impresso (${seNum.toFixed(2)}) e a esfera (${esfNum.toFixed(2)}), o cilindro que fecharia a conta seria C≈${cilImplicito.toFixed(2)} (lido: ${cilNum.toFixed(2)}).`);
-          this._failEye(result, lado, `${lado.toUpperCase()}: S.E. lido (${seNum.toFixed(2)}) não bate com S+C/2 calculado (${seCalculado.toFixed(2)}) — diferença ${diff.toFixed(2)}D indica leitura incorreta. Refaça a captura.`);
+          const avisoCil = `${lado.toUpperCase()}: com o S.E. impresso (${seNum.toFixed(2)}) e a esfera (${esfNum.toFixed(2)}), o cilindro que fecharia a conta seria C≈${cilImplicito.toFixed(2)} (lido: ${cilNum.toFixed(2)}).`;
+          const motivo = `${lado.toUpperCase()}: S.E. lido (${seNum.toFixed(2)}) não bate com S+C/2 calculado (${seCalculado.toFixed(2)}) — diferença ${diff.toFixed(2)}D indica leitura incorreta. Refaça a captura.`;
+          result._olhosFalhosPorSE = result._olhosFalhosPorSE || {};
+          result._olhosFalhosPorSE[lado] = { eye, seNum, seCalculado, avisoCil, motivo };
+          result._avisos.push(avisoCil);
+          this._failEye(result, lado, motivo);
           continue;
         }
       }
@@ -2535,6 +2638,7 @@ Responda APENAS com o JSON. Sem texto antes, sem texto depois, sem markdown.
     }
 
     if (result._refracaoBloqueada) {
+      result._avisos = result._avisos.filter(a => !a.endsWith('O outro olho foi preservado.'));
       result.refracao = null;
       result.cid_refracao = [];
 

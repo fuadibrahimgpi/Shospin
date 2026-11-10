@@ -20,8 +20,8 @@ const DEFAULT_RETRY_CONFIG = {
 };
 
 const DEFAULT_RATE_LIMIT_CONFIG = {
-  maxRequestsPerMinute: 15,
-  maxRequestsPerHour: 100
+  maxRequestsPerMinute: 30,
+  maxRequestsPerHour: 200
 };
 
 // ============================================================================
@@ -242,7 +242,8 @@ class ApiService {
       generationConfig.thinkingConfig = { thinkingBudget };
     }
 
-    const baseEndpoint = thinkingBudget !== undefined ? GEMINI_API_ENDPOINT_BETA : GEMINI_API_ENDPOINT;
+    const useBetaEndpoint = thinkingBudget !== undefined || Boolean(generationConfig.responseMimeType);
+    const baseEndpoint = useBetaEndpoint ? GEMINI_API_ENDPOINT_BETA : GEMINI_API_ENDPOINT;
     const endpoint = `${baseEndpoint}?key=${this.apiKey}`;
 
     let lastError = null;

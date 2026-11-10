@@ -469,6 +469,7 @@ Registre exames solicitados pelo médico com verbo no infinitivo:
 - `Solicitar biometria`
 - `Solicitar angiografia`
 - `Solicitar ecografia ocular`
+- `Solicitar mapeamento de retina`
 
 "Tomografia" / "tomografia do nervo" = OCT. "Campimetria" / "exame de campo" = campo visual.
 `Fundo com dilatação` não é exame pedido: é a dilatação.

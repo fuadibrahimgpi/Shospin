@@ -11,7 +11,7 @@
 // AGENTE 2 — GeminiInterviewAgent (Entrevista / Áudio)
 // ============================================================================
 
-const CONSULTATION_CONFIG = { maxOutputTokens: 32768 };
+const CONSULTATION_CONFIG = { maxOutputTokens: 32768, responseMimeType: 'application/json' };
 
 // --------------------------------------------------------------------------
 // Padrões de gatilho de voz — consumidos de config/clinical-triggers.js
@@ -231,6 +231,14 @@ class GeminiInterviewAgent {
     // 7) Blefarite: "blufarite", "blackfarite", "bruxarite"
     out = out.replace(/(?<![a-zà-ú0-9])(?:blufarite|blackfarite|bruxarite)(?![a-zà-ú0-9])/gi, 'blefarite');
 
+    // 7b) Exames e colírios separados/corrompidos pelo ASR: paquimetria, campimetria, retinografia, topografia, brimonidina, dorzolamida
+    out = out.replace(/(?<![a-zà-ú0-9])(?:paque\s*metria|pacometria)(?![a-zà-ú0-9])/gi, 'paquimetria');
+    out = out.replace(/(?<![a-zà-ú0-9])campi\s+metria(?![a-zà-ú0-9])/gi, 'campimetria');
+    out = out.replace(/(?<![a-zà-ú0-9])retino\s+grafia(?![a-zà-ú0-9])/gi, 'retinografia');
+    out = out.replace(/(?<![a-zà-ú0-9])topo\s+grafia(?![a-zà-ú0-9])/gi, 'topografia');
+    out = out.replace(/(?<![a-zà-ú0-9])brimo\s+nidina(?![a-zà-ú0-9])/gi, 'brimonidina');
+    out = out.replace(/(?<![a-zà-ú0-9])dorzo\s+lamida(?![a-zà-ú0-9])/gi, 'dorzolamida');
+
     // 8) Nomes de colírio de glaucoma (léxico de medicamentos, entradas `restaurar`):
     //    "bimato à próstata com timol" / "hematotrófico continua lol" → bimatoprosta / timolol.
     //    Log 2026-11-09: sem isto o modelo não via nome nenhum e desceu para "Colírio hipotensor".
@@ -315,6 +323,9 @@ class GeminiInterviewAgent {
     };
     result.dados.conduta   = _toString(result.dados.conduta);
     result.dados.tratamento = _toString(result.dados.tratamento);
+    if (typeof result.dados.diagnostico === 'string') {
+      result.dados.diagnostico = result.dados.diagnostico.replace(/\b([A-Z]\d{2})\.(\d)\b/g, '$1$2');
+    }
 
     // Padrão: detecta posologia farmacológica — unidade de dose explícita OU frequência
     // de uso sem unidade numérica (ex: "ao longo do dia", "conforme necessidade").
@@ -985,7 +996,7 @@ CAMPOS:
   ✅ Suspensão de medicamento:         "Suspender [nome]"
   ✅ Pedidos de exame (catálogo):      "Solicitar OCT", "Solicitar campo visual", "Solicitar retinografia", "Solicitar paquimetria",
                                        "Solicitar topografia corneana", "Solicitar curva de tensão", "Solicitar biometria",
-                                       "Solicitar angiografia", "Solicitar ecografia ocular" — só se NOMEADO na fala (ver CRITÉRIOS abaixo)
+                                       "Solicitar angiografia", "Solicitar ecografia ocular", "Solicitar mapeamento de retina" — só se NOMEADO na fala (ver CRITÉRIOS abaixo)
   ✅ Dilatação:                        "Fundo com dilatação"
   ✅ Plano de investigação condicional: "Orientado prosseguir investigação de outras causas se não houver melhora com a correção óptica"
   ✅ Explicações ao paciente:          diagnósticos, patologias e orientações verbais do médico

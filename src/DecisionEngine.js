@@ -59,7 +59,7 @@
   }
 
   // Vocabulário clínico oftalmológico mínimo esperado em uma transcrição real.
-  const _CLINICAL_VOCAB_RE = /\b(visao|vista|vistas|olho|olhos|ocular|oculares|retina|cornea|corneal|cristalino|macula|macular|nervo|pressao|tonometria|fundoscopia|dilata|colirio|biometria|refracao|catarata|glaucoma|astigmatismo|miopia|hipermetropia|cirurgia|lio|acuidade|fotofobia|lacrimejamento|conjuntiva|conjuntival|iris|esclerotica|pupila|pupilar|blefarite|calazio|ceratocone|biomicroscopia|campimetria|pachimetria|oct|lente|lentes|oftalmologico|oftalmologica|intraocular|periocular|refrac|oculo|oculos|grau|graus|consulta|consultas|retorno|retornos|receita|receitas|exame|exames|paciente|pacientes|medico|medica|medicos|medicas|doutor|doutora|doutores|doutoras|brimonidina|timolol|trometolol|latanoprosta|travoprosta|bimatoprosta|dorzolamida|brinzolamida|tafluprosta|moxifloxacino|ciprofloxacino|tobramicina|dexametasona|prednisolona|cetorolaco|nepafenaco|olopatadina|ciclosporina|atropina|tropicamida|fenilefrina|lubrificante|lubrificantes|hipromelose|carmelose|hialuronato|carboximetilcelulose|lagrima|lagrimas|medicacao|medicacoes|medicamento|medicamentos|remedio|remedios|posologia|gotas|gota|gotinha|gotinhas|instilar|pingar|acompanhamento|manutencao|conduta|tratamento|tratamentos|quadro|pterigio|higiene|compressa|omega)\b/g;
+  const _CLINICAL_VOCAB_RE = /\b(visao|vista|vistas|olho|olhos|ocular|oculares|retina|cornea|corneal|cristalino|macula|macular|nervo|pressao|tonometria|fundoscopia|dilata|colirio|biometria|refracao|catarata|glaucoma|astigmatismo|miopia|hipermetropia|cirurgia|lio|acuidade|fotofobia|lacrimejamento|conjuntiva|conjuntival|iris|esclerotica|pupila|pupilar|blefarite|calazio|ceratocone|biomicroscopia|campimetria|pachimetria|oct|lente|lentes|oftalmologico|oftalmologica|intraocular|periocular|refrac|oculo|oculos|grau|graus|consulta|consultas|retorno|retornos|receita|receitas|exame|exames|paciente|pacientes|medico|medica|medicos|medicas|doutor|doutora|doutores|doutoras|brimonidina|timolol|trometolol|latanoprosta|travoprosta|bimatoprosta|dorzolamida|brinzolamida|tafluprosta|moxifloxacino|ciprofloxacino|tobramicina|dexametasona|prednisolona|cetorolaco|nepafenaco|olopatadina|ciclosporina|atropina|tropicamida|fenilefrina|lubrificante|lubrificantes|hipromelose|carmelose|hialuronato|carboximetilcelulose|lagrima|lagrimas|medicacao|medicacoes|medicamento|medicamentos|remedio|remedios|posologia|gotas|gota|gotinha|gotinhas|instilar|pingar|acompanhamento|manutencao|conduta|tratamento|tratamentos|quadro|pterigio|higiene|compressa|compressas|omega|palpebra|palpebras|cilio|cilios|shampoo|casquinha|casquinhas|leitura|ler|perto|longe|multifocal|multifocais|laser|yag|hordeolo|tersol)\b/g;
 
   // Indicadores de ruído: palavrões ou tokens claramente não-clínicos e incoerentes.
   const _NOISE_INDICATOR_RE = /\b(merda|porra|caralho|puta|fodase|foda.se|cacete|desgraça|desgraca|inferno|droga)\b/;
@@ -868,10 +868,10 @@
       /grau\s+(ta|esta|está|esta)\s+(parecido|igual|similar|bom)/,
       /grau\s+praticamente\s+igual/,
       /grau\s+nao\s+mudou/,
-      /oculos\s+(ainda\s+)?(servem|serve|ta\s+bom|esta\s+bom)/,
+      /oculos\s+(?:atuais?\s+)?(?:ainda\s+)?(?:(?:estao|esta|ta)\s+)?(servindo|servem|serve|ta\s+bom|esta\s+bom|bons?|bom)/,
       /mant[eé](m|r)\s+(os\s+)?oculos/,
       /continuar\s+(com\s+)?(os\s+)?oculos\s+(atuais?|que\s+tem)/,
-      /nao\s+precisa\s+(fazer|comprar|trocar)\s+(novo\s+)?oculos/,
+      /nao\s+precisa\s+(fazer|comprar|trocar)\s+(?:de\s+|os?\s+|o\s+|novo\s+)?oculos/,
       /pode\s+continuar\s+com\s+(os\s+)?oculos/,
     ];
 
@@ -884,8 +884,8 @@
     log.push('Guard 5: "Sem prescrição de óculos" → "Manutenção do óculos atual" — transcript indica manutenção de grau');
   }
 
-  // Frase negativa padrão de antecedentes oftalmológicos, como o prompt a define.
-  const _NEGATIVA_ANTEC_OFT_RE = /^\s*nega\s+diagn[oó]sticos?\s+e\s+procedimentos?\s+oftalmol[oó]gicos?\s+pr[eé]vios?\s*\.?\s*$/i;
+  // Frase negativa padrão de antecedentes oftalmológicos (canônica do prompt e paráfrases do LLM).
+  const _NEGATIVA_ANTEC_OFT_RE = /^\s*nega\s+(?:diagn[oó]sticos?\s+e\s+procedimentos?\s+oftalmol[oó]gicos?|cirurgias?\s+(?:ou|e)\s+patologias?\s+(?:oculares?|oftalmol[oó]gicas?)|patologias?\s+(?:oculares?|oftalmol[oó]gicas?)|antecedentes?\s+(?:oculares?|oftalmol[oó]gicos?))(?:\s+pr[eé]vi[oa]s?)?\s*\.?\s*$/i;
 
   // Evidência, na TRANSCRIÇÃO, de história ocular anterior a esta consulta.
   // Deliberadamente estreita: são frases que o paciente/médico só produz quando
@@ -1309,7 +1309,8 @@
   }
 
   // Vocabulário mínimo para o médico ter falado do nervo/pressão/glaucoma ou colírios hipotensores. ASR-tolerante.
-  const _NERVO_EVIDENCIA_RE = /nervo|papila|disc[oa]\s*optic|escava[cç]|excava[cç]|glaucom|pressa[oõ]|tens[aã]o\s+ocular|\bpio\b|brimonidina|timolol|latanoprosta|travoprosta|bimatoprosta|dorzolamida|brinzolamida|tafluprosta/;
+  // "pressão tá boa / normal / 12" (PIO normal) NÃO sustenta H400 vazado (D30).
+  const _NERVO_EVIDENCIA_RE = /nervo|papila|disc[oa]\s*optic|escava[cç]|excava[cç]|glaucom|pressa[oõ](?!\s+(?:ocular\s+|do\s+olho\s+|dos\s+olhos\s+)?(?:(?:ta|esta|e|bem|muito|tudo)\s+)*(?:boa|boas|normal|normais|otima|otimas|tranquila|tranquilas|certinha|ok\b|\d+))|tens[aã]o\s+ocular|\bpio\b|brimonidina|timolol|latanoprosta|travoprosta|bimatoprosta|dorzolamida|brinzolamida|tafluprosta/;
   const _NERVO_AFIRMADO_RE = /nervo|papila|disco\s*[óo]ptic|escava[cç]|excava[cç]|glaucom|\bH40\d?\b/i;
   // Na fundoscopia, só sai o trecho de nervo que afirma DOENÇA; descrição normal fica.
   const _NERVO_DOENCA_RE = /altera[cç]|alterad|suspeit|sugestiv|aumentad|glaucom|assimetr|fora\s+do\s+padr|\bH40|0[,.][5-9]|escavad|p[aá]lid|edema|atrofi|entalhe|notch|hemorrag/i;
@@ -1502,8 +1503,12 @@
     // "óculos de perto") e no máximo 3 palavras de folga: é o que separa o óculos
     // destinado ao perto de um comentário sobre a visão de perto ("os óculos estão
     // bons, ele enxerga bem de perto"), que não é diagnóstico de nada.
-    const hasOculosParaPerto = /oculos\s+(?:[a-z]+\s+){0,3}(?:para|pra|de)\s+perto/.test(cleanText);
-    const hasLeitura = /oculos\s+(?:de\s+)?(?:leitura|farmacia|pronto)|oculos\s+(?:[a-z]+\s+){0,3}(?:para\s+|pra\s+)?ler\b/.test(cleanText);
+    const hasOculosParaPerto =
+      /oculos\s+(?:[a-z]+\s+){0,3}(?:para|pra|de)\s+perto/.test(cleanText) ||
+      /oculos\s+(?:[a-z]+\s+){0,3}(?:para|pra|de)\s+perto/.test(condutaNorm);
+    const hasLeitura =
+      /oculos\s+(?:[a-z]+\s+){0,3}(?:de\s+|para\s+|pra\s+)?(?:leitura|farmacia|pronto|ler)\b/.test(cleanText) ||
+      /oculos\s+(?:de\s+|para\s+)?leitura\b/.test(condutaNorm);
 
     // Cada critério basta por si só — ver docblock (regra de 2026-07-31).
     const canHavePresbiopia = hasPresbiopiaNoTexto || hasMultifocal || hasOculosLongeEPerto

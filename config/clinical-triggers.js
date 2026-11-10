@@ -1130,6 +1130,8 @@ const EXAMES_CATALOGO = [
     re: /\bangiografia\b|\bretinofluoresceinografia\b/ },
   { id: 'ecografia',      label: 'ecografia ocular',
     re: /\b(?:ecografia|ultrassonografia|ultrassom) (?:ocular|do olho|dos olhos)\b|\becografia\b/ },
+  { id: 'mapeamento_retina', label: 'mapeamento de retina',
+    re: /\bmapeamento de retina\b/ },
 ];
 
 // Região do OCT dita logo depois do nome ("OCT de mácula", "OCT do nervo").

@@ -91,7 +91,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         statusText.textContent = 'Clique para iniciar o ditado';
         statusText.style.color = '';
       }, 3000);
-      sendResponse({ ok: true });
+      sendResponse({ success: true });
       break;
 
     // Enviada por camera-permission.html (scripts/permission-page.js).
@@ -102,13 +102,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       // NÃO abre a câmera sozinho aqui: a página de permissão ainda está com a
       // prévia ligada, e duas aberturas simultâneas podem deixar a do painel na
       // resolução baixa da prévia — o OCR do ticket precisa da resolução cheia.
-      sendResponse({ ok: true });
+      sendResponse({ success: true });
       break;
 
     // Atalhos de teclado roteados pelo background
     case 'toggleRecording':
       toggleRecording();
-      sendResponse({ ok: true });
+      sendResponse({ success: true });
       break;
 
     case 'captureExam':
@@ -117,13 +117,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         if (cameraStream) captureAndProcess();
         else startCameraCapture();
       }, 200);
-      sendResponse({ ok: true });
+      sendResponse({ success: true });
       break;
 
     case 'injectAllFromKeyboard':
       injectAll(true)
-        .then(() => sendResponse({ ok: true }))
-        .catch(e => { console.log('[Keyboard] Erro na injeção:', e.message); sendResponse({ ok: false }); });
+        .then(() => sendResponse({ success: true }))
+        .catch(e => { console.log('[Keyboard] Erro na injeção:', e.message); sendResponse({ success: false }); });
       return true; // canal assíncrono — não fechar antes da Promise resolver
   }
 });

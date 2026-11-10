@@ -1120,10 +1120,10 @@ class ShospInjector {
    */
   async injectOctLaudo({ laudo, substituir } = {}) {
     const texto = String(laudo || '').trim();
-    if (!texto) return { success: false, erro: 'Laudo vazio' };
+    if (!texto) return { success: false, error: 'Laudo vazio' };
 
     const { container, campos } = await this._abrirAbaGlaucoma();
-    if (!container) return { success: false, erro: 'Aba Glaucoma não abriu — a ficha do paciente está aberta?' };
+    if (!container) return { success: false, error: 'Aba Glaucoma não abriu — a ficha do paciente está aberta?' };
 
     const { campo, motivo, casam } = _escolherCampoOct(campos);
     const resumoCampos = campos.map(c => `${c.tipo}:${c.rotulo || '(sem rótulo)'}`);
@@ -1132,16 +1132,16 @@ class ShospInjector {
         ? `Mais de um campo com rótulo de OCT na aba Glaucoma (${casam.map(c => c.rotulo).join(' | ')}) — nada injetado`
         : 'Campo OCT não encontrado na aba Glaucoma — nada injetado';
       contentLogger.warn(`[OCT] ${erro}. Campos vistos: ${resumoCampos.join(' ; ')}`);
-      return { success: false, erro, campos: resumoCampos };
+      return { success: false, error: erro, campos: resumoCampos };
     }
 
     if (!_campoOctPronto(campo)) {
-      return { success: false, erro: 'O editor do campo OCT ainda não carregou — tente de novo em instantes', campos: resumoCampos };
+      return { success: false, error: 'O editor do campo OCT ainda não carregou — tente de novo em instantes', campos: resumoCampos };
     }
 
     const info = { id: campo.id, rotulo: campo.rotulo, tipo: campo.tipo };
     if (campo.temConteudo && !substituir) {
-      return { success: false, ocupado: true, campo: info, erro: `O campo "${campo.rotulo}" já tem texto` };
+      return { success: false, ocupado: true, campo: info, error: `O campo "${campo.rotulo}" já tem texto` };
     }
 
     if (campo.tipo === 'froala') {
@@ -1926,13 +1926,13 @@ window.__shospMessageListener = (message, _sender, sendResponse) => {
     case 'injectOctLaudo':
       injector.injectOctLaudo(message.data || {})
         .then(r => sendResponse(r))
-        .catch(err => sendResponse({ success: false, erro: err.message }));
+        .catch(err => sendResponse({ success: false, error: err.message }));
       return true;
 
     case 'dumpCamposGlaucoma':
       injector.dumpCamposGlaucoma()
         .then(r => sendResponse({ success: true, ...r }))
-        .catch(err => sendResponse({ success: false, erro: err.message }));
+        .catch(err => sendResponse({ success: false, error: err.message }));
       return true;
 
     case 'searchCid':
@@ -2360,15 +2360,8 @@ window.__shospMessageListener = (message, _sender, sendResponse) => {
       })();
       return true;
 
-    case 'refreshFieldDetector':
-      fieldDetector.refresh()
-        .then(() => sendResponse({ success: true, stats: fieldDetector.getCacheStats() }))
-        .catch(err => sendResponse({ success: false, error: err.message }));
-      return true;
-
-    case 'getFieldMapping':
-      sendResponse({ success: true, mapping: fieldDetector.getFullMapping() });
-      return false;
+    // ('refreshFieldDetector' e 'getFieldMapping' foram removidos: ninguém os enviava.
+    // Para depurar, use window.ShospExtension.fieldDetector no console da aba.)
 
     // Fronteira de paciente: o painel redefine o Set de CIDs já injetados.
     // Sobrescreve (não mescla) — é justamente para DESCARTAR os códigos do

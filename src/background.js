@@ -166,10 +166,8 @@ chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
     // 'injectReceitaViaBackground' e 'injectExamesViaBackground' foram removidos:
     // o sidepanel envia diretamente para a aba via sendToTab (evita um salto de mensagem).
 
-    case 'openSidePanel':
-      _focusOrOpenPanel().catch(err => bgLogger.error('Falha ao abrir painel:', err?.message));
-      sendResponse({ success: true });
-      return false;
+    // ('openSidePanel' foi removido: ninguém o enviava. O painel abre pelo clique
+    // no ícone ou por atalho — ver _focusOrOpenPanel.)
 
     case 'panelReady':
       _onPanelReady();

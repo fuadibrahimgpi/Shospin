@@ -7876,6 +7876,89 @@ async function _paginasPermissaoTests() {
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
+// CONTRATO DAS MENSAGENS (análise de estrutura 2026-11-10, item 7)
+// ──────────────────────────────────────────────────────────────────────────────
+// config/messages.js é o registro de quem fala com quem. Estes testes cruzam o
+// registro com o código: ação enviada × ação tratada × ação registrada.
+
+const ShospMensagens = require('../config/messages.js');
+const _initJsSource = readSrcNormalized('scripts', 'sidepanel-init.js');
+const _contentJsSourceMsg = readSrcNormalized('src', 'content.js');
+
+const _ordenado = (arr) => [...new Set(arr)].sort();
+const _casesDe = (trecho) => _ordenado([...trecho.matchAll(/case '([A-Za-z_]+)'/g)].map(m => m[1]));
+// Trecho de um listener: do marcador até o primeiro fechamento na coluna 0.
+const _trechoListener = (fonte, marcador) => {
+  const ini = fonte.indexOf(marcador);
+  if (ini === -1) throw new Error('listener não encontrado: ' + marcador);
+  const fim = fonte.slice(ini).search(/\n\}\)?;/);
+  return fonte.slice(ini, ini + fim);
+};
+
+test('[MSG-1] painel → aba: toda ação ENVIADA está registrada e toda registrada é enviada', () => {
+  const pasta = require('path').join(__dirname, '..', 'scripts');
+  const enviadas = [];
+  for (const arq of fs.readdirSync(pasta).filter(f => f.endsWith('.js'))) {
+    const fonte = readSrcNormalized('scripts', arq);
+    for (const m of fonte.matchAll(/\baction:\s*'([A-Za-z_]+)'/g)) enviadas.push(m[1]);
+  }
+  const esperadas = [...ShospMensagens.acoesDoCanal('painelParaAba'), ...ShospMensagens.acoesDoCanal('painelParaBackground')];
+  expect(_ordenado(enviadas)).toEqual(_ordenado(esperadas));
+});
+
+test('[MSG-2] painel → aba: a aba TRATA exatamente as ações registradas (sem handler órfão, sem ação muda)', () => {
+  const trecho = _trechoListener(_contentJsSourceMsg, 'window.__shospMessageListener = ');
+  expect(_casesDe(trecho)).toEqual(_ordenado(ShospMensagens.acoesDoCanal('painelParaAba')));
+});
+
+test('[MSG-3] background → painel: atalhos enviados = registrados = tratados pelo painel', () => {
+  const enviadas = [...backgroundJsSource.matchAll(/_ensurePanelAndSend\('([A-Za-z_]+)'\)/g)].map(m => m[1]);
+  const registradas = _ordenado(ShospMensagens.acoesDoCanal('backgroundParaPainel'));
+  expect(_ordenado(enviadas)).toEqual(registradas);
+  const tratadasPeloPainel = _casesDe(_trechoListener(_initJsSource, 'chrome.runtime.onMessage.addListener('));
+  expect(tratadasPeloPainel).toEqual(
+    _ordenado([...registradas, ...ShospMensagens.acoesDoCanal('paginaParaPainel')])
+  );
+});
+
+test('[MSG-4] painel → background: o background trata exatamente o registrado (openSidePanel saiu)', () => {
+  const trecho = _trechoListener(backgroundJsSource, 'chrome.runtime.onMessage.addListener(');
+  expect(_casesDe(trecho)).toEqual(_ordenado(ShospMensagens.acoesDoCanal('painelParaBackground')));
+});
+
+test('[MSG-5] páginas de permissão → painel: as ações das páginas são as registradas', () => {
+  const { PERMISSAO_MIDIAS } = require('../scripts/permission-page.js');
+  const dasPaginas = Object.keys(PERMISSAO_MIDIAS).map(k => PERMISSAO_MIDIAS[k].acaoPainel);
+  expect(_ordenado(dasPaginas)).toEqual(_ordenado(ShospMensagens.acoesDoCanal('paginaParaPainel')));
+});
+
+test('[MSG-6] nenhum nome de ação se repete entre canais', () => {
+  const soma = Object.keys(ShospMensagens.MENSAGENS).reduce((n, c) => n + ShospMensagens.acoesDoCanal(c).length, 0);
+  expect(ShospMensagens.todasAsAcoes().length).toBe(soma);
+});
+
+test('[MSG-7] formato único de resposta: falha usa `error` (nunca `erro`) e ninguém responde `ok:`', () => {
+  // Respostas da aba: linha com success não pode trazer a chave `erro`
+  // (nem escrita por extenso, nem como atalho `{ success: false, erro }`).
+  const linhasRuins = _contentJsSourceMsg.split('\n')
+    .filter(l => /\bsuccess\s*:/.test(l) && (/\berro\s*:/.test(l) || /[,{]\s*erro\s*[,}]/.test(l)));
+  expect(linhasRuins).toEqual([]);
+  // O painel do OCT lê o mesmo campo que a aba escreve.
+  expect(/resp\??\.erro\b/.test(readSrcNormalized('scripts', 'sidepanel-oct.js'))).toBe(false);
+  // O painel responde { success } também aos atalhos e às páginas de permissão.
+  expect(/sendResponse\(\{\s*ok\s*:/.test(_initJsSource)).toBe(false);
+  expect(/sendResponse\(\{\s*ok\s*:/.test(backgroundJsSource)).toBe(false);
+});
+
+test('[MSG-8] injeção de OCT devolve o motivo da falha em `error`', () => {
+  // Espelha o que o painel do OCT mostra ao médico: sem este campo o status
+  // exibiria "undefined — nada foi alterado".
+  const ocupado = _contentJsSourceMsg.match(/return \{ success: false, ocupado: true, campo: info, (\w+): /);
+  expect(ocupado && ocupado[1]).toBe('error');
+  expect(readSrcNormalized('scripts', 'sidepanel-oct.js')).toContain('${resp.error} — nada foi alterado.');
+});
+
+// ──────────────────────────────────────────────────────────────────────────────
 // RELATÓRIO FINAL
 // ──────────────────────────────────────────────────────────────────────────────
 

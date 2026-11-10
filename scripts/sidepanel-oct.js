@@ -206,10 +206,10 @@
       if (resp.ocupado) {
         substituirNoProximo = true;
         injetarBtn.textContent = 'Substituir texto do campo OCT';
-        setStatus(`${resp.erro} — nada foi alterado. Use "Substituir" se quiser trocar.`);
+        setStatus(`${resp.error} — nada foi alterado. Use "Substituir" se quiser trocar.`);
         return;
       }
-      setStatus(`${resp.erro || 'Falha na injeção'}. Use "Diagnóstico do campo OCT" e me mande o resultado do console.`);
+      setStatus(`${resp.error || 'Falha na injeção'}. Use "Diagnóstico do campo OCT" e me mande o resultado do console.`);
       if (resp.campos) console.log('[OCT] campos vistos na aba Glaucoma:', resp.campos);
     } finally {
       injetarBtn.disabled = false;
@@ -235,7 +235,7 @@
     const tab = await _getShospTab();
     if (!tab) { setStatus('Abra a ficha do paciente no SHOSP.'); return; }
     const resp = await sendToTab(tab.id, { action: 'dumpCamposGlaucoma' });
-    if (!resp || !resp.success) { setStatus(`Diagnóstico falhou: ${resp?.erro || 'sem resposta do SHOSP'}`); return; }
+    if (!resp || !resp.success) { setStatus(`Diagnóstico falhou: ${resp?.error || 'sem resposta do SHOSP'}`); return; }
     // Uma linha por campo (o console corta strings longas — ver dumpRefractionCandidates).
     console.log(`[OCT] container da aba Glaucoma: ${resp.container}`);
     for (const c of resp.campos) {

@@ -94,6 +94,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       sendResponse({ ok: true });
       break;
 
+    // Enviada por camera-permission.html (scripts/permission-page.js).
+    case 'cameraPermissionGranted':
+      cameraPermissionChecked = true;
+      cameraStatusText.textContent = 'Câmera liberada! Clique para iniciar captura';
+      cameraStatusText.style.color = '';
+      sendResponse({ ok: true });
+      break;
+
     // Atalhos de teclado roteados pelo background
     case 'toggleRecording':
       toggleRecording();

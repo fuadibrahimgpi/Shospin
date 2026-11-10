@@ -7670,6 +7670,131 @@ async function _painelUnicoETimeoutTests() {
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
+// PÁGINAS DE PERMISSÃO (análise de estrutura 2026-11-10, item 6)
+// ──────────────────────────────────────────────────────────────────────────────
+// permission.html e camera-permission.html apontavam para scripts que nunca
+// existiram: o botão "Liberar" não fazia nada e o painel esperava para sempre.
+
+const _HTMLS_DA_EXTENSAO = ['sidepanel.html', 'config.html', 'permission.html', 'camera-permission.html'];
+
+test('[PERM-1] todo <script src> e <link href> local dos HTML da extensão aponta para arquivo que EXISTE', () => {
+  const pathMod = require('path');
+  const faltando = [];
+  for (const html of _HTMLS_DA_EXTENSAO) {
+    const fonte = readSrcNormalized(html);
+    const refs = [...fonte.matchAll(/<script[^>]+src="([^"]+)"/g), ...fonte.matchAll(/<link[^>]+href="([^"]+)"/g)]
+      .map(m => m[1]).filter(r => !/^(https?:)?\/\//.test(r));
+    expect(refs.length > 0).toBe(true);
+    for (const ref of refs) {
+      if (!fs.existsSync(pathMod.join(__dirname, '..', ref))) faltando.push(`${html} → ${ref}`);
+    }
+  }
+  expect(faltando).toEqual([]);
+});
+
+test('[PERM-2] cada página carrega o núcleo ANTES do seu script, e o painel trata as duas mensagens', () => {
+  for (const [html, script] of [['permission.html', 'scripts/permission.js'], ['camera-permission.html', 'scripts/camera-permission.js']]) {
+    const fonte = readSrcNormalized(html);
+    const iNucleo = fonte.indexOf('scripts/permission-page.js');
+    expect(iNucleo > 0 && fonte.indexOf(script) > iNucleo).toBe(true);
+  }
+  const { PERMISSAO_MIDIAS } = require('../scripts/permission-page.js');
+  const initSrc = readSrcNormalized('scripts', 'sidepanel-init.js');
+  for (const midia of Object.keys(PERMISSAO_MIDIAS)) {
+    expect(initSrc).toContain(`case '${PERMISSAO_MIDIAS[midia].acaoPainel}':`);
+  }
+});
+
+function _fakePaginaPermissao({ comVideo = false, estadoPermissao = 'prompt', getUserMedia } = {}) {
+  const mkEl = () => ({
+    className: '', textContent: '', disabled: false, style: {}, srcObject: null, _h: {},
+    addEventListener(ev, fn) { this._h[ev] = fn; },
+  });
+  const els = { requestBtn: mkEl(), status: mkEl(), closeMsg: mkEl(), closeBtn: mkEl() };
+  if (comVideo) { els.preview = mkEl(); els.videoPreview = mkEl(); }
+  const log = { enviadas: [], constraints: [], fechouJanela: 0, abasRemovidas: [] };
+  const amb = {
+    document: { getElementById: (id) => els[id] || null },
+    navigator: {
+      mediaDevices: { getUserMedia: async (c) => { log.constraints.push(c); return getUserMedia(c); } },
+      permissions: { query: async () => ({ state: estadoPermissao }) },
+    },
+    chrome: {
+      runtime: { sendMessage: (m) => { log.enviadas.push(m); return Promise.resolve(); } },
+      tabs: { getCurrent: (cb) => cb({ id: 31 }), remove: (id) => log.abasRemovidas.push(id) },
+    },
+    window: { close: () => { log.fechouJanela++; }, addEventListener() {} },
+  };
+  return { els, log, amb };
+}
+
+const _fakeStreamPerm = () => {
+  const tracks = [{ parado: false, stop() { this.parado = true; } }];
+  return { getTracks: () => tracks, tracks };
+};
+const _erroMidia = (name) => Object.assign(new Error(name), { name });
+
+async function _paginasPermissaoTests() {
+  const { iniciarPaginaPermissao } = require('../scripts/permission-page.js');
+
+  await testAsync('[PERM-3] microfone: clicar em Liberar pede o áudio, solta o dispositivo e avisa o painel', async () => {
+    const stream = _fakeStreamPerm();
+    const { els, log, amb } = _fakePaginaPermissao({ getUserMedia: () => stream });
+    iniciarPaginaPermissao({ midia: 'microfone' }, amb);
+    expect(typeof els.requestBtn._h.click).toBe('function'); // o botão agora FAZ alguma coisa
+    const ok = await els.requestBtn._h.click();
+    expect(ok).toBe(true);
+    expect(log.constraints).toEqual([{ audio: true }]);
+    expect(els.status.className).toBe('status success');
+    expect(stream.tracks[0].parado).toBe(true);
+    expect(els.closeBtn.style.display).toBe('inline-flex');
+    expect(log.enviadas).toEqual([{ action: 'permissionGranted' }]);
+  });
+
+  await testAsync('[PERM-4] permissão negada: mostra como liberar, reabilita o botão e NÃO avisa o painel', async () => {
+    const { els, log, amb } = _fakePaginaPermissao({ getUserMedia: () => { throw _erroMidia('NotAllowedError'); } });
+    iniciarPaginaPermissao({ midia: 'microfone' }, amb);
+    const ok = await els.requestBtn._h.click();
+    expect(ok).toBe(false);
+    expect(els.status.className).toBe('status error');
+    expect(/Permissão negada/.test(els.status.textContent)).toBe(true);
+    expect(els.requestBtn.disabled).toBe(false);
+    expect(log.enviadas).toEqual([]);
+  });
+
+  await testAsync('[PERM-5] sem dispositivo: a mensagem diz que não há microfone (não "permissão negada")', async () => {
+    const { els, amb } = _fakePaginaPermissao({ getUserMedia: () => { throw _erroMidia('NotFoundError'); } });
+    iniciarPaginaPermissao({ midia: 'microfone' }, amb);
+    await els.requestBtn._h.click();
+    expect(/Nenhum microfone encontrado/.test(els.status.textContent)).toBe(true);
+  });
+
+  await testAsync('[PERM-6] câmera: mostra a prévia, avisa o painel e só apaga a câmera ao fechar', async () => {
+    const stream = _fakeStreamPerm();
+    const { els, log, amb } = _fakePaginaPermissao({ comVideo: true, getUserMedia: () => stream });
+    iniciarPaginaPermissao({ midia: 'camera' }, amb);
+    await els.requestBtn._h.click();
+    expect(log.constraints).toEqual([{ video: true }]);
+    expect(els.videoPreview.srcObject).toBe(stream);
+    expect(els.preview.style.display).toBe('block');
+    expect(stream.tracks[0].parado).toBe(false); // prévia ligada
+    expect(log.enviadas).toEqual([{ action: 'cameraPermissionGranted' }]);
+    els.closeBtn._h.click();
+    expect(stream.tracks[0].parado).toBe(true);
+    expect(log.abasRemovidas).toEqual([31]);
+  });
+
+  await testAsync('[PERM-7] permissão JÁ concedida ao abrir: a página diz logo, sem pedir clique', async () => {
+    const { els, log, amb } = _fakePaginaPermissao({ estadoPermissao: 'granted', getUserMedia: () => _fakeStreamPerm() });
+    iniciarPaginaPermissao({ midia: 'microfone' }, amb);
+    await _espera(5); // a consulta de permissão é assíncrona
+    expect(els.status.className).toBe('status success');
+    expect(log.constraints).toEqual([]); // não abriu o microfone à toa
+    expect(log.enviadas).toEqual([{ action: 'permissionGranted' }]);
+  });
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
 // RELATÓRIO FINAL
 // ──────────────────────────────────────────────────────────────────────────────
 
@@ -7681,6 +7806,7 @@ async function _painelUnicoETimeoutTests() {
   await _v550Tests();
   _estaticaRetryTests();
   await _painelUnicoETimeoutTests();
+  await _paginasPermissaoTests();
 
   console.log('\n');
   console.log('═══════════════════════════════════════════════════');

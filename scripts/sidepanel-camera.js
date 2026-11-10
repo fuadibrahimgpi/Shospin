@@ -58,8 +58,29 @@ async function checkCameraPermission() {
   }
 }
 
-function openCameraPermissionPage() {
-  chrome.tabs.create({ url: chrome.runtime.getURL('camera-permission.html') });
+// Abre a página de liberação da câmera — ou traz para frente a que já está aberta
+// (a câmera é aberta sozinha ao entrar no modo Câmera; sem isto, cada entrada com
+// a permissão negada empilharia mais uma aba).
+async function openCameraPermissionPage() {
+  const url = chrome.runtime.getURL('camera-permission.html');
+  try {
+    const abertas = (await chrome.tabs.query({})).filter(t => t && (t.url || t.pendingUrl || '') === url);
+    if (abertas.length) {
+      await chrome.tabs.update(abertas[0].id, { active: true });
+      if (abertas[0].windowId != null) await chrome.windows.update(abertas[0].windowId, { focused: true });
+      return;
+    }
+  } catch (_e) { /* não deu para procurar — abre uma nova */ }
+  chrome.tabs.create({ url });
+}
+
+// Já abrimos a página nesta sessão do painel? A abertura AUTOMÁTICA da câmera só
+// leva o médico até ela uma vez; o clique em "Iniciar Câmera" sempre leva.
+let _cameraPermissionPageOpened = false;
+
+/** Pura: decide se a negativa da câmera deve abrir a página de liberação. */
+function _deveAbrirPaginaPermissaoCamera(pedidoExplicito, jaAbriuNestaSessao) {
+  return !!pedidoExplicito || !jaAbriuNestaSessao;
 }
 
 // ============================================================================
@@ -102,11 +123,14 @@ async function openCameraStreamWithFallback() {
   throw lastError;
 }
 
-async function startCameraCapture() {
+async function startCameraCapture(origem) {
   // Já abrindo ou aberta: ignorar (a abertura automática ao trocar de aba e o
   // botão "Iniciar Câmera" podem disparar quase juntos).
   if (_cameraStarting || cameraStream) return;
   _cameraStarting = true;
+  // O botão "Iniciar Câmera" chama com o evento de clique; a abertura automática
+  // (trocar de modo, atalho) chama sem argumento.
+  const pedidoExplicito = !!(origem && origem.type === 'click');
 
   // Pausar reconhecimento de voz se gravação estiver ativa
   if (isRecording && typeof pauseSpeechRecognition === 'function') {
@@ -154,7 +178,17 @@ async function startCameraCapture() {
   } catch (error) {
     console.error('[Camera] Erro:', error);
     let msg = 'Erro ao acessar câmera';
-    if (error.name === 'NotAllowedError') msg = 'Permissão de câmera negada.';
+    if (error.name === 'NotAllowedError') {
+      // Mesmo caminho do microfone: levar o médico à página que libera. Antes o
+      // painel só escrevia "negada" e a página de liberação ficava inalcançável.
+      if (_deveAbrirPaginaPermissaoCamera(pedidoExplicito, _cameraPermissionPageOpened)) {
+        _cameraPermissionPageOpened = true;
+        msg = 'Permissão de câmera negada — abri a página para liberar.';
+        Promise.resolve(openCameraPermissionPage()).catch(e => console.warn('[Camera] Não abriu a página de permissão:', e && e.message));
+      } else {
+        msg = 'Permissão de câmera negada. Clique em "Iniciar Câmera" para abrir a página de liberação.';
+      }
+    }
     else if (error.name === 'NotFoundError') msg = 'Câmera não encontrada.';
     else msg = error.message;
     cameraStatusText.textContent = msg;

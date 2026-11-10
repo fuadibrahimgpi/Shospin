@@ -99,6 +99,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       cameraPermissionChecked = true;
       cameraStatusText.textContent = 'Câmera liberada! Clique para iniciar captura';
       cameraStatusText.style.color = '';
+      // NÃO abre a câmera sozinho aqui: a página de permissão ainda está com a
+      // prévia ligada, e duas aberturas simultâneas podem deixar a do painel na
+      // resolução baixa da prévia — o OCR do ticket precisa da resolução cheia.
       sendResponse({ ok: true });
       break;
 

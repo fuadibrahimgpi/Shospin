@@ -141,7 +141,12 @@ function iniciarPaginaPermissao(opcoes, amb) {
 
   requestBtn.addEventListener('click', pedir);
   closeBtn.addEventListener('click', fechar);
-  if (win.addEventListener) win.addEventListener('pagehide', pararStream);
+  if (win.addEventListener) {
+    win.addEventListener('pagehide', pararStream);
+    // Voltou para o painel sem fechar esta aba: soltar a câmera, para ela não
+    // ficar ligada à toa nem disputar a resolução com a captura do painel.
+    win.addEventListener('blur', pararStream);
+  }
 
   // Já concedida (ex.: a página foi aberta à toa): dizer logo, sem pedir clique.
   try {

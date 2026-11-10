@@ -7723,7 +7723,7 @@ function _fakePaginaPermissao({ comVideo = false, estadoPermissao = 'prompt', ge
       runtime: { sendMessage: (m) => { log.enviadas.push(m); return Promise.resolve(); } },
       tabs: { getCurrent: (cb) => cb({ id: 31 }), remove: (id) => log.abasRemovidas.push(id) },
     },
-    window: { close: () => { log.fechouJanela++; }, addEventListener() {} },
+    window: { _h: {}, close: () => { log.fechouJanela++; }, addEventListener(ev, fn) { this._h[ev] = fn; } },
   };
   return { els, log, amb };
 }
@@ -7782,6 +7782,87 @@ async function _paginasPermissaoTests() {
     els.closeBtn._h.click();
     expect(stream.tracks[0].parado).toBe(true);
     expect(log.abasRemovidas).toEqual([31]);
+  });
+
+  await testAsync('[PERM-8] câmera: voltar ao painel sem fechar a aba (blur) solta a câmera', async () => {
+    const stream = _fakeStreamPerm();
+    const { els, amb } = _fakePaginaPermissao({ comVideo: true, getUserMedia: () => stream });
+    iniciarPaginaPermissao({ midia: 'camera' }, amb);
+    await els.requestBtn._h.click();
+    expect(stream.tracks[0].parado).toBe(false);
+    amb.window._h.blur();
+    expect(stream.tracks[0].parado).toBe(true);
+    expect(els.videoPreview.srcObject).toBe(null);
+    expect(els.status.className).toBe('status success'); // a permissão continua concedida
+  });
+
+  // ── Painel: câmera negada leva à página de liberação ──────────────────────
+  const _montaCameraNegada = (chromeFalso) => {
+    const el = () => ({ textContent: '', style: {}, classList: { add() {}, remove() {} } });
+    const ui = { cameraStatusText: el(), cameraOverlay: el() };
+    const log = { paginasAbertas: 0 };
+    const fns = new Function(
+      'chrome', 'console', 'cameraStatusText', 'cameraOverlay', 'openCameraStreamWithFallback', '_contaAbertura',
+      'let _cameraStarting = false; let cameraStream = null; let _cameraPermissionPageOpened = false;\n' +
+      'const isRecording = false; const isSpeechPausedByCamera = false;\n' +
+      _extractFn(cameraJsSource, '_deveAbrirPaginaPermissaoCamera') + '\n' +
+      'async ' + _extractFn(cameraJsSource, 'openCameraPermissionPage').replace('{', '{ _contaAbertura();') + '\n' +
+      'async ' + _extractFn(cameraJsSource, 'startCameraCapture') + '\n' +
+      'return { startCameraCapture, openCameraPermissionPage, _deveAbrirPaginaPermissaoCamera };'
+    )(chromeFalso, { error() {}, warn() {}, log() {} }, ui.cameraStatusText, ui.cameraOverlay,
+      async () => { throw _erroMidia('NotAllowedError'); }, () => { log.paginasAbertas++; });
+    return { fns, ui, log };
+  };
+
+  const _chromeAbasCamera = (abas) => {
+    const log = { criadas: [], ativadas: [], focadas: [] };
+    return {
+      log,
+      chrome: {
+        runtime: { getURL: (f) => 'chrome-extension://abc/' + f },
+        tabs: {
+          query: async () => abas,
+          create: (o) => { log.criadas.push(o.url); },
+          update: async (id, o) => { if (o.active) log.ativadas.push(id); },
+        },
+        windows: { update: async (id, o) => { if (o.focused) log.focadas.push(id); } },
+      },
+    };
+  };
+
+  await testAsync('[PERM-9] câmera negada: abertura AUTOMÁTICA leva à página só uma vez; o clique leva sempre', async () => {
+    const { chrome } = _chromeAbasCamera([]);
+    const { fns, ui, log } = _montaCameraNegada(chrome);
+    await fns.startCameraCapture();                 // entrou no modo Câmera
+    expect(log.paginasAbertas).toBe(1);
+    expect(/abri a página para liberar/.test(ui.cameraStatusText.textContent)).toBe(true);
+    await fns.startCameraCapture();                 // entrou de novo: não empilha
+    expect(log.paginasAbertas).toBe(1);
+    expect(/Clique em "Iniciar Câmera"/.test(ui.cameraStatusText.textContent)).toBe(true);
+    await fns.startCameraCapture({ type: 'click' }); // clicou no botão
+    expect(log.paginasAbertas).toBe(2);
+  });
+
+  await testAsync('[PERM-10] página de liberação já aberta é trazida para frente, não duplicada', async () => {
+    const url = 'chrome-extension://abc/camera-permission.html';
+    const comAba = _chromeAbasCamera([{ id: 5, windowId: 9, url }, { id: 6, windowId: 9, url: 'https://sistema.shosp.com.br/' }]);
+    await _montaCameraNegada(comAba.chrome).fns.openCameraPermissionPage();
+    expect(comAba.log.criadas).toEqual([]);
+    expect(comAba.log.ativadas).toEqual([5]);
+    expect(comAba.log.focadas).toEqual([9]);
+
+    const semAba = _chromeAbasCamera([]);
+    await _montaCameraNegada(semAba.chrome).fns.openCameraPermissionPage();
+    expect(semAba.log.criadas).toEqual([url]);
+  });
+
+  await testAsync('[PERM-11] ao receber a liberação da câmera o painel NÃO abre a câmera sozinho (prévia ainda ligada)', async () => {
+    const initSrc = readSrcNormalized('scripts', 'sidepanel-init.js');
+    const ini = initSrc.indexOf("case 'cameraPermissionGranted':");
+    const bloco = initSrc.slice(ini, initSrc.indexOf('break;', ini));
+    expect(ini > 0).toBe(true);
+    expect(bloco.includes('cameraPermissionChecked = true')).toBe(true);
+    expect(/^\s*(?:if\s*\(.*\)\s*)?startCameraCapture\(/m.test(bloco)).toBe(false);
   });
 
   await testAsync('[PERM-7] permissão JÁ concedida ao abrir: a página diz logo, sem pedir clique', async () => {

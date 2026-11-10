@@ -1079,15 +1079,30 @@ async function injectAll(force = false) {
 
 // Recheck de fidelidade (src/agents/recheck-agent.js): compara o payload enviado
 // com o readback do prontuário. Só registra no console e avisa — não corrige nada.
+//
+// Até 2026-11-10 este recheck NUNCA rodou no painel: recheck-agent.js e
+// medicamentos-agent.js declaravam `const _Contrato` no topo, e scripts clássicos
+// dividem um escopo só — o segundo falhava ao carregar ("Identifier '_Contrato'
+// has already been declared") e RecheckAgent ficava indefinido, caindo em silêncio
+// no `return null` abaixo. Por isso o aviso quando ele falta, e o try/catch: é
+// código que só relata, e a estreia dele não pode derrubar uma injeção já feita.
 function _recheckInjecao(enviado, readback) {
-  if (typeof RecheckAgent === 'undefined') return null;
-  const r = RecheckAgent.conferirFidelidade(RecheckAgent.montarEnviado(enviado), readback);
-  const titulo = `[Recheck] ${r.conferidos} linha(s) conferida(s), ${r.divergencias.length} divergência(s)`;
-  console.groupCollapsed(titulo);
-  if (r.divergencias.length) console.table(r.divergencias);
-  if (r.naoVerificaveis.length) console.log('[Recheck] não verificável (aba fora do DOM):', r.naoVerificaveis);
-  console.groupEnd();
-  return r;
+  if (typeof RecheckAgent === 'undefined') {
+    console.warn('[Recheck] RecheckAgent não carregou — a conferência enviado × prontuário NÃO foi feita. Veja erros de carregamento no console do painel.');
+    return null;
+  }
+  try {
+    const r = RecheckAgent.conferirFidelidade(RecheckAgent.montarEnviado(enviado), readback);
+    const titulo = `[Recheck] ${r.conferidos} linha(s) conferida(s), ${r.divergencias.length} divergência(s)`;
+    console.groupCollapsed(titulo);
+    if (r.divergencias.length) console.table(r.divergencias);
+    if (r.naoVerificaveis.length) console.log('[Recheck] não verificável (aba fora do DOM):', r.naoVerificaveis);
+    console.groupEnd();
+    return r;
+  } catch (e) {
+    console.warn('[Recheck] falhou ao conferir (a injeção em si não foi afetada):', e && e.message);
+    return null;
+  }
 }
 
 /**

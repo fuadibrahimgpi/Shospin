@@ -1739,7 +1739,8 @@
    * @returns {{ clonedAIResponse, injectFlags, guardsApplied, metadata }}
    */
   /**
-   * MODO SOMBRA do agente de medicamentos (src/agents/medicamentos-agent.js).
+   * MODO SOMBRA de medicamentos. Usa SÓ o léxico: o agente em si
+   * (src/agents/medicamentos-agent.js) está estacionado e não é carregado.
    * Não altera nada: só registra quando o léxico acha na FALA um remédio que o
    * `tratamento` final não nomeia (nem pelo princípio ativo). É a medição que
    * decide se vale ligar o agente de verdade (passo 2, com chamada ao modelo).

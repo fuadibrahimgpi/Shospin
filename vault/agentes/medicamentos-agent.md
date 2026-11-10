@@ -1,6 +1,6 @@
 ---
 title: "Agente de medicamentos"
-description: "Subagente que escreve o campo tratamento: roteamento, validação por léxico e hierarquia de nomeação (princípio, protocolo, classe, genérico)."
+description: "ESTACIONADO desde 2026-11-10 (fora do painel; só os testes o usam). Subagente planejado para o campo tratamento: roteamento, validação por léxico e hierarquia de nomeação."
 date: 2026-10-22
 tags: [agente, projeto-shosp]
 aliases: ["medicamentos-agent"]
@@ -9,6 +9,8 @@ aliases: ["medicamentos-agent"]
 # Agente de medicamentos
 
 **Agente** · arquivo-fonte: `src/agents/medicamentos-agent.js`
+
+> **Estado: estacionado (2026-11-10).** O painel não carrega este arquivo e nenhum código de produção o chama; só `utils/agents-test.js`. Em produção, medicamentos são tratados pelo [Léxico](../modulos/medicamentos-lexico.md) e pelos guards 2–2g do [DecisionEngine](decision-engine.md), cujo "modo sombra" usa só o léxico. Para religar: escrever `analisar()`, voltar a carregar o arquivo em `sidepanel.html` e rodar em sombra antes de deixá-lo escrever o campo.
 
 Conduta → campo `tratamento`. O passo 1 é a parte DETERMINÍSTICA (roteamento, validação, formatação); a chamada ao modelo (`analisar`) entra atrás de flag, em modo sombra ao lado do [DecisionEngine](decision-engine.md), para medição antes da implantação plena.
 

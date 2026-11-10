@@ -2,6 +2,17 @@
  * AGENTE DE MEDICAMENTOS (conduta → campo `tratamento`)
  * ============================================================================
  *
+ * ESTADO: ESTACIONADO (2026-11-10). Não é carregado pelo painel e nenhum código
+ * de produção o chama — só utils/agents-test.js, que continua rodando no
+ * `npm test`. O que está em produção para medicamentos é o léxico
+ * (config/medicamentos-lexico.js) e os guards 2–2g do DecisionEngine; o "modo
+ * sombra" de lá usa só o léxico, não este arquivo.
+ *
+ * Para religar: (1) escrever `analisar()` (a chamada ao modelo, que ainda não
+ * existe); (2) voltar a carregar este arquivo em sidepanel.html, depois de
+ * agent-contract.js; (3) chamá-lo em modo sombra antes de deixá-lo escrever o
+ * campo; (4) ajustar o teste [MED-ESTACIONADO] em utils/integration-test.js.
+ *
  * Passo 1 do plano: a parte DETERMINÍSTICA — roteamento, validação e
  * formatação. A chamada ao modelo (`analisar`) entra no passo 2, atrás de flag,
  * em modo sombra. Tudo aqui roda sem IA e é coberto por utils/agents-test.js
@@ -23,7 +34,7 @@
  */
 'use strict';
 
-const _Contrato = (typeof module !== 'undefined' && module.exports)
+const _ContratoMed = (typeof module !== 'undefined' && module.exports)
   ? require('./agent-contract.js') : globalThis.AgentContract;
 const _Lexico = (typeof module !== 'undefined' && module.exports)
   ? require('../../config/medicamentos-lexico.js') : globalThis.MedicamentosLexico;
@@ -57,7 +68,7 @@ function _rebaixar(item, motivo, avisos) {
 }
 
 function validar(itens, transcricao) {
-  const { aceitos: comEvidencia, descartados } = _Contrato.verificarEvidencia(itens, transcricao);
+  const { aceitos: comEvidencia, descartados } = _ContratoMed.verificarEvidencia(itens, transcricao);
   const avisos = [];
   const aceitos = [];
 

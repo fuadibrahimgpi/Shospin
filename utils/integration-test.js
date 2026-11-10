@@ -7959,6 +7959,108 @@ test('[MSG-8] injeção de OCT devolve o motivo da falha em `error`', () => {
 });
 
 // ──────────────────────────────────────────────────────────────────────────────
+// AGENTE DE MEDICAMENTOS ESTACIONADO + ESCOPO ÚNICO DOS SCRIPTS (2026-11-10, item 9)
+// ──────────────────────────────────────────────────────────────────────────────
+// Os <script> do painel são clássicos: dividem UM escopo. Dois arquivos com
+// `const X` no topo = o segundo não carrega. Foi assim que o recheck de fidelidade
+// passou meses sem rodar: recheck-agent.js e medicamentos-agent.js declaravam
+// `const _Contrato`. Os testes em Node não viam (cada require tem escopo próprio).
+
+const _scriptsDoPainel = () =>
+  [...readSrcNormalized('sidepanel.html').matchAll(/<script src="([^"]+)"/g)].map(m => m[1]);
+
+// Declarações de topo de um script clássico (coluna 0).
+const _declsDeTopo = (arq) =>
+  [...readSrcNormalized(arq).matchAll(/^(const|let|class|var|function|async function)\s+([A-Za-z_$][\w$]*)/gm)]
+    .map(m => ({ tipo: m[1], nome: m[2], arq }));
+
+function _colisoesLexicas(lista) {
+  const vistos = new Map();
+  const colisoes = [];
+  const lexica = (t) => t === 'const' || t === 'let' || t === 'class';
+  for (const arq of lista) {
+    for (const d of _declsDeTopo(arq)) {
+      const antes = vistos.get(d.nome);
+      if (antes && antes.arq !== arq && (lexica(d.tipo) || lexica(antes.tipo))) {
+        colisoes.push(`${d.nome}: ${antes.arq} × ${arq}`);
+      }
+      if (!antes) vistos.set(d.nome, d);
+    }
+  }
+  return colisoes;
+}
+
+test('[ESCOPO-1] nenhum nome de topo se repete entre os scripts que o painel carrega', () => {
+  const lista = _scriptsDoPainel();
+  expect(lista.length > 20).toBe(true);
+  expect(_colisoesLexicas(lista)).toEqual([]);
+});
+
+test('[ESCOPO-2] o detector enxerga a colisão que derrubava o recheck (regressão do próprio teste)', () => {
+  // Dois arquivos de verdade que declaram o mesmo `const` de propósito não existem
+  // mais; simula-se com um par sintético para provar que o detector não é cego.
+  const pasta = require('path').join(require('os').tmpdir(), 'shosp-escopo-' + process.pid);
+  fs.mkdirSync(pasta, { recursive: true });
+  try {
+    fs.writeFileSync(require('path').join(pasta, 'a.js'), 'const _Contrato = 1;\n');
+    fs.writeFileSync(require('path').join(pasta, 'b.js'), "'use strict';\nconst _Contrato = 2;\n");
+    const rel = (f) => require('path').relative(require('path').join(__dirname, '..'), require('path').join(pasta, f));
+    expect(_colisoesLexicas([rel('a.js'), rel('b.js')]).length).toBe(1);
+  } finally {
+    fs.rmSync(pasta, { recursive: true, force: true });
+  }
+});
+
+test('[ESCOPO-3] carregados no MESMO escopo, na ordem do painel, os agentes sobem todos — RecheckAgent incluído', () => {
+  const vm = require('vm');
+  const semDom = _scriptsDoPainel().filter(a => /^(config\/|src\/agents\/)/.test(a));
+  expect(semDom.includes('src/agents/recheck-agent.js')).toBe(true);
+  const ctx = vm.createContext({ console: { log() {}, warn() {}, error() {} } });
+  const erros = [];
+  for (const arq of semDom) {
+    try { vm.runInContext(readSrcNormalized(arq), ctx, { filename: arq }); }
+    catch (e) { erros.push(`${arq}: ${e.message}`); }
+  }
+  expect(erros).toEqual([]);
+  for (const global of ['AgentContract', 'RecheckAgent', 'MedicamentosFeedback', 'MedicamentosLexico', 'ClinicalTriggers']) {
+    expect(vm.runInContext('typeof ' + global, ctx)).toBe('object');
+  }
+});
+
+test('[MED-ESTACIONADO] o agente de medicamentos está fora do painel, e nada em produção depende dele', () => {
+  expect(_scriptsDoPainel().includes('src/agents/medicamentos-agent.js')).toBe(false);
+  // O arquivo e os testes dele continuam existindo.
+  expect(fs.existsSync(require('path').join(__dirname, '..', 'src', 'agents', 'medicamentos-agent.js'))).toBe(true);
+  expect(readSrcNormalized('src', 'agents', 'medicamentos-agent.js')).toContain('ESTADO: ESTACIONADO');
+  // Nenhum script carregado pelo painel usa o global dele (comentário não conta).
+  const usam = _scriptsDoPainel().filter(arq =>
+    readSrcNormalized(arq).split('\n').some(l => /\bMedicamentosAgent\b/.test(l) && !/^\s*(\/\/|\*|\/\*)/.test(l)));
+  expect(usam).toEqual([]);
+});
+
+test('[RECHECK-VIVO] recheck ausente AVISA, e falha do recheck não derruba a injeção', () => {
+  const montar = (RecheckAgent, avisos) => new Function(
+    'RecheckAgent', 'console',
+    _extractFn(injectionJsSource, '_recheckInjecao') + '\nreturn _recheckInjecao;'
+  )(RecheckAgent, { warn: (m) => avisos.push(String(m)), log() {}, table() {}, groupCollapsed() {}, groupEnd() {} });
+
+  const semAgente = [];
+  expect(montar(undefined, semAgente)({}, {})).toBe(null);
+  expect(semAgente.length).toBe(1);
+  expect(/NÃO foi feita/.test(semAgente[0])).toBe(true);
+
+  const quebrado = [];
+  const agenteQueLanca = { montarEnviado: () => ({}), conferirFidelidade: () => { throw new Error('boom'); } };
+  expect(montar(agenteQueLanca, quebrado)({}, {})).toBe(null); // não propaga
+  expect(/a injeção em si não foi afetada/.test(quebrado[0])).toBe(true);
+
+  // Com o agente de verdade, confere e devolve o relatório.
+  const Recheck = require('../src/agents/recheck-agent.js');
+  const r = montar(Recheck, [])({ dados: { conduta: 'Orientado retorno' } }, {});
+  expect(r && typeof r.conferidos).toBe('number');
+});
+
+// ──────────────────────────────────────────────────────────────────────────────
 // RELATÓRIO FINAL
 // ──────────────────────────────────────────────────────────────────────────────
 

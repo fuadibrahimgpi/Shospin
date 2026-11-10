@@ -7459,6 +7459,217 @@ test('[DE-ABERTO-9] o painel não recua mais para o dado cru e barra os 3 pontos
 });
 
 // ──────────────────────────────────────────────────────────────────────────────
+// PAINEL ÚNICO + LIMITE DE TEMPO NAS MENSAGENS (análise de estrutura 2026-11-10)
+// ──────────────────────────────────────────────────────────────────────────────
+// (4) O service worker dorme e esquece popupWindowId: clique ou atalho abria um
+//     segundo painel, e os dois recebiam 'toggleRecording'.
+// (5) sendToTab sem limite: uma aba muda pendurava a injeção para sempre.
+
+const backgroundJsSource = readSrcNormalized('src', 'background.js');
+
+// _extractFn corta a partir de "function": o `async` da frente é reposto aqui.
+const _extractAsyncFn = (src, name) => 'async ' + _extractFn(src, name);
+
+// Chrome falso do background. `janelasVivas` = ids que existem; `tabs` = abas abertas.
+function _fakeChromeBg({ tabs = [], janelasVivas = [] } = {}) {
+  const log = { create: 0, update: [], sent: [] };
+  let nextId = 500;
+  const chrome = {
+    windows: {
+      get: async (id) => { if (!janelasVivas.includes(id)) throw new Error('No window'); return { id }; },
+      update: async (id) => { if (!janelasVivas.includes(id)) throw new Error('No window'); log.update.push(id); return { id }; },
+      create: async () => {
+        log.create++;
+        await new Promise(r => setTimeout(r, 5)); // criação demora: abre a janela da corrida
+        const id = nextId++;
+        janelasVivas.push(id);
+        return { id };
+      },
+    },
+    tabs: { query: async () => tabs },
+    runtime: { sendMessage: async (m) => { log.sent.push(m); } },
+    action: { setBadgeText() {}, setBadgeBackgroundColor() {} },
+  };
+  return { chrome, log };
+}
+
+// Monta o trecho "painel único" do background com o estado inicial que o worker
+// tem logo depois de ACORDAR (popupWindowId nulo), ou com um cache dado.
+function _montaPainelBg(chrome, cacheInicial) {
+  return new Function(
+    'chrome', 'bgLogger', 'PANEL_URL', 'setTimeout', 'clearTimeout', '_cacheInicial',
+    'let popupWindowId = _cacheInicial; let _panelOpening = null;\n' +
+    'let _pendingPanelAction = null; let _pendingPanelTimer = null;\n' +
+    _extractFn(backgroundJsSource, '_pickPanelWindowId') + '\n' +
+    _extractAsyncFn(backgroundJsSource, '_findPanelWindowId') + '\n' +
+    _extractFn(backgroundJsSource, '_createPanelWindow') + '\n' +
+    _extractAsyncFn(backgroundJsSource, '_focusOrOpenPanel') + '\n' +
+    _extractFn(backgroundJsSource, '_badgeClosedPanel') + '\n' +
+    _extractFn(backgroundJsSource, '_sendPendingPanelAction') + '\n' +
+    _extractAsyncFn(backgroundJsSource, '_ensurePanelAndSend') + '\n' +
+    'return { _pickPanelWindowId, _findPanelWindowId, _focusOrOpenPanel, _ensurePanelAndSend };'
+  )(chrome, { info() {}, error() {}, success() {} }, 'chrome-extension://abc/sidepanel.html',
+    () => 0, () => {}, cacheInicial == null ? null : cacheInicial);
+}
+
+const _PAINEL_URL_T = 'chrome-extension://abc/sidepanel.html';
+
+test('[PAINEL-1] _pickPanelWindowId acha a aba do painel e não confunde com outras', () => {
+  const { _pickPanelWindowId } = _montaPainelBg(_fakeChromeBg().chrome);
+  const shosp = { url: 'https://sistema.shosp.com.br/prontuario', windowId: 1 };
+  expect(_pickPanelWindowId([shosp, { url: _PAINEL_URL_T, windowId: 77 }], _PAINEL_URL_T)).toBe(77);
+  expect(_pickPanelWindowId([{ url: _PAINEL_URL_T + '?modo=oct', windowId: 78 }], _PAINEL_URL_T)).toBe(78);
+  // Painel ainda carregando: a URL está em pendingUrl.
+  expect(_pickPanelWindowId([{ pendingUrl: _PAINEL_URL_T, windowId: 79 }], _PAINEL_URL_T)).toBe(79);
+  // Prefixo não basta, e a página de opções não é o painel.
+  expect(_pickPanelWindowId([{ url: _PAINEL_URL_T + '.bak', windowId: 80 }], _PAINEL_URL_T)).toBe(null);
+  expect(_pickPanelWindowId([shosp, { url: 'chrome-extension://abc/config.html', windowId: 81 }], _PAINEL_URL_T)).toBe(null);
+  expect(_pickPanelWindowId(null, _PAINEL_URL_T)).toBe(null);
+});
+
+test('[PAINEL-6] o background só cria janela num lugar e não decide mais só pela variável', () => {
+  expect((backgroundJsSource.match(/chrome\.windows\.create\(/g) || []).length).toBe(1);
+  // O teste antigo de "painel fechado" era `if (popupWindowId)` direto.
+  expect(/if \(popupWindowId\)\s*\{/.test(backgroundJsSource)).toBe(false);
+});
+
+// Chrome falso do painel para sendToTab. `comportamento(tabId, msg, responder)`
+// decide se e quando a aba responde; responder(resp, erro) simula lastError.
+function _fakeChromeTab(comportamento) {
+  const c = {
+    runtime: { lastError: undefined },
+    tabs: {
+      sendMessage(tabId, msg, cb) {
+        comportamento(tabId, msg, (resp, erro) => {
+          c.runtime.lastError = erro ? { message: erro } : undefined;
+          try { cb(resp); } finally { c.runtime.lastError = undefined; }
+        });
+      },
+    },
+  };
+  return c;
+}
+
+function _montaSendToTab(chrome, avisos) {
+  return new Function(
+    'chrome', 'console',
+    _extractFn(injectionJsSource, '_sendToTabTimeoutMs') + '\n' +
+    _extractFn(injectionJsSource, 'sendToTab') + '\n' +
+    'return { sendToTab, _sendToTabTimeoutMs };'
+  )(chrome, { warn: (m) => avisos.push(String(m)), log() {} });
+}
+
+const _espera = (ms) => new Promise(r => setTimeout(r, ms));
+
+test('[TAB-TIMEOUT-5] limites por ação: sondagem curta, injeção longa, resto no meio', () => {
+  const { _sendToTabTimeoutMs } = _montaSendToTab(_fakeChromeTab(() => {}), []);
+  expect(_sendToTabTimeoutMs('checkPage')).toBe(5000);
+  expect(_sendToTabTimeoutMs('setInjectedCids')).toBe(5000);
+  expect(_sendToTabTimeoutMs('injectAll')).toBe(180000);
+  expect(_sendToTabTimeoutMs('searchCid')).toBe(60000);
+  expect(_sendToTabTimeoutMs('acaoQueAindaNaoExiste')).toBe(60000);
+});
+
+test('[TAB-TIMEOUT-7] injectAll NÃO reenvia depois de estourar o limite', () => {
+  expect(injectionJsSource).toContain('{ onTimeout: () => { injectTimedOut = true; } }');
+  const iTimeout = injectionJsSource.indexOf('if (injectTimedOut)');
+  const iReenvio = injectionJsSource.indexOf('// ← sem executeScript aqui');
+  expect(iTimeout > 0 && iReenvio > iTimeout).toBe(true);
+});
+
+async function _painelUnicoETimeoutTests() {
+  await testAsync('[PAINEL-2] worker ACORDOU (variável nula) com painel aberto: foca o existente, não cria outro', async () => {
+    const { chrome, log } = _fakeChromeBg({ tabs: [{ url: _PAINEL_URL_T, windowId: 77 }], janelasVivas: [77] });
+    const r = await _montaPainelBg(chrome, null)._focusOrOpenPanel();
+    expect(r).toEqual({ windowId: 77, created: false });
+    expect(log.create).toBe(0);
+    expect(log.update).toEqual([77]);
+  });
+
+  await testAsync('[PAINEL-3] sem painel: cria UM — dois cliques seguidos não abrem dois', async () => {
+    const { chrome, log } = _fakeChromeBg();
+    const bg = _montaPainelBg(chrome, null);
+    const [a, b] = await Promise.all([bg._focusOrOpenPanel(), bg._focusOrOpenPanel()]);
+    expect(log.create).toBe(1);
+    expect(a.windowId).toBe(b.windowId);
+    expect(a.created).toBe(true);
+  });
+
+  await testAsync('[PAINEL-4] atalho com worker acordado e painel aberto: manda a ação, não abre janela', async () => {
+    const { chrome, log } = _fakeChromeBg({ tabs: [{ url: _PAINEL_URL_T, windowId: 77 }], janelasVivas: [77] });
+    await _montaPainelBg(chrome, null)._ensurePanelAndSend('toggleRecording');
+    expect(log.create).toBe(0);
+    expect(log.sent).toEqual([{ action: 'toggleRecording' }]);
+  });
+
+  await testAsync('[PAINEL-5] cache aponta janela já fechada e não há aba do painel: abre um novo', async () => {
+    const { chrome, log } = _fakeChromeBg({ tabs: [{ url: 'https://sistema.shosp.com.br/', windowId: 1 }], janelasVivas: [1] });
+    const bg = _montaPainelBg(chrome, 42); // 42 não existe mais
+    expect(await bg._findPanelWindowId()).toBe(null);
+    const r = await bg._focusOrOpenPanel();
+    expect(r.created).toBe(true);
+    expect(log.create).toBe(1);
+  });
+
+  await testAsync('[TAB-TIMEOUT-1] aba que nunca responde: resolve null no limite, avisa (mesmo silent) e chama onTimeout', async () => {
+    const avisos = [];
+    let estourou = 0;
+    const { sendToTab } = _montaSendToTab(_fakeChromeTab(() => { /* muda */ }), avisos);
+    const t0 = Date.now();
+    const r = await sendToTab(9, { action: 'injectAll' }, { silent: true, timeoutMs: 30, onTimeout: () => { estourou++; } });
+    expect(r).toBe(null);
+    expect(estourou).toBe(1);
+    expect(Date.now() - t0 < 1000).toBe(true);
+    expect(avisos.length).toBe(1);
+    expect(/action=injectAll sem resposta/.test(avisos[0])).toBe(true);
+  });
+
+  await testAsync('[TAB-TIMEOUT-2] resposta dentro do limite passa intacta e o limite não dispara depois', async () => {
+    const avisos = [];
+    let estourou = 0;
+    const chrome = _fakeChromeTab((_id, _m, responder) => setTimeout(() => responder({ success: true, n: 1 }), 5));
+    const r = await _montaSendToTab(chrome, avisos).sendToTab(9, { action: 'searchCid' }, { timeoutMs: 40, onTimeout: () => { estourou++; } });
+    expect(r).toEqual({ success: true, n: 1 });
+    await _espera(60);
+    expect(estourou).toBe(0);
+    expect(avisos.length).toBe(0);
+  });
+
+  await testAsync('[TAB-TIMEOUT-3] resposta ATRASADA (depois do limite) é ignorada sem erro', async () => {
+    const avisos = [];
+    const chrome = _fakeChromeTab((_id, _m, responder) => setTimeout(() => responder({ success: true }), 50));
+    const r = await _montaSendToTab(chrome, avisos).sendToTab(9, { action: 'injectAll' }, { timeoutMs: 15 });
+    expect(r).toBe(null);
+    await _espera(60); // a resposta atrasada chega aqui — não pode lançar nem avisar de novo
+    expect(avisos.length).toBe(1);
+  });
+
+  await testAsync('[TAB-TIMEOUT-4] formas antigas preservadas: contexto invalidado e "receiving end"', async () => {
+    const avisos = [];
+    let estourou = 0;
+    const invalido = _fakeChromeTab((_id, _m, responder) => responder(undefined, 'Extension context invalidated.'));
+    expect(await _montaSendToTab(invalido, avisos).sendToTab(9, { action: 'checkPage' }, { timeoutMs: 30, onTimeout: () => { estourou++; } }))
+      .toBe('CONTEXT_INVALIDATED');
+    const semOuvinte = _fakeChromeTab((_id, _m, responder) => responder(undefined, 'Could not establish connection. Receiving end does not exist.'));
+    expect(await _montaSendToTab(semOuvinte, avisos).sendToTab(9, { action: 'checkPage' }, { silent: true, timeoutMs: 30, onTimeout: () => { estourou++; } }))
+      .toBe(null);
+    await _espera(50);
+    expect(estourou).toBe(0); // erro de transporte NÃO é timeout
+    expect(avisos.length).toBe(1); // só o do contexto invalidado (o outro era silent)
+  });
+
+  await testAsync('[TAB-TIMEOUT-6] sondagem em paralelo: UMA aba muda não pendura as outras', async () => {
+    const chrome = _fakeChromeTab((tabId, _m, responder) => {
+      if (tabId === 1) responder({ isShospPage: true, prontuarioOpen: true }); // aba 2 nunca responde
+    });
+    const { sendToTab } = _montaSendToTab(chrome, []);
+    const resps = await Promise.all([1, 2].map(id => sendToTab(id, { action: 'checkPage' }, { silent: true, timeoutMs: 25 })));
+    expect(resps[0]).toEqual({ isShospPage: true, prontuarioOpen: true });
+    expect(resps[1]).toBe(null);
+  });
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
 // RELATÓRIO FINAL
 // ──────────────────────────────────────────────────────────────────────────────
 
@@ -7469,6 +7680,7 @@ test('[DE-ABERTO-9] o painel não recua mais para o dado cru e barra os 3 pontos
   await _straightenTicketTests();
   await _v550Tests();
   _estaticaRetryTests();
+  await _painelUnicoETimeoutTests();
 
   console.log('\n');
   console.log('═══════════════════════════════════════════════════');

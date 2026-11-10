@@ -15,27 +15,92 @@ const bgLogger = {
   success: (msg, data) => console.log(`[Background] ✅ ${msg}`, data ?? '')
 };
 
+// ============================================================================
+// PAINEL ÚNICO
+// ============================================================================
+// popupWindowId é só um CACHE. O Chrome encerra o service worker ocioso (~30s)
+// e, ao acordá-lo, toda variável volta ao valor inicial. Antes, o worker tratava
+// "variável nula" como "painel fechado": o clique no ícone ou um atalho abria um
+// SEGUNDO painel, e como chrome.runtime.sendMessage chega a todas as páginas da
+// extensão, os dois recebiam 'toggleRecording' — duas gravações da mesma consulta.
+//
+// A verdade está nas abas abertas: o painel é uma aba cuja URL é a do
+// sidepanel.html. _findPanelWindowId confere o cache e, se ele não servir,
+// procura essa aba antes de qualquer criação.
 let popupWindowId = null;
+let _panelOpening = null; // criação em andamento — dois cliques seguidos não abrem dois
 
-chrome.action.onClicked.addListener(async () => {
-  if (popupWindowId) {
+const PANEL_URL = chrome.runtime.getURL('sidepanel.html');
+
+/**
+ * Escolhe a janela do painel entre as abas abertas. Pura (só argumentos) para
+ * ser exercitada por _extractFn nos testes.
+ * @returns {number|null} windowId do painel, ou null se não há painel aberto
+ */
+function _pickPanelWindowId(tabs, panelUrl) {
+  for (const t of Array.isArray(tabs) ? tabs : []) {
+    const url = (t && (t.url || t.pendingUrl)) || '';
+    // Igual, ou igual + "?..." / "#..." — nunca só prefixo (sidepanel.html.bak).
+    if (url === panelUrl || url.startsWith(panelUrl + '?') || url.startsWith(panelUrl + '#')) {
+      if (typeof t.windowId === 'number') return t.windowId;
+    }
+  }
+  return null;
+}
+
+/** Janela do painel já aberto (cache conferido, depois varredura das abas), ou null. */
+async function _findPanelWindowId() {
+  if (popupWindowId != null) {
     try {
-      await chrome.windows.update(popupWindowId, { focused: true });
-      return;
+      await chrome.windows.get(popupWindowId);
+      return popupWindowId;
+    } catch (_) {
+      popupWindowId = null; // janela fechada sem o onRemoved ter chegado
+    }
+  }
+  try {
+    popupWindowId = _pickPanelWindowId(await chrome.tabs.query({}), PANEL_URL);
+  } catch (err) {
+    bgLogger.error('Falha ao procurar painel aberto:', err?.message);
+    popupWindowId = null;
+  }
+  return popupWindowId;
+}
+
+/** Abre o painel — reaproveitando a criação em andamento, se houver. */
+function _createPanelWindow() {
+  if (!_panelOpening) {
+    _panelOpening = chrome.windows.create({
+      url: 'sidepanel.html',
+      type: 'popup',
+      width: 420,
+      height: 700,
+      left: 100,
+      top: 100
+    }).then((win) => {
+      popupWindowId = win.id ?? null;
+      return popupWindowId;
+    }).finally(() => { _panelOpening = null; });
+  }
+  return _panelOpening;
+}
+
+/** Foca o painel existente ou abre um. @returns {{ windowId, created }} */
+async function _focusOrOpenPanel() {
+  const existing = await _findPanelWindowId();
+  if (existing != null) {
+    try {
+      await chrome.windows.update(existing, { focused: true });
+      return { windowId: existing, created: false };
     } catch (_) {
       popupWindowId = null;
     }
   }
+  return { windowId: await _createPanelWindow(), created: true };
+}
 
-  const win = await chrome.windows.create({
-    url: 'sidepanel.html',
-    type: 'popup',
-    width: 420,
-    height: 700,
-    left: 100,
-    top: 100
-  });
-  popupWindowId = win.id ?? null;
+chrome.action.onClicked.addListener(() => {
+  _focusOrOpenPanel().catch(err => bgLogger.error('Falha ao abrir painel:', err?.message));
 });
 
 chrome.windows.onRemoved.addListener((windowId) => {
@@ -102,8 +167,7 @@ chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
     // o sidepanel envia diretamente para a aba via sendToTab (evita um salto de mensagem).
 
     case 'openSidePanel':
-      chrome.windows.create({ url: 'sidepanel.html', type: 'popup', width: 420, height: 700 })
-        .then(win => { popupWindowId = win.id ?? null; });
+      _focusOrOpenPanel().catch(err => bgLogger.error('Falha ao abrir painel:', err?.message));
       sendResponse({ success: true });
       return false;
 
@@ -148,16 +212,9 @@ function _onPanelReady() {
 // Garante que o sidepanel está aberto e envia a ação.
 // Se o painel estiver fechado, abre-o e envia quando ele sinalizar 'panelReady'.
 async function _ensurePanelAndSend(action) {
-  if (popupWindowId) {
-    try {
-      // Verifica se a janela ainda existe (pode ter sido fechada sem disparar onRemoved)
-      await chrome.windows.get(popupWindowId);
-    } catch (_) {
-      popupWindowId = null;
-    }
-  }
-
-  if (popupWindowId) {
+  // Procura o painel de verdade (não só a variável): depois que o worker dorme,
+  // a variável está nula com o painel aberto — ver "PAINEL ÚNICO" no topo.
+  if (await _findPanelWindowId() != null) {
     chrome.runtime.sendMessage({ action }).catch(() => {
       bgLogger.error(`Falha ao enviar "${action}" — sidepanel não respondeu`);
       _badgeClosedPanel();
@@ -170,15 +227,7 @@ async function _ensurePanelAndSend(action) {
   try {
     _pendingPanelAction = action;
 
-    const win = await chrome.windows.create({
-      url: 'sidepanel.html',
-      type: 'popup',
-      width: 420,
-      height: 700,
-      left: 100,
-      top: 100
-    });
-    popupWindowId = win.id ?? null;
+    await _createPanelWindow();
 
     // Fallback: se o panelReady não chegar (ex: sinal perdido), tenta mesmo assim
     _pendingPanelTimer = setTimeout(() => {

@@ -881,13 +881,21 @@ async function injectAll(force = false) {
   combinedData.requestId = requestId;
 
   let injectResp = null;
+  let injectTimedOut = false;
   for (let attempt = 1; attempt <= 2; attempt++) {
-    injectResp = await sendToTab(tab.id, { action: 'injectAll', data: combinedData });
+    injectResp = await sendToTab(tab.id, { action: 'injectAll', data: combinedData },
+      { onTimeout: () => { injectTimedOut = true; } });
     if (injectResp === 'CONTEXT_INVALIDATED') {
       showError('Recarregue a aba do SHOSP (F5) e tente novamente.');
       throw new Error('Extension context invalidated');
     }
     if (injectResp) break;
+    // Limite estourado: a mensagem CHEGOU e a aba travou no meio. Reenviar só
+    // faria esperar outra vez — e parte dos campos pode já estar escrita.
+    if (injectTimedOut) {
+      showError('O SHOSP não respondeu à injeção. Confira o prontuário: parte dos campos pode ter sido preenchida. Recarregue a aba (F5) antes de injetar de novo.');
+      throw new Error('Erro na injeção');
+    }
     if (attempt < 2) {
       await new Promise(r => setTimeout(r, 800));
       // ← sem executeScript aqui — content.js já está no manifest
@@ -1064,7 +1072,8 @@ async function injectAll(force = false) {
 // Helper: enviar mensagem para tab com tratamento de erros
 // Retorna:
 //   'CONTEXT_INVALIDATED' — extensão foi recarregada/atualizada; o sidepanel deve pedir F5
-//   null                  — erro transiente (SPA ainda carregando, content script reiniciando)
+//   null                  — sem resposta: erro transiente (SPA ainda carregando, content
+//                           script reiniciando) OU limite de tempo estourado (aba travada)
 //   <resp>                — resposta normal do content script
 // silent=true suprime o warn para erros transientes esperados (ex: checkPage retries)
 
@@ -1081,11 +1090,62 @@ function _recheckInjecao(enviado, readback) {
   return r;
 }
 
-function sendToTab(tabId, message, { silent = false } = {}) {
+/**
+ * Quanto esperar a resposta do content script, por ação. Sem limite, uma aba que
+ * recebe a mensagem e nunca responde (página congelada pelo economizador do
+ * Chrome, handler preso num await) deixava a promise pendurada para sempre: a
+ * sondagem `checkPage` roda em Promise.all, então UMA aba muda travava a injeção
+ * inteira sem mensagem nenhuma.
+ *
+ * Os limites são folgados de propósito — as esperas internas do content script
+ * são de poucos segundos por passo. Estourar o limite significa "travou", não
+ * "está lento".
+ */
+function _sendToTabTimeoutMs(action) {
+  switch (action) {
+    case 'checkPage':        // sondagem: resposta síncrona
+    case 'setInjectedCids':  // idempotente, resposta síncrona
+      return 5000;
+    case 'injectAll':        // percorre abas, Froala, readback
+      return 180000;
+    default:                 // searchCid, exames, refração estática, OCT, dumps
+      return 60000;
+  }
+}
+
+/**
+ * @param {{ silent?: boolean, timeoutMs?: number, onTimeout?: Function }} [opts]
+ *   onTimeout — chamado quando o limite estoura (a promise resolve null, a mesma
+ *   forma de "sem resposta"); serve para quem precisa NÃO reenviar depois disso.
+ */
+function sendToTab(tabId, message, opts) {
+  // Sem desestruturar na assinatura: o _extractFn dos testes acha o corpo pela
+  // primeira chave depois do nome.
+  const silent = !!(opts && opts.silent);
+  const timeoutMs = opts && opts.timeoutMs;
+  const onTimeout = opts && opts.onTimeout;
   return new Promise(resolve => {
+    const action = message && message.action;
+    const limite = (typeof timeoutMs === 'number' && timeoutMs > 0) ? timeoutMs : _sendToTabTimeoutMs(action);
+    let encerrado = false;
+    const timer = setTimeout(() => {
+      if (encerrado) return;
+      encerrado = true;
+      // Sempre avisa, mesmo com silent: travamento não é erro transiente esperado.
+      console.warn(`[sendToTab] tab=${tabId} action=${action} sem resposta em ${Math.round(limite / 1000)}s — a aba do SHOSP não respondeu`);
+      if (typeof onTimeout === 'function') { try { onTimeout(); } catch (_e) { /* aviso nunca derruba o envio */ } }
+      resolve(null);
+    }, limite);
+
     chrome.tabs.sendMessage(tabId, message, (resp) => {
-      if (chrome.runtime.lastError) {
-        const errMsg = chrome.runtime.lastError.message || '';
+      // Ler lastError mesmo depois do limite: sem a leitura o Chrome registra
+      // "Unchecked runtime.lastError" no console.
+      const lastError = chrome.runtime.lastError;
+      if (encerrado) return; // resposta atrasada — o chamador já seguiu
+      encerrado = true;
+      clearTimeout(timer);
+      if (lastError) {
+        const errMsg = lastError.message || '';
         const err = errMsg.toLowerCase();
         if (err.includes('context invalidated') || err.includes('extension context')) {
           // Contexto da extensão foi destruído — única situação que exige F5

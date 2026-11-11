@@ -1427,6 +1427,27 @@ CAMPOS:
     A ordem clínica no tratamento:
       tratamento: 1) Compressa morna  2) Higiene palpebral  3) Colírio da blefarite  4) Lubrificante  5) Ômega 3
 
+- medicacoes_itens (FORA de "dados": é um campo do nível de cima do JSON, ao lado de injectBlefarite):
+  a MESMA medicação do campo tratamento, escrita como lista estruturada. É uma conferência — NÃO
+  substitui nem altera o tratamento: continue preenchendo "tratamento" exatamente como as regras
+  acima mandam, e depois descreva a medicação nesta lista.
+  • UM item por colírio, pomada, gel ou lubrificante que o MÉDICO prescreve, mantém ou suspende
+    nesta consulta. NÃO inclua compressa, higiene palpebral, shampoo, ômega 3 nem remédio oral.
+    Sem nenhuma medicação ocular: [].
+  • Cada item: {"nome": "...", "nivel": "principio" | "protocolo" | "classe" | "generico",
+    "status": "novo" | "mantido" | "suspenso", "posologia": "..." ou null, "olho": "OD" | "OE" | "AO"
+    ou null, "duracao": "..." ou null, "evidencia": "..."}
+  • "nome": o mesmo nome que você escreveu no tratamento, SEM a posologia, seguindo a HIERARQUIA
+    DE NOMEAÇÃO (nivel = o nível em que você nomeou: principio, protocolo, classe ou generico).
+  • "status": "novo" = começou nesta consulta; "mantido" = o paciente já usava e o médico mandou
+    continuar; "suspenso" = o médico mandou parar.
+  • "evidencia": trecho CURTO (até ~8 palavras), copiado LITERALMENTE da transcrição, que sustenta o
+    NOME do remédio — a palavra do remédio ou da classe que foi dita ("o xalatan a noite", "colirio de
+    antibiotico"). Para nivel "generico" ou "protocolo", o trecho em que o médico manda pingar/usar
+    ("vou passar um colirio"). UM item por remédio, cada um com a SUA evidência: não copie a frase
+    inteira, nem dois remédios no mesmo trecho. Sem aspas duplas dentro da evidência.
+  • Se o trecho não está na transcrição, o item não vale: NÃO invente evidência para completar a lista.
+
 - biomicroscopia: texto de biomicroscopia — preencher quando o médico descreve ao paciente um achado ocular de segmento anterior.
   ❌ NÃO preencher quando:
     • Exames normais sem patologia → usar injectExamesNormais=true (o sistema injeta o template padrão)
@@ -1822,6 +1843,7 @@ Se primeira_consulta:
   "injectExamesNormais": true/false,
   "injectBlefarite": true/false,
   "dilatacaoDetectada": true/false,
+  "medicacoes_itens": [{"nome": "string", "nivel": "principio|protocolo|classe|generico", "status": "novo|mantido|suspenso", "posologia": "string ou null", "olho": "OD|OE|AO ou null", "duracao": "string ou null", "evidencia": "trecho curto e literal da fala"}],
   "_raciocinio": "explicação"
 }
 
@@ -1840,6 +1862,7 @@ Se retorno:
   "injectExamesNormais": true/false,
   "injectBlefarite": true/false,
   "dilatacaoDetectada": true/false,
+  "medicacoes_itens": [{"nome": "string", "nivel": "principio|protocolo|classe|generico", "status": "novo|mantido|suspenso", "posologia": "string ou null", "olho": "OD|OE|AO ou null", "duracao": "string ou null", "evidencia": "trecho curto e literal da fala"}],
   "_raciocinio": "explicação"
 }
 `.trim();

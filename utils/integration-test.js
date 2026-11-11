@@ -8520,6 +8520,30 @@ test('[MED-SOMBRA-7] os 13 casos do corpus, vistos pelo modo sombra: todos conco
   expect(divergentes).toEqual([]);
 });
 
+test('[MED-SOMBRA-8] o prompt pede medicacoes_itens FORA de `dados`, nas duas formas, sem mexer nas regras do tratamento', () => {
+  const prompt = _intAgent._buildConsultationPrompt('paciente usa xalatan toda noite', false, false);
+  // nas duas formas de resposta (primeira consulta e retorno), no nível de cima do JSON
+  const formas = [...prompt.matchAll(/"dilatacaoDetectada": true\/false,\n  "medicacoes_itens": \[\{"nome"/g)];
+  expect(formas.length).toBe(2);
+  // e nunca dentro de `dados`: o campo não aparece antes do fechamento de nenhum bloco "dados"
+  for (const m of prompt.matchAll(/"dados": \{[\s\S]*?\n  \},\n  "injectExamesNormais"/g)) {
+    expect(m[0].includes('medicacoes_itens')).toBe(false);
+  }
+  // a regra: é conferência, não substitui o tratamento; só medicação ocular; evidência curta e literal
+  // (texto conferido sem depender de onde a linha quebra)
+  const plano = prompt.replace(/\s+/g, ' ');
+  expect(plano).toContain('NÃO substitui nem altera o tratamento');
+  expect(plano).toContain('NÃO inclua compressa, higiene palpebral, shampoo, ômega 3 nem remédio oral');
+  expect(plano).toContain('trecho CURTO (até ~8 palavras), copiado LITERALMENTE');
+  expect(plano).toContain('UM item por remédio, cada um com a SUA evidência');
+  expect(plano).toContain('NÃO invente evidência');
+  // os níveis e status que o agente valida são os mesmos que o prompt pede
+  for (const w of ['principio', 'protocolo', 'classe', 'generico', 'novo', 'mantido', 'suspenso']) expect(plano).toContain(w);
+  // as regras do tratamento continuam onde estavam (o item é uma segunda cópia, não uma troca)
+  expect(plano).toContain('HIERARQUIA DE NOMEAÇÃO DA MEDICAÇÃO PRESCRITA');
+  expect(prompt).toContain('"tratamento": "string com \\n entre itens, ou null"');
+});
+
 test('[RECHECK-VIVO] recheck ausente AVISA, e falha do recheck não derruba a injeção', () => {
   const montar = (RecheckAgent, avisos) => new Function(
     'RecheckAgent', 'console',

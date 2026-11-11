@@ -682,6 +682,30 @@ test('[DE-3h] Guard 2e: se houver ordem expressa de suspender medicação, ela N
   expect(trat).not.toContain('timolol');
 });
 
+// 2026-11-11: "para" DEPOIS do nome é preposição, não o verbo parar. "Mantém o timolol para a
+// pressão" era lido como suspensão; o tratamento ficava vazio e o painel gravava
+// "Sem prescrição de medicação" — o oposto da fala.
+test('[DE-3h2] Guard 2e: "mantém o timolol para a pressão" NÃO é suspensão — o colírio mantido chega ao tratamento', () => {
+  const raw = { tipo_consulta: 'retorno', dados: { medicacoes_em_uso: 'Timolol 2x/dia', tratamento: null } };
+  const decision = DecisionEngine.buildDecision(raw, {
+    transcribedText: 'o senhor esta usando o timolol duas vezes ao dia a pressao esta boa mantem o timolol para a pressao e volta em seis meses',
+    hookFlags: {},
+    tipoConsulta: 'retorno',
+  });
+  expect(decision.clonedAIResponse.dados.tratamento).toBe('Timolol 2x/dia');
+  expect(decision.guardsApplied.some(g => g.includes('Guard 2e'))).toBe(true);
+});
+
+test('[DE-3h3] Guard 2e: o verbo parar depois do nome continua valendo como suspensão', () => {
+  for (const fala of ['o timolol parou de fazer efeito entao o timolol parar e mantido oculos retorno em tres meses',
+    'pode parar o timolol e mantido oculos retorno em tres meses',
+    'o timolol pare hoje mesmo e mantido oculos retorno em tres meses']) {
+    const raw = { tipo_consulta: 'retorno', dados: { medicacoes_em_uso: 'Timolol 2x/dia', tratamento: null } };
+    const decision = DecisionEngine.buildDecision(raw, { transcribedText: fala, hookFlags: {}, tipoConsulta: 'retorno' });
+    expect(decision.clonedAIResponse.dados.tratamento).toBe(null);
+  }
+});
+
 test('[DE-3i] Guard 2e: colírio mantido é mesclado ao tratamento quando outro remédio já foi prescrito', () => {
   const raw = {
     tipo_consulta: 'retorno',
@@ -1925,6 +1949,102 @@ test('[MED-NOME-10] o prompt carrega a regra "nome dito vence a classe" nos dois
   expect((geminiJsSource.match(/NOME DITO VENCE A CLASSE/g) || []).length >= 2).toBe(true);
 });
 
+// ──────────────────────────────────────────────────────────────────────────────
+// 2026-11-11 (revisão do sistema de medicamentos) — o Guard 2g punha o nome do colírio que
+// o paciente JÁ USAVA na linha de um colírio NOVO sem nome: princípio ativo errado, com a
+// posologia do outro, sem aviso. Remédio que já consta em medicacoes_em_uso só nomeia a
+// linha do tratamento quando ela é idêntica à de medicacoes_em_uso.
+// ──────────────────────────────────────────────────────────────────────────────
+const _FALA_XALATAN_E_NOVO = 'a senhora usa algum colirio uso o xalatan toda noite certo esta com conjuntivite vou passar um colirio quatro vezes ao dia por sete dias';
+
+test('[MED-USO-1] colírio em uso (Xalatan) não vira o nome do colírio NOVO sem nome', () => {
+  const d = _medDecision('Latanoprosta (Xalatan) 1x/dia à noite', 'Medicação ocular prescrita 4x/dia por 7 dias', _FALA_XALATAN_E_NOVO);
+  const dados = d.clonedAIResponse.dados;
+  expect(dados.tratamento).toBe('Medicação ocular prescrita 4x/dia por 7 dias');
+  expect(dados.medicacoes_em_uso).toBe('Latanoprosta (Xalatan) 1x/dia à noite');
+  // o médico é avisado de que a linha ficou sem nome
+  expect(d.avisos.some(a => a.includes('ficou sem o nome do colírio') && a.includes('Latanoprosta'))).toBe(true);
+});
+
+test('[MED-USO-2] mesma classe: hipotensor em uso não nomeia o hipotensor novo', () => {
+  const d = _medDecision('Latanoprosta (Xalatan) 1x/dia à noite', 'Colírio hipotensor ocular de manhã',
+    'usa o xalatan toda noite a pressao ainda esta alta vou acrescentar um colirio para pressao de manha');
+  expect(d.clonedAIResponse.dados.tratamento).toBe('Colírio hipotensor ocular de manhã');
+  expect(d.avisos.some(a => a.includes('ficou sem o nome do colírio'))).toBe(true);
+});
+
+test('[MED-USO-3] blefarite em quem usa timolol: o colírio do protocolo não vira "Timolol"', () => {
+  const d = DecisionEngine.buildDecision({
+    tipo_consulta: 'primeira_consulta',
+    dados: {
+      medicacoes_em_uso: 'Timolol 2x/dia',
+      tratamento: 'Compressa morna 2 min — 2x/dia\nHigiene palpebral com shampoo infantil — 3x/dia\nMedicação ocular prescrita 3x/dia',
+    },
+  }, {
+    transcribedText: 'usa algum colirio uso o timolol duas vezes ao dia tem uma inflamacao na palpebra blefarite faz compressa morna lava com shampoo de nenem e depois pinga o colirio tres vezes ao dia',
+    hookFlags: {},
+  });
+  const trat = d.clonedAIResponse.dados.tratamento;
+  expect(trat).not.toContain('Timolol');
+  expect(trat).toContain('Tobramicina + dexametasona 3x/dia');
+  // a linha acabou nomeada pelo protocolo: o aviso de "sem nome" seria falso
+  expect((d.avisos || []).some(a => a.includes('ficou sem o nome do colírio'))).toBe(false);
+});
+
+test('[MED-USO-4] nome dito de remédio que NÃO está em uso continua nomeando a prescrição', () => {
+  const d = _medDecision('Nega uso de medicações oculares', 'Medicação ocular prescrita à noite', 'vou passar o xalatan a noite');
+  expect(d.clonedAIResponse.dados.tratamento).toBe('Latanoprosta (Xalatan) à noite');
+  expect((d.avisos || []).some(a => a.includes('ficou sem o nome do colírio'))).toBe(false);
+});
+
+test('[MED-USO-5] linha repetida nos dois campos é o mesmo remédio: os dois ganham o nome (caso 2026-11-09 intacto)', () => {
+  const d = _medDecision('Medicação ocular prescrita 2x/dia', 'Medicação ocular prescrita 2x/dia',
+    'esta usando o timolol duas vezes ao dia continua usando o colirio');
+  expect(d.clonedAIResponse.dados.medicacoes_em_uso).toBe('Timolol 2x/dia');
+  expect(d.clonedAIResponse.dados.tratamento).toBe('Timolol 2x/dia');
+  expect((d.avisos || []).some(a => a.includes('ficou sem o nome do colírio'))).toBe(false);
+});
+
+test('[MED-USO-6] prompt e skill dizem que o colírio em uso não empresta o nome ao colírio novo', () => {
+  expect(/JÁ USA não\s+empresta o nome a um colírio NOVO/.test(geminiJsSource)).toBe(true);
+  const skill = readSrcNormalized('skills', 'user', 'conduta-tratamento-oftalmologia', 'SKILL.md');
+  expect(skill.includes('O nome do colírio que o paciente JÁ USA não é o nome do colírio novo')).toBe(true);
+});
+
+// "trometolol" é TIMOLOL para todo mundo. Antes o agente de entrevista trocava por "timolol"
+// no texto do modelo e o léxico (que os guards usam sobre a fala crua) lia Cetorolaco.
+test('[MED-ASR-1] "trometolol"/"timetolol" → timolol no léxico; "trometolou" segue cetorolaco', () => {
+  const ids = (t) => _LexMed.encontrarMedicamentos(t).map(a => a.id).join();
+  expect(ids('usando o trometolol duas vezes ao dia')).toBe('timolol');
+  expect(ids('usando o timetolol duas vezes ao dia')).toBe('timolol');
+  expect(ids('trometolou tres vezes ao dia por cinco dias')).toBe('cetorolaco');
+});
+
+// A restauração desistia em silêncio com espaço duplo, espaço nas pontas ou quebra de linha —
+// e a transcrição da fase 2 da dilatação sempre tem "\n\n[RETORNO DA DILATACAO]\n\n".
+test('[MED-ASR-3] restaurarVariantesAsr funciona com espaço duplo, espaço nas pontas e quebra de linha', () => {
+  const casos = [
+    ['usa bimato à próstata  com timol à noite', 'usa bimatoprosta  com timolol à noite'],
+    [' usa bimato à próstata com timol à noite ', ' usa bimatoprosta com timolol à noite '],
+    ['usa bimato à próstata com timol à noite\n\n[RETORNO DA DILATACAO]\n\nvolta em seis meses',
+      'usa bimatoprosta com timolol à noite\n\n[RETORNO DA DILATACAO]\n\nvolta em seis meses'],
+    ['Usa BIMATO À PRÓSTATA com Timol.\nRetorno: 6 meses', 'Usa bimatoprosta com timolol.\nRetorno: 6 meses'],
+  ];
+  for (const [entrada, esperado] of casos) {
+    const r = _LexMed.restaurarVariantesAsr(entrada);
+    expect(r.texto).toBe(esperado);
+    expect(r.trocas.length).toBe(2);
+  }
+});
+
+test('[MED-ASR-4] restaurarVariantesAsr não mexe em texto sem variante (devolve idêntico, com os espaços)', () => {
+  for (const txt of ['', '  ', 'usa bimatoprosta  com timolol\n e xalatan ', 'Paciente refere dor há 3 dias.\n\nSem colírio.']) {
+    const r = _LexMed.restaurarVariantesAsr(txt);
+    expect(r.texto).toBe(txt);
+    expect(r.trocas.length).toBe(0);
+  }
+});
+
 test('[LUB-4] marca dita vence: "Lubrificante ocular (Systane)" não é tocado', () => {
   const d = _lubDecision('Lubrificante ocular (Systane) 4x/dia', 'usa o systane que e um lubrificante 4x ao dia');
   expect(d.clonedAIResponse.dados.tratamento).toBe('Lubrificante ocular (Systane) 4x/dia');
@@ -2537,6 +2657,21 @@ test('[MED-NOME-2] _normalizarSiglasExameAsr restaura os nomes antes de o texto 
   // texto já certo e outros remédios ficam intactos
   expect(_intAgent._normalizarSiglasExameAsr('usa bimatoprosta com timolol e xalatan'))
     .toBe('usa bimatoprosta com timolol e xalatan');
+});
+
+test('[MED-ASR-2] guard e modelo leem o mesmo remédio em "trometolol"', () => {
+  const fala = 'esta usando o trometolol duas vezes ao dia continua usando o colirio';
+  // o que o modelo recebe
+  expect(_intAgent._normalizarSiglasExameAsr(fala)).toContain('usando o timolol duas vezes');
+  // o que o guard escreve, lendo a fala crua
+  const d = _medDecision('Medicação ocular prescrita 2x/dia', null, fala);
+  expect(d.clonedAIResponse.dados.medicacoes_em_uso).toBe('Timolol 2x/dia');
+  expect(d.avisos.some(a => a.includes('semelhança de som'))).toBe(true);
+});
+
+test('[MED-ASR-5] o texto que vai ao modelo é restaurado também na fase 2 da dilatação (quebras de linha)', () => {
+  const saida = _intAgent._normalizarSiglasExameAsr('ela usa bimato à próstata com timol\n\n[RETORNO DA DILATACAO]\n\nfundo de olho normal');
+  expect(saida).toBe('ela usa bimatoprosta com timolol\n\n[RETORNO DA DILATACAO]\n\nfundo de olho normal');
 });
 
 test('[EXAM-CAT-1] pedidos nomeados no futuro/decisão entram', () => {

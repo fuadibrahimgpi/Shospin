@@ -129,6 +129,8 @@ Ao registrar um medicamento que o médico **prescreve**, use o nível mais espec
 
 **Regra do médico (2026-11-09) — nome dito vence a classe.** Nível 2 e 3 só valem quando a fala NÃO trouxe nem o nome comercial nem o princípio ativo. Se qualquer um dos dois foi dito (pelo médico ou pelo paciente, em uso ou prescrito), o remédio vai EXPLÍCITO em `medicacoes_em_uso` e em `tratamento`; dois ditos juntos ("bimatoprosta com timolol") → `Bimatoprosta + timolol`. Nome com erro do reconhecimento de voz mas reconhecível pelo som ("bimato à próstata", "timol") conta como nome dito. Backstops: variantes no léxico (`restaurar`) + `_normalizarSiglasExameAsr` passo 8 e Guard 2g do DecisionEngine (promove linha de classe/genérico; nunca cria linha).
 
+⚠️ **O nome do colírio que o paciente JÁ USA não é o nome do colírio novo (2026-11-11).** "Uso o Xalatan… vou passar um colírio 4x/dia por 7 dias": o Xalatan vai em `medicacoes_em_uso`; o colírio novo, que não foi nomeado, fica `Medicação ocular prescrita 4x/dia por 7 dias` (ou a classe dita). O nome dito só vale para o remédio a que ele se refere. No DecisionEngine, o Guard 2g só leva ao `tratamento` o nome de um remédio que já consta em `medicacoes_em_uso` quando a linha é idêntica nos dois campos; fora disso a linha fica como está e o médico recebe um aviso para conferir.
+
 **Nível 2 — Grupo / classe.** Quando o remédio não foi nomeado, nenhum protocolo declarado se aplica, mas a classe é identificável pela fala (finalidade dita ou tratamento inequívoco). Ex.: "colírio para pressão" → `Colírio hipotensor ocular`; "colírio de alergia" → `Colírio antialérgico`; "colírio de antibiótico" (sem marca nem princípio) → `Colírio antibiótico`.
 
 **Nível 3 — Genérico.** Quando nem o nome, nem um protocolo, nem a classe podem ser identificados, mas houve prescrição. Ex.: "usa o colírio, 3x/dia" → `Medicação ocular prescrita`.
@@ -831,6 +833,24 @@ Antes de finalizar a conduta, confirme:
   - Base de conhecimento: `Optive Fusion` saiu do grupo da ciclosporina (é lubrificante).
 - **Não alterado**: marca fora da base e nome destruído pelo ASR continuam sem marca entre parênteses (genérico `Medicação ocular prescrita`).
 - **Testes**: `[LEXICO-6..9]`, corpus `marca-*` em `utils/agents-test.js` e âncora `[SKILL-SYNC]` "o nome comercial dito vai entre parênteses".
+
+### 2026-11-11 — Nome do colírio em uso ia para o colírio novo; "para" lido como "parar"
+
+- **Origem**: revisão da estrutura de medicamentos (13 casos montados e rodados contra o código; não vieram de log de consulta).
+- **Erros confirmados**:
+  1. Guard 2g: paciente em uso de Xalatan + colírio novo sem nome → `Latanoprosta (Xalatan) 4x/dia por 7 dias`, sem aviso. Na blefarite de quem usa timolol, o colírio do protocolo virava `Timolol 3x/dia`, porque o 2g roda antes do protocolo.
+  2. Guard 2e: "mantém o timolol **para** a pressão" contava como suspensão; o tratamento ficava vazio e o painel gravava "Sem prescrição de medicação".
+  3. "trometolol" era timolol para o modelo (correção de ASR do agente) e Cetorolaco para os guards (curinga do léxico sobre a fala crua).
+  4. A restauração de nomes do léxico (`restaurarVariantesAsr`) desistia em silêncio com espaço duplo, espaço nas pontas ou quebra de linha — sempre presente na fase 2 da dilatação.
+- **Correção aplicada**:
+  - Guard 2g: remédio que já consta em `medicacoes_em_uso` só nomeia a linha do `tratamento` idêntica à de `medicacoes_em_uso`; novo passo `_avisoTratamentoSemNomeRemedioEmUso` avisa o médico quando a linha termina sem nome.
+  - Guard 2e: depois do nome, só as formas do verbo ("parar", "parou", "pare", "para de") contam como suspensão.
+  - Léxico: "trometolol" e "timetolol" entram na entrada `timolol` (a forma exata vence o curinga do cetorolaco); a correção duplicada saiu do agente de entrevista.
+  - Léxico: `restaurarVariantesAsr` casa sobre uma cópia alinhada caractere a caractere e devolve o resto do texto idêntico.
+  - Prompt: o nome dito vale só para o remédio a que se refere.
+- **Limitação conhecida**: colírio mantido que o modelo escreve como classe no `tratamento` e com nome em `medicacoes_em_uso` ("continua com o colírio da pressão") sai em duas linhas (`Colírio hipotensor ocular 2x/dia` e `Timolol 2x/dia`), com aviso. Sem saber se a linha é nova ou mantida, juntar as duas arriscaria apagar um colírio novo.
+- **Pendente (decisão do médico)**: "trometolou" é Cetorolaco no léxico e na base de marcas, mas o texto deste nível e o do prompt o citam como exemplo de nome ilegível que vira `Medicação ocular prescrita`. As duas regras não podem valer juntas.
+- **Testes**: `[MED-USO-1..6]`, `[DE-3h2]`, `[DE-3h3]`, `[MED-ASR-1..5]` em `utils/integration-test.js`.
 
 
 ---

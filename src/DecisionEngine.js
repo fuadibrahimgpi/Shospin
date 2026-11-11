@@ -444,6 +444,8 @@
    *  • "Medicação ocular prescrita" só é promovida se a fala cita UM remédio;
    *  • remédio negado/suspenso/alérgico/trocado ("sem timolol", "timolol suspenso", "trocar o
    *    timolol por Xalatan") → o guard inteiro se cala: não sabe qual era "em uso" e qual é novo;
+   *  • remédio que já consta em medicacoes_em_uso só nomeia a linha do tratamento quando ela é
+   *    idêntica à de medicacoes_em_uso; linha diferente pode ser um colírio novo → fica e avisa;
    *  • nome que veio de variante de ASR (não do nome literal) gera aviso para conferir.
    */
   const _CLASSE_LINHA_RE = {
@@ -480,6 +482,57 @@
       .join(' + ');
   }
 
+  /** Linha de classe/genérico → os remédios citados na fala que poderiam nomeá-la (ou null). */
+  function _candidatosNomeDaLinha(linha, citados) {
+    for (const [classe, re] of Object.entries(_CLASSE_LINHA_RE)) {
+      const m = linha.match(re);
+      if (!m) continue;
+      const doClasse = citados.filter(a => a.classe === classe);
+      if (!doClasse.length || doClasse.length > 2) return null;
+      return { re, prefixo: m[1], lista: doClasse };
+    }
+    const g = linha.match(_LINHA_MED_GENERICA_RE);
+    if (g) {
+      const elegiveis = citados.filter(a => !_CLASSES_FORA_DO_GUARD.includes(a.classe));
+      if (elegiveis.length !== 1) return null;
+      return { re: _LINHA_MED_GENERICA_RE, prefixo: g[1], lista: elegiveis };
+    }
+    return null;
+  }
+
+  /** Devolve o teste "este remédio citado já consta em medicacoes_em_uso?" para os dados atuais. */
+  function _constaEmMedicacoesEmUso(d, Lexico) {
+    const emUso = Lexico.normalizarLexico(`${d.medicacoes_em_uso || ''} ${d.uso || ''}`);
+    const ids = new Set(Lexico.encontrarMedicamentos(emUso).map(a => a.id));
+    return (a) => ids.has(a.id) ||
+      Lexico.normalizarLexico(a.principio).split(/\s*\+\s*/).every(p => emUso.includes(p.split(' ')[0]));
+  }
+
+  /**
+   * Aviso que fecha o Guard 2g: linha do tratamento que continuou em classe/genérico
+   * porque o único nome citado na fala é de um remédio que o paciente JÁ usa. Roda
+   * depois de todos os guards de medicação, para não avisar sobre a linha que o
+   * protocolo da blefarite (Guard 2b) acabou nomeando. Só avisa; não altera nada.
+   */
+  function _avisoTratamentoSemNomeRemedioEmUso(cloned, ctx, log) {
+    const d = cloned.dados;
+    const Lexico = typeof globalThis !== 'undefined' ? globalThis.MedicamentosLexico : null;
+    if (!d || !Lexico || typeof d.tratamento !== 'string' || !d.tratamento.trim()) return;
+    const { validos: citados, excluidos } = _medicamentosCitadosNaFala(ctx.transcribedText);
+    if (!citados.length || excluidos) return;
+    const jaConstaEmUso = _constaEmMedicacoesEmUso(d, Lexico);
+    for (const linha of d.tratamento.split('\n')) {
+      const c = _candidatosNomeDaLinha(linha, citados);
+      if (!c) continue;
+      const nomes = [...new Set(c.lista.filter(jaConstaEmUso).map(a => a.principio))];
+      if (!nomes.length) continue;
+      _pushAviso(cloned,
+        `Tratamento: a linha "${linha.trim()}" ficou sem o nome do colírio. A fala cita ${nomes.join(' e ')}, ` +
+        'que já consta nas medicações em uso, e não dá para saber se é o mesmo colírio. Confira o nome.');
+      log.push(`Aviso: linha do tratamento "${linha.trim()}" segue sem nome — ${nomes.join(', ')} já consta em medicacoes_em_uso`);
+    }
+  }
+
   function _guardMedicamentoNomeadoNaFala(cloned, ctx, log) {
     const d = cloned.dados;
     const Lexico = typeof globalThis !== 'undefined' ? globalThis.MedicamentosLexico : null;
@@ -495,31 +548,50 @@
     }
 
     const usados = [];
-    const promoverLinha = (linha) => {
-      for (const [classe, re] of Object.entries(_CLASSE_LINHA_RE)) {
-        const m = linha.match(re);
-        if (!m) continue;
-        const doClasse = citados.filter(a => a.classe === classe);
-        if (!doClasse.length || doClasse.length > 2) return linha;
-        usados.push(...doClasse);
-        return linha.replace(re, m[1] + _juntarNomesMedicamento(doClasse, Lexico));
-      }
-      const g = linha.match(_LINHA_MED_GENERICA_RE);
-      if (g) {
-        const elegiveis = citados.filter(a => !_CLASSES_FORA_DO_GUARD.includes(a.classe));
-        if (elegiveis.length !== 1) return linha;
-        usados.push(elegiveis[0]);
-        return linha.replace(_LINHA_MED_GENERICA_RE, g[1] + _juntarNomesMedicamento(elegiveis, Lexico));
-      }
-      return linha;
+    const candidatosDaLinha = (linha) => _candidatosNomeDaLinha(linha, citados);
+    const promover = (linha, c) => {
+      usados.push(...c.lista);
+      return linha.replace(c.re, c.prefixo + _juntarNomesMedicamento(c.lista, Lexico));
     };
+    const chaveLinha = (l) => _normalizeForGuard(l).replace(/\s+/g, ' ').trim();
 
     let alteradas = 0;
-    for (const campo of ['medicacoes_em_uso', 'tratamento']) {
-      const valor = d[campo];
-      if (typeof valor !== 'string' || !valor.trim()) continue;
-      const novo = valor.split('\n').map(promoverLinha).join('\n');
-      if (novo !== valor) { d[campo] = novo; alteradas++; }
+
+    // 1) medicacoes_em_uso: o nome citado é, por definição do campo, do remédio em uso.
+    const emUsoOriginal = typeof d.medicacoes_em_uso === 'string' ? d.medicacoes_em_uso : '';
+    if (emUsoOriginal.trim()) {
+      const novo = emUsoOriginal.split('\n').map(l => {
+        const c = candidatosDaLinha(l);
+        return c ? promover(l, c) : l;
+      }).join('\n');
+      if (novo !== emUsoOriginal) { d.medicacoes_em_uso = novo; alteradas++; }
+    }
+
+    // 2) tratamento: o remédio que JÁ CONSTA em medicacoes_em_uso não nomeia uma linha
+    //    DIFERENTE do tratamento (revisão 2026-11-10). O nome citado pode ser só o do
+    //    colírio que o paciente já usava, e a linha genérica, um colírio NOVO sem nome:
+    //    "uso o Xalatan… vou passar um colírio 4x/dia por 7 dias" virava "Latanoprosta
+    //    (Xalatan) 4x/dia por 7 dias", e o colírio da blefarite de quem usa timolol virava
+    //    "Timolol 3x/dia" antes de o protocolo (Guard 2b) poder nomeá-lo. Só é o MESMO
+    //    remédio com certeza quando a linha é idêntica à de medicacoes_em_uso (o caso de
+    //    2026-11-09, classe repetida nos dois campos). Fora disso a linha fica como o
+    //    modelo escreveu; se nenhum guard seguinte a nomear, o médico é avisado
+    //    (_avisoTratamentoSemNomeRemedioEmUso). O colírio MANTIDO continua chegando ao
+    //    tratamento, já com o nome, pelo Guard 2e.
+    const linhasEmUso = new Set(emUsoOriginal.split('\n').map(chaveLinha).filter(Boolean));
+    const jaConstaEmUso = _constaEmMedicacoesEmUso(d, Lexico);
+    if (typeof d.tratamento === 'string' && d.tratamento.trim()) {
+      const novo = d.tratamento.split('\n').map(l => {
+        const c = candidatosDaLinha(l);
+        if (!c) return l;
+        const emUso = c.lista.filter(jaConstaEmUso);
+        if (emUso.length && !linhasEmUso.has(chaveLinha(l))) {
+          log.push(`Guard 2g: linha do tratamento "${l.trim()}" NÃO promovida — ${[...new Set(emUso.map(a => a.principio))].join(', ')} já consta em medicacoes_em_uso e a linha não é a mesma (pode ser outro colírio)`);
+          return l;
+        }
+        return promover(l, c);
+      }).join('\n');
+      if (novo !== d.tratamento) { d.tratamento = novo; alteradas++; }
     }
     if (!alteradas) return;
 
@@ -586,7 +658,11 @@
 
       // Se houver ordem expressa de suspender este remédio específico na fala, não mantém
       const suspenso = nomes.some(nome => {
-        const reSusp = new RegExp(`(?:${_VERBO_SUSPENDER_RE.source})\\s+(?:com\\s+)?(?:o|a|os|as)?\\s*${nome}|${nome}\\s+(?:suspend|interromp|par|descontinu|retir|cort)`, 'i');
+        // DEPOIS do nome, "para" é preposição ("timolol para a pressão"), não o verbo
+        // parar: lido como suspensão, o colírio mantido sumia do tratamento e o painel
+        // gravava "Sem prescrição de medicação" (revisão 2026-11-10). Só as formas que
+        // são inequivocamente do verbo contam aqui.
+        const reSusp = new RegExp(`(?:${_VERBO_SUSPENDER_RE.source})\\s+(?:com\\s+)?(?:o|a|os|as)?\\s*${nome}|${nome}\\s+(?:suspend|interromp|par(?:ar|ou|e|em|ad[oa])\\b|para\\s+de\\b|descontinu|retir|cort)`, 'i');
         return reSusp.test(fala);
       });
       if (suspenso) return false;
@@ -1944,6 +2020,8 @@
       // Depois da contaminada (traz o lubrificante da conduta) e do protocolo da
       // blefarite (que ainda lê "Lubrificante ocular" como não-colírio).
       rodar('_guardLubrificanteGenerico', () => _guardLubrificanteGenerico(cloned, ctx, guardsApplied));
+      // Depois de TODOS os guards de medicação: só avisa da linha que ninguém nomeou.
+      rodar('_avisoTratamentoSemNomeRemedioEmUso', () => _avisoTratamentoSemNomeRemedioEmUso(cloned, ctx, guardsApplied));
       // Antes do guard de presbiopia: PADRAO_MULTIFOCAL lê a conduta, e uma
       // conduta com tipo fabricado arrastaria H524 junto (log 2026-08-05).
       rodar('_guardMultifocalSemEvidencia', () => _guardMultifocalSemEvidencia(cloned, ctx, guardsApplied));

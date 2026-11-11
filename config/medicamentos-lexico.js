@@ -49,8 +49,13 @@ const MEDICAMENTOS_LEXICO = [
   // "hematotrófico continua lol". `restaurar` = a transcrição enviada ao modelo recebe o nome certo.
   { id: 'bimatoprosta', principio: 'Bimatoprosta', classe: 'hipotensor', nomes: ['bimatoprosta', 'lumigan'], marcas: ['Lumigan'],
     asr: ['bimato\\w*(?:\\s+(?:a|e|de)?\\s*prosta\\w*)?', 'hematotr\\w*'], restaurar: true },
+  // "trometolol"/"timetolol" são TIMOLOL (caso Consulta 4, 2026-10-26). Ficam aqui, e não só
+  // na correção de ASR do agente de entrevista: o curinga do cetorolaco ("trometol…", mais
+  // abaixo) pegava "trometolol", e os guards — que leem a fala crua — nomeavam Cetorolaco
+  // enquanto o modelo recebia "timolol" (revisão 2026-11-10). O timolol vem ANTES do
+  // cetorolaco na lista, então a forma exata vence o curinga. "trometolou" segue cetorolaco.
   { id: 'timolol',      principio: 'Timolol',      classe: 'hipotensor', nomes: ['timolol', 'timoptol', 'glaucotrat'], marcas: ['Timoptol', 'Glaucotrat'],
-    asr: ['timol\\w*', 'lol'], restaurar: true },
+    asr: ['timol\\w*', 'lol', 'trometolol', 'timetolol'], restaurar: true },
   { id: 'brimonidina',  principio: 'Brimonidina',  classe: 'hipotensor', nomes: ['brimonidina', 'alphagan'], marcas: ['Alphagan'], asr: [] },
   { id: 'dorzolamida',  principio: 'Dorzolamida',  classe: 'hipotensor', nomes: ['dorzolamida', 'trusopt'], marcas: ['Trusopt'], asr: [] },
   { id: 'brinzolamida', principio: 'Brinzolamida', classe: 'hipotensor', nomes: ['brinzolamida', 'azopt'], marcas: ['Azopt'], asr: [] },
@@ -172,33 +177,43 @@ function encontrarMedicamentos(texto) {
  * Reescreve, na transcrição que vai ao modelo, as variantes de ASR das entradas
  * marcadas `restaurar` pelo nome certo ("bimato à próstata" → "bimatoprosta").
  * Só reconhecimento fonético do que foi PRONUNCIADO — nunca dedução por diagnóstico.
- * Casa na forma sem acento e devolve o texto original com os trechos trocados.
+ *
+ * Casa numa cópia sem acento e minúscula ALINHADA caractere a caractere com o
+ * original (os espaços não são colapsados) e troca só os trechos casados; todo o
+ * resto do texto volta idêntico. Antes, a função desistia em silêncio se o texto
+ * tivesse espaço duplo, espaço nas pontas ou quebra de linha — e a transcrição da
+ * fase 2 da dilatação sempre tem quebra de linha (revisão 2026-11-10).
  * @returns {{texto: string, trocas: Array<{de: string, para: string}>}}
  */
 function restaurarVariantesAsr(texto) {
   const original = String(texto || '');
-  const t = normalizarLexico(original);
-  // normalizarLexico colapsa espaços: sem índices alinhados, não arrisca reescrever.
-  const alinhado = original.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
-  if (alinhado.length !== original.length || alinhado !== t) return { texto: original, trocas: [] };
+  const COMBINANTE = /[\u0300-\u036f]/;
+  let norm = '';
+  const mapa = []; // mapa[i] = posição, no original, do i-ésimo caractere de `norm`
+  for (let i = 0; i < original.length; i++) {
+    const c = original[i].toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+    for (let k = 0; k < c.length; k++) { norm += c[k]; mapa.push(i); }
+  }
   const alvos = [];
   for (const entrada of MEDICAMENTOS_LEXICO) {
     if (!entrada.restaurar || !entrada.asr || !entrada.asr.length) continue;
     const re = new RegExp(`\\b(?:${entrada.asr.join('|')})\\b`, 'g');
     let m;
-    while ((m = re.exec(t))) {
-      const ini = m.index, fim = ini + m[0].length;
+    while ((m = re.exec(norm))) {
+      if (!m[0].length) { re.lastIndex++; continue; }
+      const ini = mapa[m.index];
+      let fim = mapa[m.index + m[0].length - 1] + 1;
+      while (fim < original.length && COMBINANTE.test(original[fim])) fim++; // acento solto do último caractere
       if (alvos.some(a => ini < a.fim && fim > a.ini)) continue;
-      alvos.push({ ini, fim, de: original.slice(ini, fim), para: entrada.nomes[0] });
+      const de = original.slice(ini, fim);
+      // Trecho que já está certo também reserva o lugar: outra entrada não o reescreve.
+      alvos.push({ ini, fim, de, para: entrada.nomes[0], certo: normalizarLexico(de) === entrada.nomes[0] });
     }
   }
-  alvos.sort((a, b) => b.ini - a.ini);
+  const trocar = alvos.filter(a => !a.certo).sort((a, b) => b.ini - a.ini);
   let out = original;
-  for (const a of alvos) {
-    if (normalizarLexico(a.de) === a.para) continue; // já está certo
-    out = out.slice(0, a.ini) + a.para + out.slice(a.fim);
-  }
-  return { texto: out, trocas: alvos.filter(a => normalizarLexico(a.de) !== a.para).reverse().map(a => ({ de: a.de, para: a.para })) };
+  for (const a of trocar) out = out.slice(0, a.ini) + a.para + out.slice(a.fim);
+  return { texto: out, trocas: trocar.slice().reverse().map(a => ({ de: a.de, para: a.para })) };
 }
 
 const MedicamentosLexico = { MEDICAMENTOS_LEXICO, LUBRIFICANTE_PADRAO, normalizarLexico, encontrarMedicamentos, nomeRegistrado, restaurarVariantesAsr };

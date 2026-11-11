@@ -14,7 +14,7 @@ Guards pós-LLM centralizados (v6): recebem a resposta JSON do [Agente de entrev
 
 ## Passos do pipeline (ordem de execução)
 
-Lista tirada do código em 2026-11-10. Inclui a normalização de tipos, os guards, a reconciliação das flags e os avisos.
+Lista tirada do código em 2026-11-11. Inclui a normalização de tipos, os guards, a reconciliação das flags e os avisos.
 
 1. `_normalizarTiposDados`
 2. `_guardTranscricaoIncoerente`
@@ -29,19 +29,30 @@ Lista tirada do código em 2026-11-10. Inclui a normalização de tipos, os guar
 11. `_guardColirioBlefariteSemPrescricao`
 12. `_guardCondutaContaminada`
 13. `_guardLubrificanteGenerico`
-14. `_guardMultifocalSemEvidencia`
-15. `_guardManutencaoOculos`
-16. `_guardAntecedentesNegativaFabricada`
-17. `_guardComorbidadesNegativaFabricada`
-18. `_guardPseudofaciaSemEvidencia`
-19. `_guardNervoOpticoSemEvidencia`
-20. `_guardOculosNaConduta`
-21. `_guardPresbiopiaObrigatoria`
-22. `_ordenaOlhosODPrimeiro`
-23. `_sombraMedicamentos`
-24. `_reconcileInjectFlags`
-25. `_avisoBiomicroscopiaOrfa`
-26. `_avisoFundoscopiaInterpretativa`
+14. `_avisoTratamentoSemNomeRemedioEmUso`
+15. `_guardMultifocalSemEvidencia`
+16. `_guardManutencaoOculos`
+17. `_guardAntecedentesNegativaFabricada`
+18. `_guardComorbidadesNegativaFabricada`
+19. `_guardPseudofaciaSemEvidencia`
+20. `_guardNervoOpticoSemEvidencia`
+21. `_guardOculosNaConduta`
+22. `_guardPresbiopiaObrigatoria`
+23. `_ordenaOlhosODPrimeiro`
+24. `_sombraMedicamentos`
+25. `_reconcileInjectFlags`
+26. `_avisoBiomicroscopiaOrfa`
+27. `_avisoFundoscopiaInterpretativa`
+
+## Remédio em uso não nomeia colírio novo (2026-11-11)
+
+O passo 8 (`_guardMedicamentoNomeadoNaFala`) troca classe ou genérico pelo nome dito na fala. Ele trocava também quando o nome era só o do colírio que o paciente já usava e a linha do tratamento era um colírio novo, sem nome: "uso o Xalatan… vou passar um colírio 4x/dia por 7 dias" virava "Latanoprosta (Xalatan) 4x/dia por 7 dias", e o colírio da blefarite de quem usa timolol virava "Timolol 3x/dia".
+
+- **No tratamento, remédio que já consta em `medicacoes_em_uso` só nomeia a linha idêntica** à de `medicacoes_em_uso` (a classe repetida nos dois campos). Linha diferente fica como o modelo escreveu.
+- **O protocolo da blefarite volta a alcançar a linha**, porque ela chega genérica ao passo 10.
+- **O passo 14 avisa o médico** quando a linha termina sem nome por esse motivo. Só avisa.
+
+Testes `[MED-USO-1]` a `[MED-USO-5]`.
 
 ## Não falha aberto (2026-11-10)
 

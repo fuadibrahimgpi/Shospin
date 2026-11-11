@@ -222,8 +222,9 @@ class GeminiInterviewAgent {
     // 4) Hiperemia / conjuntival: "perimetro conjuntival", "parametro conjuntival"
     out = out.replace(/(?<![a-zà-ú0-9])(?:per[ií]metro|par[aâ]metro)\s+conjuntival(?![a-zà-ú0-9])/gi, 'hiperemia conjuntival');
 
-    // 5) Timolol: "trometolol", "timetolol"
-    out = out.replace(/(?<![a-zà-ú0-9])(?:trometolol|timetolol)(?![a-zà-ú0-9])/gi, 'timolol');
+    // 5) Timolol ("trometolol", "timetolol"): saiu daqui para o léxico de medicamentos
+    //    (entrada `timolol`, restaurada no passo 8). Com a lista em dois lugares, o modelo
+    //    lia "timolol" e os guards, que recebem a fala crua, liam "Cetorolaco".
 
     // 6) Pterígio: "cao de pterigio", "cão de pterigio", "cão de pterígio"
     out = out.replace(/(?<![a-zà-ú0-9])c[aã]o\s+de\s+pter[ií]gio(?![a-zà-ú0-9])/gi, 'avaliação de pterígio');
@@ -1343,6 +1344,11 @@ CAMPOS:
         leva o remédio EXPLÍCITO, em medicacoes_em_uso e em tratamento. Antes de descer para a classe,
         releia a fala inteira procurando o nome. Dois remédios ditos juntos ("bimatoprosta com timolol")
         → "Bimatoprosta + timolol" numa linha, mantendo a posologia dita.
+        ⚠️ O nome vale SÓ para o remédio a que ele se refere: o colírio que o paciente JÁ USA não
+        empresta o nome a um colírio NOVO que o médico não nomeou. "Uso o Xalatan… vou passar um
+        colírio 4x/dia por 7 dias" → medicacoes_em_uso: "Latanoprosta (Xalatan)"; tratamento:
+        "Medicação ocular prescrita 4x/dia por 7 dias" (nível 3) — NUNCA "Latanoprosta (Xalatan)
+        4x/dia por 7 dias". O mesmo vale para a classe e para o protocolo da blefarite.
         Nome COM erro de reconhecimento de voz, mas reconhecível pelo som (ex.: "bimato à próstata" =
         bimatoprosta, "timol" = timolol): escreva o princípio ativo da base de conhecimento — isso é
         ouvir o que foi pronunciado, não inferir pelo diagnóstico. Só quando o trecho é ININTELIGÍVEL

@@ -280,12 +280,14 @@ Apenas medicamentos **oftalmológicos** que o paciente já usava **antes** desta
 
 Capture de qualquer fonte:
 - Paciente relata: *"eu uso Xalatan todo dia"*
-- Médico revisa: *"você está usando Xalatan, Combigan..."*
+- Médico revisa: *"você está usando Xalatan, Timolol..."*
 - Médico confirma: *"continua com o Lumigan?"*
 - Paciente confirma ao ser perguntado: *"sim, uso o colírio amarelo"*
 
-Formato: nome + posologia quando mencionados → `"Xalatan 1 gota OE à noite"`
+Formato: nome + posologia quando mencionados → `"Xalatan 1 gota OE à noite"`, `"Timolol 2x/dia"`
 Sem posologia → só o nome → `"Xalatan, Timoptol"`
+
+- ⛔ **REGRA ANTI-ASSOCIAÇÃO E ANTI-MARCA NÃO DITA (log 2026-11-11):** NUNCA transforme uma monoterapia dita ("timolol") em associação fixa ("Brimonidina + timolol", "Bimatoprosta + timolol", "Dorzolamida + timolol", Combigan, Ganfort, Cosopt) se o outro componente ou a marca da associação NÃO foram pronunciados na transcrição. Timolol usado 2x/dia é `"Timolol 2x/dia"` — nunca Combigan nem Ganfort. Da mesma forma, NUNCA coloque entre parênteses um nome comercial que não tenha sido literalmente dito na gravação.
 
 ❌ NÃO inclui medicamentos sistêmicos (insulina, metformina, losartan) → vão em `alteracoes_sistemicas`
 

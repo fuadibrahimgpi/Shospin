@@ -13,7 +13,8 @@ metadata:
 
 > ⚠️ **A cópia que executa em produção é o prompt do Gemini em
 > `src/gemini-interview-agent.js` (`_buildConsultationPrompt`, blocos `- conduta:` e
-> `- tratamento:` dentro de `CAMPOS:`, mais `MED_KNOWLEDGE_BASE`).** No mesmo arquivo,
+> `- tratamento:` dentro de `CAMPOS:`, mais a base de marcas, gerada do léxico por
+> `montarBaseDoPrompt()`).** No mesmo arquivo,
 > `_sanitizeCondutaTratamento` e `_garantirExamesPedidosNaConduta` corrigem a saída;
 > depois vêm os guards de `src/DecisionEngine.js` (2, 2b–2f, 3, 3b, 4, 5) e o léxico
 > `config/medicamentos-lexico.js`. Editar esta skill NÃO muda a extensão. Regra
@@ -137,7 +138,7 @@ Ao registrar um medicamento que o médico **prescreve**, use o nível mais espec
 
 ⚠️ **Nunca omita uma prescrição** porque o nome não foi dito — desça de nível, mas registre. A posologia (frequência, olho, duração) é preservada em qualquer nível quando mencionada.
 
-⚠️ **Nome que o ASR destruiu NÃO é "nome não dito" nem autoriza classe.** Se o médico pronunciou algo que parece um remédio mas a transcrição saiu ilegível (ex.: "trometolou 3 vezes ao dia por 5 dias"), registre `Medicação ocular prescrita` + posologia. É PROIBIDO deduzir a classe pelo contexto clínico (corpo estranho/"machucado" → "Colírio antibiótico"): a classe do nível 2 só vale quando a FALA a diz ("antibiótico", "para pressão", "de alergia"). Backstop determinístico: Guard 2d do DecisionEngine rebaixa "Colírio antibiótico" quando a fala não cita antibiótico.
+⚠️ **Nome que o ASR destruiu NÃO é "nome não dito" nem autoriza classe.** Se o médico pronunciou algo que parece um remédio mas a transcrição saiu ilegível — uma palavra que não aponta nenhum nome da base (ex.: "um colírio zarolou 3 vezes ao dia por 5 dias") —, registre `Medicação ocular prescrita` + posologia. **"Trometolou"/"trometamol"/"trometamina" não é ilegível: é Cetorolaco** (decisão do médico, 2026-11-11) → `Cetorolaco 3x/dia por 5 dias`. É PROIBIDO deduzir a classe pelo contexto clínico (corpo estranho/"machucado" → "Colírio antibiótico"): a classe do nível 2 só vale quando a FALA a diz ("antibiótico", "para pressão", "de alergia"). Backstop determinístico: Guard 2d do DecisionEngine rebaixa "Colírio antibiótico" quando a fala não cita antibiótico.
 
 ⚠️ **Colírio MANTIDO é tratamento.** "Mantido o timolol 2x/dia", "continua com o colírio da pressão" → linha em `tratamento` (`Timolol 2x/dia`), além de constar em `medicacoes_em_uso`. Não responda `tratamento: null` só porque o remédio já estava em uso — `null` vira "Sem prescrição de medicação" no prontuário, o que contradiz a fala.
 
@@ -200,6 +201,8 @@ Um tratamento só existe se o médico o **prescreveu** na fala — nomeando um r
 ### Regra anti-associação medicamentosa
 
 Nunca crie associação de medicamentos, colírios ou princípios ativos se a associação não foi explicitamente prescrita pelo médico.
+
+- ⛔ **REGRA ANTI-ASSOCIAÇÃO E ANTI-MARCA NÃO DITA (log 2026-11-11 — paciente disse "timolol" 2x/dia e saiu "Brimonidina + timolol (Combigan) 2x/dia"):** NUNCA transforme uma monoterapia dita ("timolol") em associação fixa ("Brimonidina + timolol", "Bimatoprosta + timolol", "Dorzolamida + timolol", Combigan, Ganfort, Cosopt) se o outro componente ou a marca da associação NÃO foram pronunciados na transcrição. Timolol usado 2x/dia é `"Timolol 2x/dia"` — nunca Combigan nem Ganfort. Da mesma forma, NUNCA coloque entre parênteses um nome comercial (Combigan, Ganfort, Cosopt, Xalatan, Timoptol) que não tenha sido literalmente dito na gravação. Backstop determinístico: Guard 2g do `DecisionEngine` corrige associações e marcas não pronunciadas para o(s) remédio(s) efetivamente ditos na fala.
 
 Se o médico prescrever medicamentos separados, registre-os como itens separados no `tratamento_sugerido`. Não combine os nomes em uma fórmula composta, associação fixa ou apresentação comercial.
 
@@ -849,8 +852,26 @@ Antes de finalizar a conduta, confirme:
   - Léxico: `restaurarVariantesAsr` casa sobre uma cópia alinhada caractere a caractere e devolve o resto do texto idêntico.
   - Prompt: o nome dito vale só para o remédio a que se refere.
 - **Limitação conhecida**: colírio mantido que o modelo escreve como classe no `tratamento` e com nome em `medicacoes_em_uso` ("continua com o colírio da pressão") sai em duas linhas (`Colírio hipotensor ocular 2x/dia` e `Timolol 2x/dia`), com aviso. Sem saber se a linha é nova ou mantida, juntar as duas arriscaria apagar um colírio novo.
-- **Pendente (decisão do médico)**: "trometolou" é Cetorolaco no léxico e na base de marcas, mas o texto deste nível e o do prompt o citam como exemplo de nome ilegível que vira `Medicação ocular prescrita`. As duas regras não podem valer juntas.
+- **Decidido pelo médico (2026-11-11)**: "trometolou" é Cetorolaco. O prompt e esta skill o citavam como exemplo de nome ilegível que vira `Medicação ocular prescrita`, enquanto o léxico e a base de marcas já diziam Cetorolaco; os dois textos foram corrigidos e o exemplo de nome ilegível passou a ser uma palavra que não aponta nome nenhum. Teste `[DE-3c-CETOROLACO]`.
 - **Testes**: `[MED-USO-1..6]`, `[DE-3h2]`, `[DE-3h3]`, `[MED-ASR-1..5]` em `utils/integration-test.js`.
+
+### 2026-11-11 — "Timolol" virou "Brimonidina + timolol (Combigan)"; remédio e marca não pronunciados
+
+- **Erro observado (log de consulta)**: o paciente disse "timolol" duas vezes por dia e o prontuário recebeu `Brimonidina + timolol (Combigan) 2x/dia`. O modelo completou a monoterapia com uma associação e uma marca que ninguém disse.
+- **Correção aplicada**:
+  - Prompt, esta skill e a de transcrição: regra anti-associação e anti-marca não dita (monoterapia dita não vira associação; marca entre parênteses só se foi pronunciada).
+  - Guard 2g, direção inversa (`_corrigirNomeNaoPronunciado`): linha que nomeia remédio, associação ou (Marca) que a fala não pronunciou é corrigida para o remédio dito, com a posologia. Substitui primeiro o remédio dito cujos princípios estão todos na linha; na falta dele, o remédio dito da mesma classe.
+  - A troca "pela classe" não acontece se o remédio dito já tem linha própria no campo, nem — no `tratamento` — se ele já consta em `medicacoes_em_uso` e a linha não é a mesma (regra do colírio novo). Quando o princípio é trocado, o médico recebe aviso.
+- **Como chegou ao repositório**: a correção foi escrita numa cópia antiga do projeto (pasta do Drive) e copiada por cima do clone, o que trocou seis arquivos por versões de dias antes. Foi refeita sobre a versão atual; nada da cópia antiga entrou.
+- **Testes**: `[MED-NOME-11]`, `[MED-NOME-12]`.
+
+### 2026-11-11 — Uma lista só de nomes de remédio
+
+- **Problema**: os nomes de remédio estavam em sete listas escritas à mão no `DecisionEngine` (colírio já nomeado, protocolo pronunciado, antibiótico na fala, remédio crônico, lubrificante nomeado, vocabulário de ruído, evidência de glaucoma), mais a base de marcas do prompt e três correções de voz no agente de entrevista. Elas divergiam: a do Guard 2b reconhecia 14 dos 84 nomes do léxico e escrevia "fluorometolon" onde o léxico diz "Fluormetolona".
+- **Correção aplicada**: `config/medicamentos-lexico.js` passou a gerar tudo — `montarBaseDoPrompt()` para o prompt; `fonteDeClasse()`, `fonteDoRemedio()` e `contarMencoes()` para os guards; `PROTOCOLOS` para o nome do colírio da blefarite; `PALAVRAS_DE_CLASSE` para "a fala disse a classe". Remédio que os guards só precisam reconhecer, sem nomear, fica em `EXTRAS_DE_CLASSE`.
+- **O que muda no comportamento**: nenhuma lista deixou de reconhecer nada (comparação em 240 termos); todas passaram a reconhecer as marcas que faltavam (Xalatan, Vigamox, Zymar, Maxidex, Pred Fort, FML…). Na base do prompt, "Maleato de timolol" virou "Timolol" e os subgrupos de glaucoma viraram uma lista só.
+- **Regra para quem mexer**: marca nova, princípio novo ou variante de voz entra **só** no léxico. Lista de remédios escrita em outro arquivo é barrada pelo teste `[LEXICO-UNICO-1]`.
+- **Testes**: `[LEXICO-UNICO-1..7]`.
 
 
 ---

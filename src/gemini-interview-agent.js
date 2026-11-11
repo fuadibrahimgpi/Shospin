@@ -21,50 +21,23 @@ const CONSULTATION_CONFIG = { maxOutputTokens: 32768, responseMimeType: 'applica
 // globalThis.ClinicalTriggers em Node tests (UMD export do clinical-triggers.js).
 
 // --------------------------------------------------------------------------
-// Base de conhecimento de medicamentos (exclusiva do agente de entrevista)
+// Base de conhecimento de medicamentos — GERADA do léxico
 // --------------------------------------------------------------------------
+// A lista de marcas e princípios que vai no prompt não é mais escrita aqui: sai de
+// config/medicamentos-lexico.js (montarBaseDoPrompt), a única lista de nomes de
+// remédio do projeto. Marca nova entra lá e aparece no prompt e nos guards.
+// Sem o léxico o prompt ficaria sem a base e o modelo deixaria de reconhecer as
+// marcas em silêncio — por isso a função LANÇA em vez de seguir com base vazia.
 
-const MED_KNOWLEDGE_BASE = `
-LISTA DE MEDICAMENTOS OFTALMOLÓGICOS COMUNS (BRASIL):
-
-GLAUCOMA - Prostaglandinas:
-  Xalatan/Xalaprost (Latanoprosta), Travatan (Travoprosta), Lumigan (Bimatoprosta)
-GLAUCOMA - Beta-bloqueadores:
-  Timoptol/Glaucotrat (Maleato de timolol)
-GLAUCOMA - Alfa-agonistas:
-  Alphagan (Brimonidina)
-GLAUCOMA - Inib. Anidrase Carbônica:
-  Trusopt (Dorzolamida), Azopt (Brinzolamida)
-GLAUCOMA - Associações:
-  Combigan (Brimonidina+Timolol), Cosopt (Dorzolamida+Timolol), Ganfort (Bimatoprosta+Timolol)
-
-LUBRIFICANTES (a MARCA NÃO identifica um princípio único — registre "Lubrificante ocular (Marca)"):
-  Systane, Hylo, Hyabak, Artelac, Optive, Optive Fusion, Refresh, Lacrifilm
-  (princípio só se o médico o DISSE: carmelose, hialuronato)
-  Médico disse só "lubrificante(s)", sem marca nem princípio → "Carmelose sódica ou hialuronato de sódio"
-
-CORTICÓIDES:
-  Maxidex (Dexametasona), Pred Fort (Prednisolona), FML (Fluormetolona), Loteprednol/Loteprol (Loteprednol)
-ANTIBIÓTICOS:
-  Zymar (Gatifloxacino), Vigamox (Moxifloxacino), Tobrex (Tobramicina), Ciloxan (Ciprofloxacino),
-  Oflox (Ofloxacino), Vancocin colírio (Vancomicina)
-ASSOCIAÇÕES ATB+CORTICÓIDE:
-  Vigadexa (Moxifloxacino+Dexametasona), Tobradex/Tobracort/Tobramicina-Dexa (Tobramicina+Dexametasona),
-  Maxitrol (Neomicina+Polimixina B+Dexametasona), Cilodex (Ciprofloxacino+Dexametasona)
-
-ANTI-INFLAMATÓRIOS NÃO ESTEROIDAIS:
-  Acular (Cetorolaco), "trometamol"/"trometamina"/"trometamino" e variantes de ASR como "trometolou"
-  (Cetorolaco trometamina — o sufixo trometamina é do cetorolaco), Nevanac (Nepafenaco), Still (Diclofenaco)
-
-ANTIALÉRGICOS:
-  Patanol (Olopatadina), Zaditen (Cetotifeno), Lastacaft (Alcaftadina), Alegysal (Pemirolaste)
-
-OLHO SECO / IMUNOMODULADORES:
-  Restasis/Ciclosporina colírio (Ciclosporina), Ikervis (Ciclosporina)
-
-ANTIVIRAIS:
-  Zovirax pomada oftálmica (Aciclovir)
-`.trim();
+function _baseDeMedicamentosDoLexico() {
+  const Lexico = (typeof MedicamentosLexico !== 'undefined')
+    ? MedicamentosLexico
+    : (typeof globalThis !== 'undefined' && globalThis.MedicamentosLexico) || null;
+  if (!Lexico || typeof Lexico.montarBaseDoPrompt !== 'function') {
+    throw new Error('Léxico de medicamentos não carregado (config/medicamentos-lexico.js): o prompt ficaria sem a base de marcas.');
+  }
+  return Lexico.montarBaseDoPrompt();
+}
 
 class GeminiInterviewAgent {
   constructor() {
@@ -232,15 +205,15 @@ class GeminiInterviewAgent {
     // 7) Blefarite: "blufarite", "blackfarite", "bruxarite"
     out = out.replace(/(?<![a-zà-ú0-9])(?:blufarite|blackfarite|bruxarite)(?![a-zà-ú0-9])/gi, 'blefarite');
 
-    // 7b) Exames e colírios separados/corrompidos pelo ASR: paquimetria, campimetria, retinografia, topografia, brimonidina, dorzolamida
+    // 7b) Exames separados/corrompidos pelo ASR: paquimetria, campimetria, retinografia, topografia.
+    //     ("brimo nidina" e "dorzo lamida" saíram daqui para o léxico — passo 8.)
     out = out.replace(/(?<![a-zà-ú0-9])(?:paque\s*metria|pacometria)(?![a-zà-ú0-9])/gi, 'paquimetria');
     out = out.replace(/(?<![a-zà-ú0-9])campi\s+metria(?![a-zà-ú0-9])/gi, 'campimetria');
     out = out.replace(/(?<![a-zà-ú0-9])retino\s+grafia(?![a-zà-ú0-9])/gi, 'retinografia');
     out = out.replace(/(?<![a-zà-ú0-9])topo\s+grafia(?![a-zà-ú0-9])/gi, 'topografia');
-    out = out.replace(/(?<![a-zà-ú0-9])brimo\s+nidina(?![a-zà-ú0-9])/gi, 'brimonidina');
-    out = out.replace(/(?<![a-zà-ú0-9])dorzo\s+lamida(?![a-zà-ú0-9])/gi, 'dorzolamida');
 
-    // 8) Nomes de colírio de glaucoma (léxico de medicamentos, entradas `restaurar`):
+    // 8) Nomes de colírio (léxico de medicamentos, entradas `restaurar`) — TODA correção de
+    //    voz de nome de remédio fica no léxico, porque os guards leem a fala crua por ele:
     //    "bimato à próstata com timol" / "hematotrófico continua lol" → bimatoprosta / timolol.
     //    Log 2026-11-09: sem isto o modelo não via nome nenhum e desceu para "Colírio hipotensor".
     const Lexico = (typeof MedicamentosLexico !== 'undefined')
@@ -526,7 +499,7 @@ REGRA DE FONTES
 ═══════════════════════════════════════════════════════════════
 - ANAMNESE (hda, retorno, antecedentes_*, alteracoes_sistemicas): extrair do que o PACIENTE relata
 - medicacoes_em_uso: extrair tanto do que o PACIENTE relata quanto do que o MÉDICO menciona
-  ao revisar o prontuário ou confirmar uso ("você está com Xalatan, Combigan..." → capture tudo)
+  ao revisar o prontuário ou confirmar uso ("você está com Xalatan, Timolol..." → capture tudo)
 - CONDUTA MÉDICA (diagnostico, conduta, tratamento): extrair do que o MÉDICO diz/prescreve
 
 ⚠️ CARVE-OUT — a fala do MÉDICO ao ORIENTAR pode ser fonte de anamnese, com limite.
@@ -600,7 +573,7 @@ Regra específica para LENTE DE CONTATO (mesma lógica dos óculos — é ANTECE
   ⚠️ O dado de irregularidade quase sempre vem da fala do MÉDICO ao orientar — ver o
      carve-out em REGRA DE FONTES. NÃO descarte por "não foi o paciente que disse".
 
-${MED_KNOWLEDGE_BASE}
+${_baseDeMedicamentosDoLexico()}
 
 CLASSIFICAÇÃO
 
@@ -711,17 +684,24 @@ CAMPOS:
   * Inclui: colírios, pomadas oculares, gel ocular — somente uso ocular
   * FONTES — capture de qualquer uma destas situações:
     a) Paciente relata espontaneamente: "eu uso Xalatan todo dia"
-    b) Médico revisa prontuário em voz alta: "você está usando Xalatan, Combigan..."
+    b) Médico revisa prontuário em voz alta: "você está usando Xalatan, Timolol..."
     c) Médico confirma continuidade: "continua com o Lumigan?", "mantendo o Timoptol?"
     d) Paciente confirma uso ao ser perguntado: "sim, uso o colírio amarelo"
     e) Médico menciona medicação ocular como referência: "o seu Xalatan está controlando bem"
   * Sempre inclua nome + dosagem/posologia quando mencionados
-    Ex: "Xalatan OE à noite", "Combigan 2x/dia", "Carmelose 3x/dia"
+    Ex: "Xalatan OE à noite", "Timolol 2x/dia", "Carmelose 3x/dia"
   * Se dosagem não mencionada, registre só o nome: "Xalatan, Timoptol"
   * ★ NOME DITO VENCE A CLASSE: se a fala traz o nome comercial ou o princípio ativo (mesmo distorcido
     pelo reconhecimento de voz: "bimato à próstata com timol" = "Bimatoprosta + timolol"), registre o
     remédio — "Colírio hipotensor ocular"/"colírio para pressão" só quando NENHUM nome foi dito
     (ver "NOME DITO VENCE A CLASSE" na hierarquia de nomeação do tratamento).
+  * ⛔ REGRA ANTI-ASSOCIAÇÃO E ANTI-MARCA NÃO DITA (log 2026-11-11 — paciente disse "timolol" 2x/dia e
+    saiu "Brimonidina + timolol (Combigan) 2x/dia"): NUNCA transforme uma monoterapia dita ("timolol")
+    em associação fixa ("Brimonidina + timolol", "Bimatoprosta + timolol", "Dorzolamida + timolol",
+    Combigan, Ganfort, Cosopt) se o outro componente ou a marca da associação NÃO foram pronunciados
+    na transcrição. Timolol usado 2x/dia é "Timolol 2x/dia" — nunca Combigan nem Ganfort. Da mesma
+    forma, NUNCA coloque entre parênteses um nome comercial (Combigan, Ganfort, Cosopt, Xalatan,
+    Timoptol) que não tenha sido literalmente dito na gravação.
   * ❌ NÃO inclui medicamentos sistêmicos (insulina, metformina, losartan, etc.) → vão em alteracoes_sistemicas
   * ⚠️ NÃO CONFUNDA com tratamento:
     - medicacoes_em_uso = o que o paciente JÁ USAVA (histórico)
@@ -1352,9 +1332,19 @@ CAMPOS:
         Nome COM erro de reconhecimento de voz, mas reconhecível pelo som (ex.: "bimato à próstata" =
         bimatoprosta, "timol" = timolol): escreva o princípio ativo da base de conhecimento — isso é
         ouvir o que foi pronunciado, não inferir pelo diagnóstico. Só quando o trecho é ININTELIGÍVEL
-        ou AMBÍGUO (não aponta UM nome da base, como o "trometolou" abaixo) vale o nível 2/3.
+        ou AMBÍGUO (não aponta UM nome da base) vale o nível 2/3. "Trometolou", "trometamol" e
+        "trometamina" apontam UM nome — Cetorolaco (decisão do médico, 2026-11-11): registre
+        "Cetorolaco" + a posologia dita.
+     ⛔ REGRA ANTI-ASSOCIAÇÃO E ANTI-MARCA NÃO DITA (log 2026-11-11 — paciente disse "timolol" 2x/dia e
+        saiu "Brimonidina + timolol (Combigan) 2x/dia"): NUNCA transforme uma monoterapia dita ("timolol")
+        em associação fixa ("Brimonidina + timolol", "Bimatoprosta + timolol", "Dorzolamida + timolol",
+        Combigan, Ganfort, Cosopt) se o outro componente ou a marca da associação NÃO foram pronunciados
+        na transcrição. Timolol usado 2x/dia é "Timolol 2x/dia" — nunca Combigan nem Ganfort. Da mesma
+        forma, NUNCA coloque entre parênteses um nome comercial (Combigan, Ganfort, Cosopt, Xalatan,
+        Timoptol) que não tenha sido literalmente dito na gravação.
      ⚠️ NUNCA omita uma prescrição porque o nome não foi dito — desça para o nível 2 ou 3, mas REGISTRE.
-     ⚠️ Nome que o ASR destruiu (ex.: "trometolou 3 vezes ao dia por 5 dias") NÃO autoriza classe:
+     ⚠️ Nome que o ASR destruiu — palavra que NÃO aponta nenhum nome da base (ex.: "um colírio
+        zarolou 3 vezes ao dia por 5 dias") — NÃO autoriza classe:
         registre "Medicação ocular prescrita" + posologia. É PROIBIDO deduzir a classe pelo contexto
         clínico (corpo estranho/"machucado" → "Colírio antibiótico") — a classe do nível 2 só vale
         quando a FALA a diz ("antibiótico", "para pressão", "de alergia").

@@ -582,7 +582,36 @@ test('[DE-3] Guard rebaixa linha "Associação ATB+corticoide" para genérico se
   expect(raw.dados.tratamento.includes('Associação')).toBe(true);
 });
 
+// Nome ILEGÍVEL (não aponta nenhum remédio do léxico): a classe deduzida do contexto cai
+// para o genérico. Até 2026-11-11 a fala deste teste era "trometolou"; por decisão do
+// médico "trometolou" É Cetorolaco (ver [DE-3c-CETOROLACO]), então aqui entra uma palavra
+// que de fato não é nome de nada.
 test('[DE-3c] Guard 2d: "Colírio antibiótico" sem antibiótico na fala (nome destruído pelo ASR) vira genérico', () => {
+  const raw = {
+    tipo_consulta: 'retorno',
+    dados: {
+      retorno: 'Sensação de corpo estranho no olho direito',
+      tratamento: 'Colírio antibiótico 3x/dia por 5 dias OD',
+    },
+  };
+  const decision = DecisionEngine.buildDecision(raw, {
+    transcribedText: 'tinha um corpo estranho no olho direito retirei vou passar um colirio zarolou tres vezes ao dia por 5 dias',
+    hookFlags: {},
+  });
+  const trat = decision.clonedAIResponse.dados.tratamento;
+  expect(trat.includes('antibiótico')).toBe(false);
+  expect(trat.startsWith('Medicação ocular prescrita')).toBe(true);
+  expect(trat.includes('3x/dia por 5 dias OD')).toBe(true);
+  expect(decision.guardsApplied.some(g => g.includes('Guard 2d'))).toBe(true);
+  expect(decision.avisos.some(a => a.includes('não ficou claro na gravação'))).toBe(true);
+  expect(raw.dados.tratamento.includes('antibiótico')).toBe(true);
+});
+
+// Decisão do médico (2026-11-11): "trometolou" é Cetorolaco (trometamina). O antibiótico que o
+// modelo deduziu do contexto continua caindo (Guard 2d), mas a linha não fica genérica: o nome
+// reconhecido pelo som entra (Guard 2g), com aviso para conferir — e sem o aviso de "nome não
+// ficou claro", que seria falso.
+test('[DE-3c-CETOROLACO] "trometolou" é Cetorolaco: a classe errada cai e o nome reconhecido pelo som entra', () => {
   const raw = {
     tipo_consulta: 'retorno',
     dados: {
@@ -594,11 +623,11 @@ test('[DE-3c] Guard 2d: "Colírio antibiótico" sem antibiótico na fala (nome d
     transcribedText: 'tinha um corpo estranho no olho direito retirei vou passar um colirio trometolou tres vezes ao dia por 5 dias',
     hookFlags: {},
   });
-  const trat = decision.clonedAIResponse.dados.tratamento;
-  expect(trat.includes('antibiótico')).toBe(false);
-  expect(trat.startsWith('Medicação ocular prescrita')).toBe(true);
-  expect(trat.includes('3x/dia por 5 dias OD')).toBe(true);
+  expect(decision.clonedAIResponse.dados.tratamento).toBe('Cetorolaco 3x/dia por 5 dias OD');
   expect(decision.guardsApplied.some(g => g.includes('Guard 2d'))).toBe(true);
+  expect(decision.guardsApplied.some(g => g.includes('Guard 2g'))).toBe(true);
+  expect(decision.avisos.some(a => a.includes('semelhança de som') && a.includes('Cetorolaco'))).toBe(true);
+  expect(decision.avisos.some(a => a.includes('não ficou claro na gravação'))).toBe(false);
   expect(raw.dados.tratamento.includes('antibiótico')).toBe(true);
 });
 
@@ -1949,6 +1978,42 @@ test('[MED-NOME-10] o prompt carrega a regra "nome dito vence a classe" nos dois
   expect((geminiJsSource.match(/NOME DITO VENCE A CLASSE/g) || []).length >= 2).toBe(true);
 });
 
+// 2026-11-11 (log real) — o paciente disse "timolol" 2x/dia e saiu "Brimonidina + timolol (Combigan) 2x/dia".
+test('[MED-NOME-11] associação/marca não pronunciada (log 2026-11-11: Combigan/Ganfort/Cosopt quando só disse timolol) vira apenas o remédio dito', () => {
+  const falaTimolol = 'nao ta usando algum colirio timolol uma olhada aqui perfeito duas vezes por dia ne continua usando colirio do jeito que a senhora usa';
+  for (const alucinado of [
+    'Brimonidina + timolol (Combigan) 2x/dia',
+    'Bimatoprosta + timolol (Ganfort) 2x/dia',
+    'Bimatoprosta + timolol 2x/dia',
+    'Dorzolamida + timolol (Cosopt) 2x/dia',
+    'Timolol (Timoptol) 2x/dia',
+    'Brimonidina (Alphagan) 2x/dia',
+  ]) {
+    const d = _medDecision(alucinado, alucinado, falaTimolol);
+    expect(d.clonedAIResponse.dados.medicacoes_em_uso).toBe('Timolol 2x/dia');
+    expect(d.clonedAIResponse.dados.tratamento).toBe('Timolol 2x/dia');
+    expect(d.guardsApplied.some(g => g.includes('Guard 2g'))).toBe(true);
+  }
+});
+
+test('[MED-NOME-12] marca entre parênteses só sobrevive se a marca foi dita; quando Combigan É dito, a associação permanece intacta', () => {
+  // Só princípio dito → remove (Marca) fabricada
+  const semMarca = _medDecision('Latanoprosta (Xalatan) 1x/noite', 'Latanoprosta (Xalatan) 1x/noite', 'usa latanoprosta uma vez por noite');
+  expect(semMarca.clonedAIResponse.dados.medicacoes_em_uso).toBe('Latanoprosta 1x/noite');
+  expect(semMarca.clonedAIResponse.dados.tratamento).toBe('Latanoprosta 1x/noite');
+
+  // Dois princípios ditos sem marca → mantém os dois princípios e remove (Ganfort)
+  const doisPrincipios = _medDecision('Bimatoprosta + timolol (Ganfort) 1x/dia', 'Bimatoprosta + timolol (Ganfort) 1x/dia', 'usa bimatoprosta com timolol uma vez ao dia');
+  expect(doisPrincipios.clonedAIResponse.dados.medicacoes_em_uso).toBe('Bimatoprosta + timolol 1x/dia');
+  expect(doisPrincipios.clonedAIResponse.dados.tratamento).toBe('Bimatoprosta + timolol 1x/dia');
+
+  // Marca Combigan dita → associação + (Combigan) permanece intacta
+  const comMarca = _medDecision('Brimonidina + timolol (Combigan) 2x/dia', 'Brimonidina + timolol (Combigan) 2x/dia', 'usa combigan duas vezes por dia');
+  expect(comMarca.clonedAIResponse.dados.medicacoes_em_uso).toBe('Brimonidina + timolol (Combigan) 2x/dia');
+  expect(comMarca.clonedAIResponse.dados.tratamento).toBe('Brimonidina + timolol (Combigan) 2x/dia');
+  expect(comMarca.guardsApplied.some(g => g.includes('Guard 2g'))).toBe(false);
+});
+
 // ──────────────────────────────────────────────────────────────────────────────
 // 2026-11-11 (revisão do sistema de medicamentos) — o Guard 2g punha o nome do colírio que
 // o paciente JÁ USAVA na linha de um colírio NOVO sem nome: princípio ativo errado, com a
@@ -2043,6 +2108,118 @@ test('[MED-ASR-4] restaurarVariantesAsr não mexe em texto sem variante (devolve
     expect(r.texto).toBe(txt);
     expect(r.trocas.length).toBe(0);
   }
+});
+
+// ──────────────────────────────────────────────────────────────────────────────
+// 2026-11-11 — UMA LISTA SÓ. O léxico (config/medicamentos-lexico.js) é a única lista de nomes
+// de remédio. A base de marcas do prompt e as listas dos guards são geradas dele. Havia sete
+// listas escritas à mão, e elas divergiam (uma reconhecia 14 dos 84 nomes do léxico).
+// ──────────────────────────────────────────────────────────────────────────────
+
+// Acha, num código-fonte, regex literal que enumera 3 ou mais remédios do léxico.
+function _listasDeRemedioEscritasAMao(fonte) {
+  const semComentario = fonte.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`\\])\/\/.*$/gm, '$1');
+  const reLiteral = /(^|[=(,:!&|?{}\[;\s])\/(?![*\/\s])((?:[^\/\\\n\[]|\\.|\[(?:[^\]\\\n]|\\.)*\])+)\/[dgimsuy]*/gm;
+  const radical = (p) => p.replace(/[aeo]$/, '');
+  const termosPorEntrada = _LexMed.MEDICAMENTOS_LEXICO
+    .filter(e => e.id !== 'lubrificante_padrao')
+    .map(e => {
+      const proprios = e.nomes.filter(n => (e.marcas || []).some(m => _LexMed.normalizarLexico(m).replace(/ /g, '') === _LexMed.normalizarLexico(n).replace(/ /g, ''))
+        || _LexMed.normalizarLexico(e.principio) === _LexMed.normalizarLexico(n));
+      return { id: e.id, termos: proprios.map(n => radical(_LexMed.normalizarLexico(n))).filter(t => t.length >= 5) };
+    });
+  const achados = [];
+  let m;
+  while ((m = reLiteral.exec(semComentario))) {
+    const corpo = m[2].toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+    const ids = termosPorEntrada.filter(e => e.termos.some(t => corpo.includes(t))).map(e => e.id);
+    if (ids.length >= 3) achados.push(`${m[2].slice(0, 70)}… (${ids.slice(0, 4).join(', ')})`);
+  }
+  return achados;
+}
+
+test('[LEXICO-UNICO-1] nenhum arquivo de produção, fora o léxico, enumera remédios numa regex', () => {
+  // O detector funciona: pega uma lista escrita à mão e ignora regex comum.
+  expect(_listasDeRemedioEscritasAMao('const X = /timolol|latanoprosta|dorzolamida/;').length).toBe(1);
+  expect(_listasDeRemedioEscritasAMao('const X = /colirio|pomada|gotas/; // timolol|latanoprosta|dorzolamida').length).toBe(0);
+
+  const fsMod = require('fs');
+  const pathMod = require('path');
+  const raiz = pathMod.join(__dirname, '..');
+  const arquivos = [];
+  for (const dir of ['src', 'src/agents', 'scripts', 'config']) {
+    for (const f of fsMod.readdirSync(pathMod.join(raiz, dir))) {
+      if (f.endsWith('.js') && !(dir === 'config' && f === 'medicamentos-lexico.js')) arquivos.push([dir, f]);
+    }
+  }
+  expect(arquivos.length > 15).toBe(true);
+  const violacoes = [];
+  for (const [dir, f] of arquivos) {
+    for (const v of _listasDeRemedioEscritasAMao(readSrcNormalized(...dir.split('/'), f))) violacoes.push(`${dir}/${f}: ${v}`);
+  }
+  expect(violacoes).toEqual([]);
+});
+
+test('[LEXICO-UNICO-2] a base de marcas do prompt é gerada do léxico (não há lista escrita no agente)', () => {
+  expect(geminiJsSource.includes('const MED_KNOWLEDGE_BASE')).toBe(false);
+  expect(geminiJsSource.includes('${_baseDeMedicamentosDoLexico()}')).toBe(true);
+  const base = _LexMed.montarBaseDoPrompt();
+  // toda marca e todo princípio de remédio de prescrição estão na base…
+  for (const e of _LexMed.MEDICAMENTOS_LEXICO.filter(x => x.classe !== 'ciclopegico')) {
+    for (const marca of e.marcas || []) expect(base.includes(marca)).toBe(true);
+    if (e.classe !== 'lubrificante') expect(base.includes(e.principio)).toBe(true);
+  }
+  // …o colírio de exame (dilatação) fica de fora, e as regras do lubrificante acompanham a lista
+  expect(base.includes('Tropicamida')).toBe(false);
+  expect(base.includes(`"${_LexMed.LUBRIFICANTE_PADRAO}"`)).toBe(true);
+  expect(base.includes('Lubrificante ocular (Marca)')).toBe(true);
+});
+
+test('[LEXICO-UNICO-4] Guard 2b enxerga TODO corticoide/antibiótico do léxico como "já nomeado" (antes: 14 de 84 nomes)', () => {
+  const fala = 'tem uma inflamacao na palpebra blefarite faz compressa morna lava com shampoo de nenem e depois pinga o colirio tres vezes ao dia';
+  for (const nomeado of ['Fluormetolona 3x/dia', 'Moxifloxacino (Vigamox) 3x/dia', 'Gatifloxacino (Zymar) 3x/dia', 'Prednisolona (Pred Fort) 3x/dia']) {
+    const d = DecisionEngine.buildDecision({
+      tipo_consulta: 'primeira_consulta',
+      dados: { tratamento: `${nomeado}\nMedicação ocular prescrita 3x/dia` },
+    }, { transcribedText: fala, hookFlags: {} });
+    // Nível 1 vence: com um colírio já nomeado, a linha genérica NÃO vira o protocolo.
+    expect(d.clonedAIResponse.dados.tratamento.includes('Tobramicina + dexametasona')).toBe(false);
+  }
+});
+
+test('[LEXICO-UNICO-5] listas geradas: o corticoide de uma associação não conta como antibiótico; marca conta como o remédio', () => {
+  const re = (fonte) => new RegExp(fonte);
+  const atb = re(_LexMed.PALAVRAS_DE_CLASSE.antibiotico + '|' + _LexMed.fonteDeClasse(['antibiotico', 'associacao_atb_cortic']));
+  for (const sim of ['antibiotico', 'vigamox', 'tobrex', 'vigadexa', 'ciprofloxacina', 'azitromicina', 'tobra-dexa']) expect(atb.test(sim)).toBe(true);
+  for (const nao of ['dexametasona', 'prednisolona', 'timolol', 'colirio', 'lubrificante']) expect(atb.test(nao)).toBe(false);
+
+  const cronico = re(_LexMed.fonteDeClasse(['hipotensor', 'lubrificante'], { genericos: true }));
+  for (const sim of ['xalatan', 'timolol', 'trometolol', 'combigan', 'lubrificante', 'systane', 'lagrima artificial', 'tafluprosta']) expect(cronico.test(sim)).toBe(true);
+  for (const nao of ['vigamox', 'dexametasona', 'colirio']) expect(cronico.test(nao)).toBe(false);
+
+  // lubrificante NOMEADO: marca ou princípio; a palavra "lubrificante" sozinha não conta
+  const lubNomeado = re(_LexMed.fonteDeClasse(['lubrificante']));
+  for (const sim of ['systane', 'optive fusion', 'carmelose', 'hialuronato']) expect(lubNomeado.test(sim)).toBe(true);
+  for (const nao of ['lubrificante', 'lubrificantes', 'lagrima artificial']) expect(lubNomeado.test(nao)).toBe(false);
+
+  // protocolo da blefarite: o nome e a forma de pronunciar saem da entrada do léxico
+  expect(_LexMed.protocolo('blefarite').principio).toBe('Tobramicina + dexametasona');
+  const pronunciado = re(_LexMed.fonteDoRemedio(_LexMed.protocolo('blefarite').id));
+  for (const sim of ['tobradex', 'tobracort', 'tobra dexa', 'tobramicina', 'dexametasona']) expect(pronunciado.test(sim)).toBe(true);
+  expect(pronunciado.test('vigadexa')).toBe(false);
+});
+
+test('[LEXICO-UNICO-6] colírio de glaucoma dito pela MARCA conta como evidência (Guard 5c) e como vocabulário clínico (Guard 0)', () => {
+  // Guard 5c: sem evidência na fala, a alteração de nervo sai; "Xalatan" agora é evidência.
+  const nervo = (fala) => DecisionEngine.buildDecision({
+    tipo_consulta: 'retorno',
+    dados: { diagnostico: 'H400 - Suspeita de glaucoma', fundoscopia: 'AO: escavação aumentada 0,7' },
+  }, { transcribedText: fala, hookFlags: {} }).clonedAIResponse.dados.diagnostico;
+  expect(String(nervo('a senhora continua usando o xalatan toda noite e volta em seis meses') || '').includes('H400')).toBe(true);
+  // Guard 0: fala curta só com nomes de remédio não é "ruído"
+  const ruido = DecisionEngine.buildDecision({ tipo_consulta: 'retorno', dados: { conduta: 'Retorno 6 meses' } },
+    { transcribedText: 'entao a senhora fica com o xalatan e o alphagan do mesmo jeito que estava antes e depois a gente ve de novo tudo certo', hookFlags: {} });
+  expect(ruido.clonedAIResponse.noiseDetected === true).toBe(false);
 });
 
 test('[LUB-4] marca dita vence: "Lubrificante ocular (Systane)" não é tocado', () => {
@@ -2672,6 +2849,18 @@ test('[MED-ASR-2] guard e modelo leem o mesmo remédio em "trometolol"', () => {
 test('[MED-ASR-5] o texto que vai ao modelo é restaurado também na fase 2 da dilatação (quebras de linha)', () => {
   const saida = _intAgent._normalizarSiglasExameAsr('ela usa bimato à próstata com timol\n\n[RETORNO DA DILATACAO]\n\nfundo de olho normal');
   expect(saida).toBe('ela usa bimatoprosta com timolol\n\n[RETORNO DA DILATACAO]\n\nfundo de olho normal');
+});
+
+test('[LEXICO-UNICO-3] o prompt enviado ao modelo carrega a base gerada', () => {
+  const prompt = _intAgent._buildConsultationPrompt('paciente usa xalatan toda noite', false, false);
+  expect(prompt.includes(_LexMed.montarBaseDoPrompt())).toBe(true);
+  expect(prompt.includes('Xalatan/Xalaprost (Latanoprosta)')).toBe(true);
+});
+
+test('[LEXICO-UNICO-7] correção de voz de nome de colírio mora no léxico: "brimo nidina" e "dorzo lamida"', () => {
+  expect(_intAgent._normalizarSiglasExameAsr('usa brimo nidina e dorzo lamida duas vezes ao dia')).toBe('usa brimonidina e dorzolamida duas vezes ao dia');
+  expect(_LexMed.encontrarMedicamentos('usa brimo nidina e dorzo lamida').map(a => a.id).join()).toBe('brimonidina,dorzolamida');
+  expect(/brimo\\s\+nidina|dorzo\\s\+lamida/.test(geminiJsSource)).toBe(false);
 });
 
 test('[EXAM-CAT-1] pedidos nomeados no futuro/decisão entram', () => {

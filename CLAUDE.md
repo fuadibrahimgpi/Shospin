@@ -36,6 +36,8 @@ O dono do projeto é médico oftalmologista e não programa. Responda em portugu
 - **O service worker dorme.** Variável global do `src/background.js` é só cache; a verdade está nas abas abertas.
 - **O extrator dos testes (`_extractFn`) acha o corpo da função pela primeira chave** depois do nome: função que os testes extraem não pode desestruturar parâmetros na assinatura, e o `async` precisa ser reposto no teste.
 - **O log `[Speech]` do console é cortado em 120 caracteres.** Os gatilhos veem o texto inteiro; não diagnostique gatilho pelo que "sumiu" do log.
+- **Nome de remédio existe em um arquivo só: `config/medicamentos-lexico.js`.** A base de marcas do prompt e as listas dos guards são geradas dele. Marca, princípio ou variante de voz nova entra lá; lista de remédios escrita em outro arquivo é barrada pelo teste `[LEXICO-UNICO-1]`. Os guards leem a fala crua e o modelo lê a fala corrigida: correção de voz de nome de remédio fora do léxico faz os dois enxergarem remédios diferentes.
+- **Nunca copie arquivo da pasta do Drive para este clone.** A cópia do Drive está dias atrás. Em 2026-11-11 uma correção feita lá foi copiada para cá e trocou seis arquivos por versões antigas, apagando o verificador que não falha aberto e mais de mil linhas de teste (nada tinha sido commitado, e foi desfeito). Correção feita fora do clone é refeita aqui, sobre a versão atual. Antes de começar, `git status` tem que estar limpo ou explicado.
 
 ## Fatos do SHOSP que o código pressupõe
 

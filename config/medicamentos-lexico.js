@@ -19,6 +19,18 @@
  *                dito sozinho NÃO ganha marca (nunca se completa o que não foi dito).
  *   asr        — fragmentos de REGEX para variantes que o reconhecedor de voz
  *                produz ("trometolou"). Casados sobre texto normalizado.
+ *   restaurar  — true: a transcrição enviada ao modelo recebe o nome certo no lugar
+ *                das variantes de "asr" (ver restaurarVariantesAsr).
+ *   radicais   — pedaços que bastam para dizer que o remédio foi CITADO ("cipro",
+ *                "tobra"). Só reconhecem; nunca são usados para nomear.
+ *   notaPrompt — observação que acompanha a entrada na base de marcas do prompt.
+ *
+ * UMA LISTA SÓ (2026-11-11): este arquivo é a única lista de nomes de remédio do
+ * projeto. A base de marcas do prompt (montarBaseDoPrompt) e as listas dos guards
+ * do DecisionEngine (fonteDeClasse, fonteDoRemedio) são GERADAS daqui. Antes havia
+ * listas escritas à mão em outros arquivos, e elas divergiam: uma reconhecia 14 dos
+ * 84 nomes daqui, outra escrevia "fluorometolon" onde aqui está "Fluormetolona".
+ * O teste [LEXICO-UNICO-1] barra lista nova de remédios fora deste arquivo.
  *
  * Matching: texto normalizado (minúsculo, sem acento) com fronteira de palavra.
  * Entradas mais específicas (associações) vêm ANTES das simples: o primeiro
@@ -27,13 +39,14 @@
 'use strict';
 
 // Registro do lubrificante quando o médico diz só "lubrificante(s)". O DecisionEngine
-// mantém uma cópia desta string (carga independente no navegador); um teste as compara.
+// lê esta constante daqui (não há mais cópia).
 const LUBRIFICANTE_PADRAO = 'Carmelose sódica ou hialuronato de sódio';
 
 const MEDICAMENTOS_LEXICO = [
   // ── Associações antibiótico + corticoide (antes dos componentes isolados) ──
   { id: 'vigadexa',   principio: 'Moxifloxacino + dexametasona', classe: 'associacao_atb_cortic', nomes: ['vigadexa'], marcas: ['Vigadexa'], asr: [] },
-  { id: 'tobradex',   principio: 'Tobramicina + dexametasona',   classe: 'associacao_atb_cortic', nomes: ['tobradex', 'tobracort'], marcas: ['Tobradex', 'Tobracort'], asr: ['tobra\\s*-?\\s*dexa\\w*'] },
+  { id: 'tobradex',   principio: 'Tobramicina + dexametasona',   classe: 'associacao_atb_cortic', nomes: ['tobradex', 'tobracort'], marcas: ['Tobradex', 'Tobracort'], asr: ['tobra\\s*-?\\s*dexa\\w*'],
+    notaPrompt: 'também dito "Tobramicina-Dexa"' },
   { id: 'maxitrol',   principio: 'Neomicina + polimixina B + dexametasona', classe: 'associacao_atb_cortic', nomes: ['maxitrol'], marcas: ['Maxitrol'], asr: [] },
   { id: 'cilodex',    principio: 'Ciprofloxacino + dexametasona', classe: 'associacao_atb_cortic', nomes: ['cilodex'], marcas: ['Cilodex'], asr: [] },
 
@@ -56,8 +69,8 @@ const MEDICAMENTOS_LEXICO = [
   // cetorolaco na lista, então a forma exata vence o curinga. "trometolou" segue cetorolaco.
   { id: 'timolol',      principio: 'Timolol',      classe: 'hipotensor', nomes: ['timolol', 'timoptol', 'glaucotrat'], marcas: ['Timoptol', 'Glaucotrat'],
     asr: ['timol\\w*', 'lol', 'trometolol', 'timetolol'], restaurar: true },
-  { id: 'brimonidina',  principio: 'Brimonidina',  classe: 'hipotensor', nomes: ['brimonidina', 'alphagan'], marcas: ['Alphagan'], asr: [] },
-  { id: 'dorzolamida',  principio: 'Dorzolamida',  classe: 'hipotensor', nomes: ['dorzolamida', 'trusopt'], marcas: ['Trusopt'], asr: [] },
+  { id: 'brimonidina',  principio: 'Brimonidina',  classe: 'hipotensor', nomes: ['brimonidina', 'alphagan'], marcas: ['Alphagan'], asr: ['brimo\\s+nidina'], restaurar: true },
+  { id: 'dorzolamida',  principio: 'Dorzolamida',  classe: 'hipotensor', nomes: ['dorzolamida', 'trusopt'], marcas: ['Trusopt'], asr: ['dorzo\\s+lamida'], restaurar: true },
   { id: 'brinzolamida', principio: 'Brinzolamida', classe: 'hipotensor', nomes: ['brinzolamida', 'azopt'], marcas: ['Azopt'], asr: [] },
 
   // ── Corticoides ──
@@ -67,17 +80,18 @@ const MEDICAMENTOS_LEXICO = [
   { id: 'loteprednol',   principio: 'Loteprednol',   classe: 'corticoide', nomes: ['loteprednol', 'loteprol'], marcas: ['Loteprol'], asr: [] },
 
   // ── Antibióticos ──
-  { id: 'gatifloxacino',  principio: 'Gatifloxacino',  classe: 'antibiotico', nomes: ['gatifloxacino', 'zymar'], marcas: ['Zymar'], asr: [] },
-  { id: 'moxifloxacino',  principio: 'Moxifloxacino',  classe: 'antibiotico', nomes: ['moxifloxacino', 'vigamox'], marcas: ['Vigamox'], asr: [] },
-  { id: 'tobramicina',    principio: 'Tobramicina',    classe: 'antibiotico', nomes: ['tobramicina', 'tobrex'], marcas: ['Tobrex'], asr: [] },
-  { id: 'ciprofloxacino', principio: 'Ciprofloxacino', classe: 'antibiotico', nomes: ['ciprofloxacino', 'ciloxan'], marcas: ['Ciloxan'], asr: [] },
+  { id: 'gatifloxacino',  principio: 'Gatifloxacino',  classe: 'antibiotico', nomes: ['gatifloxacino', 'zymar'], marcas: ['Zymar'], asr: [], radicais: ['gatiflox'] },
+  { id: 'moxifloxacino',  principio: 'Moxifloxacino',  classe: 'antibiotico', nomes: ['moxifloxacino', 'vigamox'], marcas: ['Vigamox'], asr: [], radicais: ['moxifl'] },
+  { id: 'tobramicina',    principio: 'Tobramicina',    classe: 'antibiotico', nomes: ['tobramicina', 'tobrex'], marcas: ['Tobrex'], asr: [], radicais: ['tobra'] },
+  { id: 'ciprofloxacino', principio: 'Ciprofloxacino', classe: 'antibiotico', nomes: ['ciprofloxacino', 'ciloxan'], marcas: ['Ciloxan'], asr: [], radicais: ['cipro'] },
   { id: 'ofloxacino',     principio: 'Ofloxacino',     classe: 'antibiotico', nomes: ['ofloxacino', 'oflox'], marcas: ['Oflox'], asr: [] },
   { id: 'vancomicina',    principio: 'Vancomicina',    classe: 'antibiotico', nomes: ['vancomicina', 'vancocin'], marcas: ['Vancocin'], asr: [] },
 
   // ── AINEs ──
   // "trometamol/trometamina" é o sufixo do cetorolaco; o ASR devolve "trometolou"
   // (log 2026-10-22: retirada de corpo estranho, "3 vezes ao dia por 5 dias").
-  { id: 'cetorolaco',  principio: 'Cetorolaco',  classe: 'aine', nomes: ['cetorolaco', 'acular'], marcas: ['Acular'], asr: ['trometa\\w*', 'trometo\\w*', 'trometol\\w*'] },
+  { id: 'cetorolaco',  principio: 'Cetorolaco',  classe: 'aine', nomes: ['cetorolaco', 'acular'], marcas: ['Acular'], asr: ['trometa\\w*', 'trometo\\w*', 'trometol\\w*'],
+    notaPrompt: '"trometamol"/"trometamina"/"trometamino" e variantes de ASR como "trometolou" são o Cetorolaco trometamina — o sufixo trometamina é do cetorolaco' },
   { id: 'nepafenaco',  principio: 'Nepafenaco',  classe: 'aine', nomes: ['nepafenaco', 'nevanac'], marcas: ['Nevanac'], asr: [] },
   { id: 'diclofenaco', principio: 'Diclofenaco', classe: 'aine', nomes: ['diclofenaco', 'still'], marcas: ['Still'], asr: [] },
 
@@ -216,7 +230,175 @@ function restaurarVariantesAsr(texto) {
   return { texto: out, trocas: trocar.slice().reverse().map(a => ({ de: a.de, para: a.para })) };
 }
 
-const MedicamentosLexico = { MEDICAMENTOS_LEXICO, LUBRIFICANTE_PADRAO, normalizarLexico, encontrarMedicamentos, nomeRegistrado, restaurarVariantesAsr };
+// ============================================================================
+// LISTAS GERADAS — tudo o que os guards e o prompt precisam saber de nomes sai daqui
+// ============================================================================
+
+/** Como a FALA diz a classe sem nomear o remédio (fragmentos de regex, texto normalizado). */
+const PALAVRAS_DE_CLASSE = {
+  antibiotico:  'antibi|\\batb\\b',
+  hipotensor:   'pressao|glaucoma|hipotensor',
+  antialergico: 'alergi|antial',
+  corticoide:   'corticoid|cortison',
+  aine:         'inflama',
+  lubrificante: 'lubrific|lagrima|hidrat',
+};
+
+/**
+ * Remédios RECONHECIDOS como da classe, mas que NUNCA nomeiam nada: não têm entrada
+ * acima (o princípio não foi conferido pelo médico). Servem só para os guards saberem
+ * que "a fala citou um antibiótico" ou "a linha já tem um corticoide". São radicais,
+ * sem a terminação. "fluorometolon" é a outra grafia de Fluormetolona.
+ */
+const EXTRAS_DE_CLASSE = {
+  antibiotico:           ['neomicin', 'polimixin', 'cloranfenicol', 'gentamicin', 'azitromicin', 'eritromicin'],
+  corticoide:            ['fluorometolon', 'sterapred'],
+  associacao_atb_cortic: ['garasone'],
+  hipotensor:            ['tafluprost'],
+  lubrificante:          ['carboximetilcelulos', 'hipromelos', 'hialuronic'],
+  ciclopegico:           ['fenilefrin'],
+};
+
+/** Protocolos declarados do médico: situação → id da entrada cujo princípio é registrado. */
+const PROTOCOLOS = { blefarite: 'tobradex' };
+
+function entradaPorId(id) {
+  return MEDICAMENTOS_LEXICO.find(e => e.id === id) || null;
+}
+
+function protocolo(nome) {
+  const e = entradaPorId(PROTOCOLOS[nome]);
+  if (!e) throw new Error(`protocolo "${nome}" sem entrada no léxico`);
+  return e;
+}
+
+function _radical(palavra) {
+  return palavra.replace(/[aeo]$/, '');
+}
+
+function _fonteNome(nome) {
+  return _escapar(normalizarLexico(nome)).replace(/ /g, '\\s+');
+}
+
+/** O nome identifica um PRODUTO (marca ou princípio), e não só a classe ("lubrificante", "lágrima artificial"). */
+function _ehNomeProprio(entrada, nome) {
+  if ((entrada.marcas || []).some(m => _chaveMarca(m) === _chaveMarca(nome))) return true;
+  return normalizarLexico(entrada.principio) === normalizarLexico(nome);
+}
+
+/** Alternativas de regex que identificam UMA entrada; cada uma já traz a própria fronteira final. */
+function _alternativasDaEntrada(e, opcoes) {
+  const { genericos = false, asr = true } = opcoes || {};
+  const alts = [];
+  for (const n of e.nomes) if (genericos || _ehNomeProprio(e, n)) alts.push(_fonteNome(n) + '\\b');
+  if (asr) for (const f of e.asr || []) alts.push(`(?:${f})\\b`);
+  // Radical do princípio ("moxifloxacin…" pega "moxifloxacina"), só quando o princípio é um remédio único.
+  const p = normalizarLexico(e.principio);
+  if (!p.includes(' ') && e.nomes.map(normalizarLexico).includes(p)) alts.push(_escapar(_radical(p)) + '\\w*');
+  for (const r of e.radicais || []) alts.push(r + '\\w*');
+  return alts;
+}
+
+/**
+ * Fonte de regex (para texto minúsculo e sem acento) de tudo o que cita um remédio das
+ * classes pedidas: nomes, variantes de voz, radicais e os EXTRAS_DE_CLASSE.
+ *   genericos — inclui os nomes que só dizem a classe ("lubrificante", "lágrima artificial");
+ *   asr       — inclui as variantes de voz (padrão: sim);
+ *   extras    — inclui EXTRAS_DE_CLASSE (padrão: sim).
+ * Associação entra só pelos próprios nomes: o corticoide de uma associação não vira "antibiótico".
+ */
+function fonteDeClasse(classes, opcoes) {
+  const { extras = true } = opcoes || {};
+  const alts = [];
+  for (const e of MEDICAMENTOS_LEXICO) {
+    if (classes.includes(e.classe)) alts.push(..._alternativasDaEntrada(e, opcoes));
+  }
+  if (extras) for (const c of classes) for (const x of EXTRAS_DE_CLASSE[c] || []) alts.push(x + '\\w*');
+  return `\\b(?:${[...new Set(alts)].join('|')})`;
+}
+
+/** Radical de cada componente do princípio: "Tobramicina + dexametasona" → ["tobramicin", "dexametason"]. */
+function radicaisDoPrincipio(id) {
+  const e = entradaPorId(id);
+  if (!e) throw new Error(`remédio "${id}" não está no léxico`);
+  return normalizarLexico(e.principio).split(/\s*\+\s*/).map(comp => _escapar(_radical(comp.split(' ')[0])));
+}
+
+/** Fonte de regex do que PRONUNCIA um remédio: nomes, variantes de voz e o radical de cada componente. */
+function fonteDoRemedio(id) {
+  const e = entradaPorId(id);
+  if (!e) throw new Error(`remédio "${id}" não está no léxico`);
+  const alts = _alternativasDaEntrada(e, { genericos: true });
+  for (const r of radicaisDoPrincipio(id)) alts.push(r + '\\w*');
+  return `\\b(?:${[...new Set(alts)].join('|')})`;
+}
+
+/** Fonte de regex do princípio como ele é ESCRITO numa linha ("tobramicina + dexametasona"). */
+function fonteDoPrincipio(id) {
+  const e = entradaPorId(id);
+  if (!e) throw new Error(`remédio "${id}" não está no léxico`);
+  return normalizarLexico(e.principio).split(/\s*\+\s*/)
+    .map(p => _escapar(p).replace(/ /g, '\\s+')).join('\\s*\\+\\s*');
+}
+
+/** Quantas vezes o texto cita um remédio (entradas do léxico + extras). Para o detector de ruído. */
+function contarMencoes(texto) {
+  const t = normalizarLexico(texto);
+  const extras = Object.values(EXTRAS_DE_CLASSE).reduce((a, l) => a.concat(l), []);
+  const re = new RegExp(`\\b(?:${extras.join('|')})\\w*`, 'g');
+  return encontrarMedicamentos(t).length + (t.match(re) || []).length;
+}
+
+// Ordem e título de cada classe na base de marcas do prompt. `ciclopegico` fica de fora:
+// é colírio de exame (dilatação), não de prescrição.
+const _CLASSES_NO_PROMPT = [
+  ['hipotensor', 'GLAUCOMA (colírios hipotensores)'],
+  ['lubrificante', null],
+  ['corticoide', 'CORTICOIDES'],
+  ['antibiotico', 'ANTIBIÓTICOS'],
+  ['associacao_atb_cortic', 'ASSOCIAÇÕES ATB+CORTICOIDE'],
+  ['aine', 'ANTI-INFLAMATÓRIOS NÃO ESTEROIDAIS'],
+  ['antialergico', 'ANTIALÉRGICOS'],
+  ['imunomodulador', 'OLHO SECO / IMUNOMODULADORES'],
+  ['antiviral', 'ANTIVIRAIS'],
+];
+
+/**
+ * Base de marcas → princípio ativo que vai no prompt do agente de entrevista.
+ * Gerada das entradas acima: marca nova no léxico aparece no prompt sem outra edição.
+ */
+function montarBaseDoPrompt() {
+  const linhas = ['LISTA DE MEDICAMENTOS OFTALMOLÓGICOS COMUNS (BRASIL) — marca (princípio ativo):'];
+  for (const [classe, titulo] of _CLASSES_NO_PROMPT) {
+    const entradas = MEDICAMENTOS_LEXICO.filter(e => e.classe === classe);
+    if (!entradas.length) continue;
+    linhas.push('');
+    if (classe === 'lubrificante') {
+      const marcas = entradas.reduce((a, e) => a.concat(e.marcas || []), []);
+      const principios = entradas
+        .filter(e => e.nomes.map(normalizarLexico).includes(normalizarLexico(e.principio)))
+        .map(e => normalizarLexico(e.principio));
+      linhas.push('LUBRIFICANTES (a MARCA NÃO identifica um princípio único — registre "Lubrificante ocular (Marca)"):');
+      linhas.push('  ' + marcas.join(', '));
+      linhas.push(`  (princípio só se o médico o DISSE: ${principios.join(', ')})`);
+      linhas.push(`  Médico disse só "lubrificante(s)", sem marca nem princípio → "${LUBRIFICANTE_PADRAO}"`);
+      continue;
+    }
+    linhas.push(titulo + ':');
+    for (const e of entradas) {
+      const marcas = e.marcas || [];
+      const base = marcas.length ? `${marcas.join('/')} (${e.principio})` : e.principio;
+      linhas.push('  ' + base + (e.notaPrompt ? ` — ${e.notaPrompt}` : ''));
+    }
+  }
+  return linhas.join('\n');
+}
+
+const MedicamentosLexico = {
+  MEDICAMENTOS_LEXICO, LUBRIFICANTE_PADRAO, PALAVRAS_DE_CLASSE, EXTRAS_DE_CLASSE, PROTOCOLOS,
+  normalizarLexico, encontrarMedicamentos, nomeRegistrado, restaurarVariantesAsr,
+  entradaPorId, protocolo, fonteDeClasse, fonteDoRemedio, fonteDoPrincipio, radicaisDoPrincipio, contarMencoes, montarBaseDoPrompt,
+};
 
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = MedicamentosLexico;

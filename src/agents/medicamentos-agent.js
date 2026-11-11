@@ -45,14 +45,16 @@ const GENERICO = 'Medicação ocular prescrita';
 const _GATILHO_RE = /\b(?:colirio|colirios|pomada|pomadas|gota|gotas|gotinha|gotinhas|remedio|remedios|medicacao|medicamento|comprimido|comprimidos|capsula|capsulas|lubrificante|lubrificantes|vidro|frasco|pingar|instilar|prescrev\w*|receita(?:r|ndo)? (?:de )?(?:colirio|remedio))\b/;
 
 // Para cada classe, o que a FALA precisa dizer para a classe ser afirmada (nível 2).
+// `rotulo` reconhece a classe no nome que o modelo escreveu; as palavras da fala vêm
+// do léxico (PALAVRAS_DE_CLASSE), a mesma tabela que os guards do DecisionEngine usam.
 const _CLASSE_NA_FALA = [
-  { rotulo: /antibiotic/i,        fala: /antibi|\batb\b/ },
-  { rotulo: /hipotensor|pressao/i, fala: /press[aã]o|glaucoma|hipotensor/ },
-  { rotulo: /antial[eé]rgic/i,    fala: /alergi|antial/ },
-  { rotulo: /corticoid/i,         fala: /corticoid|cortison/ },
-  { rotulo: /anti-?inflamat/i,    fala: /inflama/ },
-  { rotulo: /lubrificante/i,      fala: /lubrific|lagrima|hidrat/ },
-];
+  { rotulo: /antibiotic/i,         classe: 'antibiotico' },
+  { rotulo: /hipotensor|pressao/i, classe: 'hipotensor' },
+  { rotulo: /antial[eé]rgic/i,     classe: 'antialergico' },
+  { rotulo: /corticoid/i,          classe: 'corticoide' },
+  { rotulo: /anti-?inflamat/i,     classe: 'aine' },
+  { rotulo: /lubrificante/i,       classe: 'lubrificante' },
+].map(r => ({ rotulo: r.rotulo, fala: new RegExp(_Lexico.PALAVRAS_DE_CLASSE[r.classe]) }));
 
 const _PROTOCOLO_EXIGE_RE = /colirio|pingar|gota|instilar/;
 

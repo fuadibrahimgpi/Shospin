@@ -61,6 +61,20 @@
     return L;
   }
 
+  // Agente de medicamentos — usado SÓ pelo modo sombra dos itens (_sombraItensMedicamentos).
+  // Diferente do léxico, a falta dele NÃO é falha: a sombra só deixa uma linha no log.
+  const _AgenteMedNode = (() => {
+    try {
+      return (typeof module !== 'undefined' && module.exports && typeof require === 'function')
+        ? require('./agents/medicamentos-agent.js') : null;
+    } catch (_) { return null; }
+  })();
+
+  function _agenteMed() {
+    const A = _AgenteMedNode || (typeof globalThis !== 'undefined' ? globalThis.MedicamentosAgent : null);
+    return (A && typeof A.validar === 'function' && typeof A.conferirComTratamento === 'function') ? A : null;
+  }
+
   // Todas as regex abaixo são para texto MINÚSCULO E SEM ACENTO (_normalizeForGuard).
   let _listasMedCache = null;
   function _listasDoLexico() {
@@ -1999,6 +2013,81 @@
     }
   }
 
+  /**
+   * MODO SOMBRA dos ITENS de medicação (passo 3 da reorganização, 2026-11-11).
+   *
+   * O modelo devolve, ao lado do texto de `tratamento`, uma lista estruturada
+   * `medicacoes_itens` (um item por colírio/pomada/lubrificante: nome, nível, status,
+   * posologia, evidência). Este passo valida os itens com o agente de medicamentos
+   * (evidência literal, nome do léxico, nível) e compara, POR NOME, com o `tratamento`
+   * que os guards produziram. O resultado vai só para o log — [sombra:itens] e a linha
+   * [Med] — e é a medição que decide se vale deixar o agente escrever o campo.
+   *
+   * NÃO ALTERA NADA e NUNCA LANÇA: `rodar()` conta exceção como guard que falhou, e isso
+   * seguraria a injeção por causa de uma medição. Por isso o corpo inteiro tem o próprio
+   * try/catch, e agente ausente, campo ausente ou formato estranho só viram uma linha de log.
+   * `medicacoes_itens` fica no nível de cima da resposta, FORA de `dados`: lista em `dados`
+   * seria "formato inesperado" e seguraria a injeção.
+   *
+   * A evidência que o modelo cita vem do texto que ELE leu — com os nomes de remédio já
+   * restaurados ("bimato à próstata" → "bimatoprosta") —, mas este passo recebe a fala
+   * crua. Por isso a evidência é conferida contra a fala crua E contra a restaurada.
+   * @returns {{estado: string}} estado: sem-itens | agente-ausente | formato-invalido |
+   *          concorda | diverge | erro
+   */
+  function _sombraItensMedicamentos(cloned, ctx, log) {
+    const resultado = { estado: 'sem-itens' };
+    try {
+      if (!cloned || cloned.medicacoes_itens === undefined) return resultado;
+      const Agente = _agenteMed();
+      const Lexico = typeof globalThis !== 'undefined' ? globalThis.MedicamentosLexico : null;
+      if (!Agente || !Lexico) {
+        resultado.estado = 'agente-ausente';
+        log.push('[sombra:itens] agente de medicamentos não carregado — comparação não feita');
+        return resultado;
+      }
+      const itens = cloned.medicacoes_itens;
+      if (!Array.isArray(itens)) {
+        resultado.estado = 'formato-invalido';
+        log.push(`[sombra:itens] medicacoes_itens veio como ${itens === null ? 'null' : typeof itens}, não como lista — ignorado`);
+        return resultado;
+      }
+
+      const bruta = String((ctx && ctx.transcribedText) || '');
+      const fala = bruta + '\n' + Lexico.restaurarVariantesAsr(bruta).texto;
+      const v = Agente.validar(itens, fala);
+      const ativos = v.aceitos.filter(i => i && i.status !== 'suspenso');
+      const c = Agente.conferirComTratamento(ativos, cloned.dados && cloned.dados.tratamento);
+
+      Object.assign(resultado, {
+        estado: c.concordam ? 'concorda' : 'diverge',
+        recebidos: itens.length,
+        aceitos: ativos.length,
+        descartados: v.descartados.map(d => d.motivo),
+        suspensos: v.aceitos.filter(i => i && i.status === 'suspenso').map(i => String(i.nome)),
+        avisos: v.avisos,
+        itemSemLinha: c.itemSemLinha,
+        linhaSemItem: c.linhaSemItem,
+        nomeDiferente: c.nomeDiferente,
+      });
+
+      const descartes = resultado.descartados.length ? ` (${resultado.descartados.length} descartado(s) sem sustento na fala)` : '';
+      if (c.concordam) {
+        log.push(`[sombra:itens] ${ativos.length} item(ns) de medicação concordam com o tratamento${descartes}`);
+      } else {
+        const partes = [];
+        if (c.itemSemLinha.length) partes.push(`item sem linha no tratamento: ${c.itemSemLinha.join(' | ')}`);
+        if (c.linhaSemItem.length) partes.push(`linha do tratamento sem item: ${c.linhaSemItem.join(' | ')}`);
+        if (c.nomeDiferente.length) partes.push(`mesmo remédio com nome diferente: ${c.nomeDiferente.map(n => `item "${n.item}" × linha "${n.linha}"`).join(' | ')}`);
+        log.push(`[sombra:itens] DIVERGE — ${partes.join('; ')}${descartes}`);
+      }
+      return resultado;
+    } catch (e) {
+      try { log.push(`[sombra:itens] comparação falhou (não-fatal): ${e && e.message}`); } catch (_) { /* log nunca bloqueia */ }
+      return { estado: 'erro' };
+    }
+  }
+
   // Palavras genéricas de medicação, só para o log de diagnóstico [Med]. O léxico
   // enxerga marcas e princípios; "colírio", "lubrificação" e "ômega" ele não vê, e é
   // justamente o que o médico mais diz quando o nome do remédio não vem.
@@ -2011,7 +2100,7 @@
    * placeholder) sem deduzir pelo raciocínio. Nunca lança: log não pode quebrar a decisão.
    * @returns {string|null}
    */
-  function _diagMedicacao(raw, cloned, ctx, guardsApplied) {
+  function _diagMedicacao(raw, cloned, ctx, guardsApplied, sombraItens) {
     try {
       if (!cloned || !cloned.dados) return null;
       const Lexico = typeof globalThis !== 'undefined' ? globalThis.MedicamentosLexico : null;
@@ -2061,6 +2150,17 @@
         `      conduta-suspensao=${suspensoes.length ? v(suspensoes.join(' ⏎ ')) : '∅'}`,
         `      guards-med=${guardsMed.length ? JSON.stringify(guardsMed) : '[]'}`,
       ];
+
+      // Itens estruturados do modelo × tratamento final (modo sombra; só aparece se o modelo os devolveu).
+      if (sombraItens && sombraItens.estado && sombraItens.estado !== 'sem-itens') {
+        const s = sombraItens;
+        const nomes = (l) => (l && l.length ? l.join(' | ') : '∅');
+        linhas.push(s.estado === 'concorda'
+          ? `      itens(sombra): CONCORDA — ${s.aceitos} item(ns)${s.descartados && s.descartados.length ? `, ${s.descartados.length} descartado(s)` : ''}${s.suspensos && s.suspensos.length ? `, suspenso(s): ${nomes(s.suspensos)}` : ''}`
+          : s.estado === 'diverge'
+            ? `      itens(sombra): DIVERGE — sem-linha=[${nomes(s.itemSemLinha)}] sem-item=[${nomes(s.linhaSemItem)}] nome-diferente=[${(s.nomeDiferente || []).map(n => `${n.item} × ${n.linha}`).join(' | ') || '∅'}]${s.descartados && s.descartados.length ? ` descartados=${s.descartados.length}` : ''}`
+            : `      itens(sombra): ${s.estado} (comparação não feita)`);
+      }
 
       // Remédio do léxico dito e não nomeado em nenhum dos dois campos.
       const nomeados = norm(`${emUsoDepois || ''} ${d.tratamento || ''}`);
@@ -2141,6 +2241,7 @@
     const cloned = _shallowCloneAIResponse(rawAIResponse);
     const guardsApplied = [];
     const guardsFalhos = [];
+    let sombraItens = { estado: 'sem-itens' };
 
     // Executor isolado: um guard que lança não leva os outros junto.
     const rodar = (nome, fn) => {
@@ -2208,6 +2309,8 @@
       // Reordenar antes deixaria a reescrita pousando na ordem antiga.
       rodar('_ordenaOlhosODPrimeiro', () => _ordenaOlhosODPrimeiro(cloned, guardsApplied));
       rodar('_sombraMedicamentos', () => _sombraMedicamentos(cloned, ctx, guardsApplied));
+      // Mede os itens estruturados do modelo contra o tratamento final. Nunca lança nem altera dado.
+      sombraItens = rodar('_sombraItensMedicamentos', () => _sombraItensMedicamentos(cloned, ctx, guardsApplied)) || sombraItens;
     }
 
     // Se a reconciliação falhar, nenhum template é injetado: é o lado seguro.
@@ -2251,7 +2354,8 @@
       camposInesperados,
       segurarInjecao: motivos.length > 0,
       motivoSegurar: motivos.length ? motivos.join('; ') : null,
-      diagMedicacao: _diagMedicacao(rawAIResponse, cloned, ctx, guardsApplied),
+      diagMedicacao: _diagMedicacao(rawAIResponse, cloned, ctx, guardsApplied, sombraItens),
+      sombraItens,
       avisos: (cloned && Array.isArray(cloned.avisos)) ? cloned.avisos : [],
       metadata,
     };

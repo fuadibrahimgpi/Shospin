@@ -26,7 +26,7 @@ Duas travas de propósito:
 
 A captura nunca atrasa nem derruba a injeção.
 
-Este é o agente de medicamentos que está em produção. O [Agente de medicamentos](medicamentos-agent.md) propriamente dito está estacionado.
+Este é o agente de medicamentos que está em produção. O [Agente de medicamentos](medicamentos-agent.md) propriamente dito roda em modo sombra: mede, não escreve.
 
 ## Memórias relacionadas
 

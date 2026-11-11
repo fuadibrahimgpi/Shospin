@@ -40,9 +40,21 @@ Lista tirada do código em 2026-11-11. Inclui a normalização de tipos, os guar
 22. `_guardPresbiopiaObrigatoria`
 23. `_ordenaOlhosODPrimeiro`
 24. `_sombraMedicamentos`
-25. `_reconcileInjectFlags`
-26. `_avisoBiomicroscopiaOrfa`
-27. `_avisoFundoscopiaInterpretativa`
+25. `_sombraItensMedicamentos`
+26. `_reconcileInjectFlags`
+27. `_avisoBiomicroscopiaOrfa`
+28. `_avisoFundoscopiaInterpretativa`
+
+## Modo sombra dos itens de medicação (2026-11-11)
+
+O passo 25 não corrige nada. O modelo devolve, ao lado do texto de `tratamento`, uma lista `medicacoes_itens` (um item por colírio, pomada ou lubrificante: nome, nível, novo/mantido/suspenso, posologia e o trecho da fala que o sustenta). O passo valida os itens com o [Agente de medicamentos](medicamentos-agent.md) e compara, **por nome**, com o `tratamento` que os guards produziram. O resultado sai só no console: `[sombra:itens]` e a linha `[Med]` (`itens(sombra): CONCORDA` ou `DIVERGE`, com item sem linha, linha sem item e nome diferente).
+
+- **A lista fica no nível de cima da resposta, fora de `dados`.** Lista dentro de `dados` seria "formato inesperado" e seguraria a injeção.
+- **O passo nunca lança erro nem segura a injeção.** `rodar()` conta exceção como guard que falhou; por isso o corpo tem o próprio `try/catch`. Agente ausente, campo ausente ou formato estranho só viram uma linha de log.
+- **A evidência vale contra a fala crua ou a restaurada.** O modelo lê o texto com os nomes de remédio já restaurados ("bimatoprosta"); o motor recebe a fala crua ("bimato à próstata").
+- **Compressa, higiene, shampoo e ômega 3 não são itens** nem entram na comparação; senão toda consulta de blefarite divergiria.
+
+Para que serve: medir, em consultas reais, quantas vezes o item estruturado discorda do texto. Só com essa medição se decide deixar o agente escrever o campo. Testes `[MED-SOMBRA-0]` a `[MED-SOMBRA-7]`.
 
 ## Remédio em uso não nomeia colírio novo (2026-11-11)
 
@@ -65,7 +77,7 @@ Antes, os guards rodavam em fila sem isolamento: uma exceção em qualquer um de
 
 Testes `[DE-ABERTO-1]` a `[DE-ABERTO-9]`.
 
-O histórico de cada falha que gerou um guard está nas memórias relacionadas abaixo e na [linha do tempo](../historico/linha-do-tempo.md). O "modo sombra" de medicamentos deste pipeline usa só o [Léxico](../modulos/medicamentos-lexico.md); o [Agente de medicamentos](medicamentos-agent.md) está estacionado.
+O histórico de cada falha que gerou um guard está nas memórias relacionadas abaixo e na [linha do tempo](../historico/linha-do-tempo.md). O primeiro "modo sombra" de medicamentos (passo 24) usa só o [Léxico](../modulos/medicamentos-lexico.md); o segundo (passo 25) usa também o [Agente de medicamentos](medicamentos-agent.md), em sombra desde 2026-11-11.
 
 ## Memórias relacionadas
 

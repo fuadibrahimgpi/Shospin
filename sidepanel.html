@@ -378,8 +378,11 @@
   <script src="src/ApiService.js"></script>
   <script src="config/medicamentos-lexico.js"></script>
   <script src="src/agents/agent-contract.js"></script>
-  <!-- medicamentos-agent.js está ESTACIONADO (2026-11-10): nenhum código do painel o chama.
-       Para religar, ver o cabeçalho de src/agents/medicamentos-agent.js. -->
+  <!-- medicamentos-agent.js roda em MODO SOMBRA (2026-11-11): o DecisionEngine o usa só para
+       medir os itens de medicação do modelo contra o tratamento; não escreve no prontuário.
+       Fica dentro de uma função (só exporta MedicamentosAgent): em 2026-11-10 um nome de topo
+       repetido entre este arquivo e o recheck derrubou o recheck. Ver [ESCOPO-1]/[ESCOPO-3]. -->
+  <script src="src/agents/medicamentos-agent.js"></script>
   <script src="src/agents/medicamentos-feedback.js"></script>
   <script src="src/agents/recheck-agent.js"></script>
   <script src="src/DecisionEngine.js"></script>

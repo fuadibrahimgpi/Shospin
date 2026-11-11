@@ -8346,20 +8346,178 @@ test('[ESCOPO-3] carregados no MESMO escopo, na ordem do painel, os agentes sobe
     catch (e) { erros.push(`${arq}: ${e.message}`); }
   }
   expect(erros).toEqual([]);
-  for (const global of ['AgentContract', 'RecheckAgent', 'MedicamentosFeedback', 'MedicamentosLexico', 'ClinicalTriggers']) {
+  for (const global of ['AgentContract', 'RecheckAgent', 'MedicamentosAgent', 'MedicamentosFeedback', 'MedicamentosLexico', 'ClinicalTriggers']) {
     expect(vm.runInContext('typeof ' + global, ctx)).toBe('object');
   }
 });
 
-test('[MED-ESTACIONADO] o agente de medicamentos está fora do painel, e nada em produção depende dele', () => {
-  expect(_scriptsDoPainel().includes('src/agents/medicamentos-agent.js')).toBe(false);
-  // O arquivo e os testes dele continuam existindo.
-  expect(fs.existsSync(require('path').join(__dirname, '..', 'src', 'agents', 'medicamentos-agent.js'))).toBe(true);
-  expect(readSrcNormalized('src', 'agents', 'medicamentos-agent.js')).toContain('ESTADO: ESTACIONADO');
-  // Nenhum script carregado pelo painel usa o global dele (comentário não conta).
-  const usam = _scriptsDoPainel().filter(arq =>
+// O agente de medicamentos saiu do estacionamento em 2026-11-11, em MODO SOMBRA: o painel o
+// carrega, mas só o DecisionEngine o usa, e só para medir (nada vai ao prontuário por ele).
+test('[MED-SOMBRA-0] o agente roda em modo sombra: carregado no painel, isolado, usado só pelo DecisionEngine, sem escrever', () => {
+  const scripts = _scriptsDoPainel();
+  const i = (f) => scripts.indexOf(f);
+  // carregado depois do contrato e do léxico que ele lê, e antes do DecisionEngine que o usa
+  expect(i('src/agents/medicamentos-agent.js') > i('src/agents/agent-contract.js')).toBe(true);
+  expect(i('src/agents/medicamentos-agent.js') > i('config/medicamentos-lexico.js')).toBe(true);
+  expect(i('src/agents/medicamentos-agent.js') < i('src/DecisionEngine.js')).toBe(true);
+  const agente = readSrcNormalized('src', 'agents', 'medicamentos-agent.js');
+  expect(agente).toContain('ESTADO: MODO SOMBRA');
+  expect(agente).not.toContain('ESTADO: ESTACIONADO');
+  // Dentro de uma função: nenhum nome de topo no escopo compartilhado do painel
+  // (foi um `const _Contrato` repetido que derrubou o recheck por meses).
+  expect(_declsDeTopo('src/agents/medicamentos-agent.js')).toEqual([]);
+  // Só o DecisionEngine usa o global dele (comentário não conta).
+  const usam = scripts.filter(arq =>
     readSrcNormalized(arq).split('\n').some(l => /\bMedicamentosAgent\b/.test(l) && !/^\s*(\/\/|\*|\/\*)/.test(l)));
-  expect(usam).toEqual([]);
+  expect(usam).toEqual(['src/agents/medicamentos-agent.js', 'src/DecisionEngine.js']);
+  // O passo de sombra não atribui a nenhum campo da resposta.
+  const de = readSrcNormalized('src', 'DecisionEngine.js');
+  const corpo = de.slice(de.indexOf('function _sombraItensMedicamentos('), de.indexOf('// Palavras genéricas de medicação'));
+  expect(corpo.length > 500).toBe(true);
+  expect(/\b(?:cloned|dados|d)\.[A-Za-z_]+\s*=[^=]/.test(corpo)).toBe(false);
+  expect(/\bobjeto\.assign\(\s*(?:cloned|dados)/i.test(corpo)).toBe(false);
+  // E a chamada ao modelo (analisar) segue inexistente: o agente não fala com a IA.
+  expect(typeof require('../src/agents/medicamentos-agent.js').analisar).toBe('undefined');
+});
+
+// ──────────────────────────────────────────────────────────────────────────────
+// MODO SOMBRA DOS ITENS DE MEDICAÇÃO (passo 3 da reorganização, 2026-11-11)
+// O modelo devolve `medicacoes_itens` (um item por remédio, com a evidência da fala); o
+// DecisionEngine valida com o agente e compara POR NOME com o tratamento final. Só mede.
+// ──────────────────────────────────────────────────────────────────────────────
+const _MedAgente = require('../src/agents/medicamentos-agent.js');
+const _CorpusMed = JSON.parse(readSrcNormalized('utils', 'corpus', 'medicamentos.json'));
+const _itemMed = (nome, evidencia, extra) => ({ nome, nivel: 'principio', status: 'novo', posologia: null, olho: null, duracao: null, evidencia, ...(extra || {}) });
+const _sombraDecision = (itens, dados, fala, semCampo) => {
+  const raw = {
+    tipo_consulta: 'retorno',
+    dados: { medicacoes_em_uso: 'Nega uso de medicações oculares', conduta: 'Retorno 1 mês', ...dados },
+  };
+  if (!semCampo) raw.medicacoes_itens = itens;
+  return { raw, d: DecisionEngine.buildDecision(raw, { transcribedText: fala, hookFlags: {} }) };
+};
+
+test('[MED-SOMBRA-1] item concorda com o tratamento: só log, o dado não muda', () => {
+  const dados = { tratamento: 'Latanoprosta (Xalatan) à noite' };
+  const fala = 'vou passar o xalatan a noite';
+  const { d } = _sombraDecision([_itemMed('Xalatan', 'o xalatan a noite', { posologia: 'à noite' })], dados, fala);
+  const base = _sombraDecision(null, dados, fala, true).d;
+  expect(d.sombraItens.estado).toBe('concorda');
+  expect(d.guardsApplied.some(g => g.startsWith('[sombra:itens] 1 item(ns) de medicação concordam'))).toBe(true);
+  expect(/itens\(sombra\): CONCORDA — 1 item/.test(d.diagMedicacao)).toBe(true);
+  // nada mudou em relação à mesma consulta sem o campo
+  expect(JSON.stringify(d.clonedAIResponse.dados)).toBe(JSON.stringify(base.clonedAIResponse.dados));
+  expect(JSON.stringify(d.avisos)).toBe(JSON.stringify(base.avisos));
+  expect(base.sombraItens.estado).toBe('sem-itens');
+  expect(base.guardsApplied.some(g => g.includes('[sombra:itens]'))).toBe(false);
+});
+
+test('[MED-SOMBRA-2] colírio em uso + colírio novo sem nome: concorda (o erro de 2026-11-10 não volta)', () => {
+  const fala = 'a senhora usa algum colirio uso o xalatan toda noite certo esta com conjuntivite vou passar um colirio quatro vezes ao dia por sete dias';
+  const { d } = _sombraDecision(
+    [_itemMed('Medicação ocular prescrita', 'vou passar um colirio', { nivel: 'generico', posologia: '4x/dia', duracao: 'por 7 dias' })],
+    { medicacoes_em_uso: 'Latanoprosta (Xalatan) 1x/dia à noite', tratamento: 'Medicação ocular prescrita 4x/dia por 7 dias' }, fala);
+  expect(d.clonedAIResponse.dados.tratamento).toBe('Medicação ocular prescrita 4x/dia por 7 dias');
+  expect(d.sombraItens.estado).toBe('concorda');
+});
+
+test('[MED-SOMBRA-3] a comparação é por NOME: acusa Combigan, colírio novo com nome errado, item sem linha e linha sem item', () => {
+  const cmp = (itens, trat) => _MedAgente.conferirComTratamento(itens.map(n => ({ nome: n, status: 'novo' })), trat);
+  // o erro do Combigan: item "Timolol", linha "Brimonidina + timolol (Combigan)" — o nome precisa ABRIR a linha
+  const combigan = cmp(['Timolol'], 'Brimonidina + timolol (Combigan) 2x/dia');
+  expect(combigan.concordam).toBe(false);
+  expect(combigan.nomeDiferente).toEqual([{ item: 'Timolol', linha: 'Brimonidina + timolol (Combigan) 2x/dia' }]);
+  // colírio novo sem nome × linha com o nome do colírio em uso
+  const novo = cmp(['Medicação ocular prescrita'], 'Latanoprosta (Xalatan) 4x/dia por 7 dias');
+  expect(novo.itemSemLinha).toEqual(['Medicação ocular prescrita']);
+  expect(novo.linhaSemItem).toEqual(['Latanoprosta (Xalatan) 4x/dia por 7 dias']);
+  // marca entre parênteses e marcador de lista não atrapalham
+  expect(cmp(['Latanoprosta (Xalatan)'], '- Latanoprosta (Xalatan) à noite OD').concordam).toBe(true);
+  expect(cmp(['Bimatoprosta + timolol'], 'Bimatoprosta + timolol 1x/dia').concordam).toBe(true);
+  // dois genéricos, duas linhas genéricas: casam 1 a 1
+  expect(cmp(['Medicação ocular prescrita', 'Medicação ocular prescrita'], 'Medicação ocular prescrita 3x/dia\nMedicação ocular prescrita à noite').concordam).toBe(true);
+  expect(cmp(['Medicação ocular prescrita'], 'Medicação ocular prescrita 3x/dia\nMedicação ocular prescrita à noite').linhaSemItem.length).toBe(1);
+  // compressa, higiene, shampoo e ômega 3 não são medicação ocular: ficam fora dos dois lados
+  expect(cmp([], 'Compressa morna 2 min — 2x/dia\nHigiene palpebral com shampoo infantil — 3x/dia\nÔmega 3 1000 mg').concordam).toBe(true);
+  // item suspenso não pede linha no tratamento
+  expect(_MedAgente.conferirComTratamento([{ nome: 'Prednisolona', status: 'suspenso' }], null).concordam).toBe(true);
+});
+
+test('[MED-SOMBRA-4] a evidência vale contra a fala crua OU a restaurada ("bimato à próstata" → bimatoprosta)', () => {
+  const fala = 'a senhora usava bimato a prostata com timol ela precisa continuar usando colirio uma vez por dia';
+  const itens = [_itemMed('Bimatoprosta + timolol', 'usava bimatoprosta com timolol', { status: 'mantido', posologia: '1x/dia' })];
+  const dados = { medicacoes_em_uso: 'Colírio hipotensor ocular 1x/dia', tratamento: 'Colírio hipotensor ocular 1x/dia' };
+  const { d } = _sombraDecision(itens, dados, fala);
+  expect(d.clonedAIResponse.dados.tratamento).toBe('Bimatoprosta + timolol 1x/dia');
+  // o modelo leu o texto restaurado: sem a restauração o item cairia por "evidência não está na fala"
+  expect(_MedAgente.validar(itens, fala).descartados.length).toBe(1);
+  expect(d.sombraItens.descartados).toEqual([]);
+  expect(d.sombraItens.aceitos).toBe(1);
+  expect(d.sombraItens.estado).toBe('concorda');
+});
+
+test('[MED-SOMBRA-5] medicacoes_itens malformado NUNCA segura a injeção nem altera o dado', () => {
+  const fala = 'vou passar o xalatan a noite';
+  const dados = { tratamento: 'Latanoprosta (Xalatan) à noite' };
+  const base = _sombraDecision(null, dados, fala, true).d;
+  const estranhos = [
+    'texto solto', { a: 1 }, null, 12, [], ['so', 'texto'], [null, 3, {}, []],
+    [{ nome: 'Xalatan', evidencia: '' }],
+    [{ nome: 'Xalatan', evidencia: 'trecho que nao esta na fala' }],
+    [{ nome: null, nivel: 'classe', status: 'novo', evidencia: 'xalatan a noite' }],
+    [{ evidencia: 'xalatan a noite', nome: { x: 1 }, posologia: ['a'] }],
+  ];
+  for (const itens of estranhos) {
+    const { raw, d } = _sombraDecision(itens, dados, fala);
+    expect(d.segurarInjecao).toBe(false);
+    expect(d.guardsFalhos).toEqual([]);
+    expect(JSON.stringify(d.clonedAIResponse.dados)).toBe(JSON.stringify(base.clonedAIResponse.dados));
+    expect(JSON.stringify(d.avisos)).toBe(JSON.stringify(base.avisos));
+    expect(raw.dados.tratamento).toBe('Latanoprosta (Xalatan) à noite'); // a resposta crua não foi tocada
+    expect(typeof d.diagMedicacao === 'string' && !d.diagMedicacao.includes('falhou')).toBe(true);
+  }
+  expect(_sombraDecision('x', dados, fala).d.sombraItens.estado).toBe('formato-invalido');
+  expect(_sombraDecision(null, dados, fala).d.sombraItens.estado).toBe('formato-invalido');
+});
+
+test('[MED-SOMBRA-6] caminho do painel (sem require): com o agente mede; sem o agente só avisa no log, sem segurar', () => {
+  const vm = require('vm');
+  const montar = (arquivos) => {
+    const ctx = vm.createContext({ console: { log() {}, warn() {}, error() {} } });
+    for (const a of arquivos) vm.runInContext(readSrcNormalized(...a.split('/')), ctx, { filename: a });
+    return ctx;
+  };
+  const rodar = (ctx) => {
+    ctx.__raw = {
+      tipo_consulta: 'retorno',
+      dados: { medicacoes_em_uso: 'Nega uso de medicações oculares', conduta: 'Retorno 1 mês', tratamento: 'Latanoprosta (Xalatan) à noite' },
+      medicacoes_itens: [{ nome: 'Xalatan', nivel: 'principio', status: 'novo', evidencia: 'o xalatan a noite' }],
+    };
+    ctx.__ctx = { transcribedText: 'vou passar o xalatan a noite', hookFlags: {} };
+    return JSON.parse(vm.runInContext('JSON.stringify(DecisionEngine.buildDecision(__raw, __ctx))', ctx));
+  };
+  const base = ['config/medicamentos-lexico.js', 'src/agents/agent-contract.js'];
+  const com = rodar(montar([...base, 'src/agents/medicamentos-agent.js', 'src/DecisionEngine.js']));
+  expect(com.sombraItens.estado).toBe('concorda');
+  expect(com.segurarInjecao).toBe(false);
+  const sem = rodar(montar([...base, 'src/DecisionEngine.js']));
+  expect(sem.sombraItens.estado).toBe('agente-ausente');
+  expect(sem.segurarInjecao).toBe(false);
+  expect(sem.guardsFalhos).toEqual([]);
+  expect(sem.guardsApplied.some(g => g.includes('agente de medicamentos não carregado'))).toBe(true);
+  expect(sem.clonedAIResponse.dados.tratamento).toBe('Latanoprosta (Xalatan) à noite');
+});
+
+test('[MED-SOMBRA-7] os 13 casos do corpus, vistos pelo modo sombra: todos concordam com o texto que o agente formata', () => {
+  expect(_CorpusMed.casos.length).toBe(13);
+  const divergentes = [];
+  for (const c of _CorpusMed.casos) {
+    const { d } = _sombraDecision(c.modelo, { tratamento: c.esperado.tratamento }, c.fala);
+    if (d.sombraItens.estado !== 'concorda') divergentes.push(`${c.id}: ${JSON.stringify(d.sombraItens)}`);
+    // o que o agente aceita/descarta é o mesmo que o corpus espera
+    if (d.sombraItens.descartados.length !== c.esperado.descartados) divergentes.push(`${c.id}: descartados=${d.sombraItens.descartados.length}`);
+  }
+  expect(divergentes).toEqual([]);
 });
 
 test('[RECHECK-VIVO] recheck ausente AVISA, e falha do recheck não derruba a injeção', () => {

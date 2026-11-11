@@ -63,5 +63,5 @@ O dono do projeto é médico oftalmologista e não programa. Responda em portugu
 
 ## Estado de peças que enganam
 
-- `src/agents/medicamentos-agent.js` está **estacionado**: não é carregado pelo painel. O cabeçalho do arquivo diz como religar.
+- `src/agents/medicamentos-agent.js` roda em **modo sombra** (desde 2026-11-11): o painel o carrega, mas só o `DecisionEngine` o usa, para **medir** os itens de medicação do modelo (`medicacoes_itens`) contra o `tratamento`. Ele não escreve no prontuário; o resultado é o log `[sombra:itens]` e a linha `[Med]`. O arquivo roda dentro de uma função: não declare nome de topo nele (`[ESCOPO-1]`).
 - `src/geminiService.js` é só fachada; a lógica está nos três agentes Gemini.

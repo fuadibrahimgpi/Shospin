@@ -18,7 +18,7 @@ Não usa IA, não altera o prontuário. O resultado sai no console do painel: `[
 
 Este arquivo e `src/agents/medicamentos-agent.js` declaravam `const _Contrato` no topo. Os scripts do painel dividem um escopo só, então o segundo arquivo falhava ao carregar, `RecheckAgent` ficava indefinido e a rotina que o chama (`_recheckInjecao`, em `scripts/sidepanel-injection.js`) desistia em silêncio. Os testes não viam, porque em Node cada arquivo tem escopo próprio.
 
-O conflito sumiu quando o [Agente de medicamentos](medicamentos-agent.md) foi estacionado. Desde então:
+O conflito sumiu quando o [Agente de medicamentos](medicamentos-agent.md) foi estacionado. Em 2026-11-11 o agente voltou ao painel em modo sombra, agora dentro de uma função (sem nome de topo no escopo compartilhado), e `[ESCOPO-3]` carrega os dois juntos. Desde 2026-11-10:
 
 - `_recheckInjecao` avisa quando o agente falta, em vez de calar;
 - uma falha do recheck não derruba a injeção já feita;

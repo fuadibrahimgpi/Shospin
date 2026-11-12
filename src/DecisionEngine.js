@@ -2102,8 +2102,8 @@
    * médico é avisado para preencher (flag `suprimirTextoPadraoTratamento`, no nível de cima
    * da resposta: dentro de `dados` seria "formato inesperado" e seguraria a injeção).
    *
-   * Leitura desta regra (a instrução foi uma frase; a exceção é interpretação, a ser
-   * conferida pelo médico): "medicamento mencionado" = remédio do léxico ou palavra genérica
+   * Leitura desta regra (a instrução foi uma frase; a exceção foi confirmada pelo médico
+   * em 2026-11-12): "medicamento mencionado" = remédio do léxico ou palavra genérica
    * de medicação (colírio, pomada, gota, pingar, remédio…) perto de um verbo de PRESCRIÇÃO ou
    * MANUTENÇÃO (passar, prescrever, manter, continuar, iniciar, pingar, "pode usar"…). Verbo
    * de histórico ("usa", "uso", "usando") não conta: paciente de glaucoma que só relata o

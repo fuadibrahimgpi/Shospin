@@ -13,6 +13,8 @@ Up: [Histórico](INDEX.md) · Related: [Changelog v5.1](changelog-v5.1.md)
 
 ## 2026-11
 
+- 2026-11-12 · commit: `e967202` docs(skills): revisao das dez skills contra o codigo; regras de 10-12/11 entram; testes travam a sincronia
+- 2026-11-12 · commit: `4547d66` feat(tratamento): "Sem prescricao de medicacao" so quando nenhum medicamento foi mencionado
 - 2026-11-11 · commit: `020c05a` feat(medicamentos): prompt pede a lista medicacoes_itens (passo 3, parte 2: SO O PROMPT)
 - 2026-11-11 · commit: `75a7bf9` feat(medicamentos): modo sombra dos itens de medicacao (passo 3, parte 1: so codigo)
 - 2026-11-11 · commit: `f06bb63` refactor(medicamentos): uma lista so de remedios (lexico); timolol nao vira Combigan; trometolou e Cetorolaco

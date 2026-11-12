@@ -30,7 +30,7 @@ A linha principal conversa bem: voz → entrevista → guards → injeção → 
 | 10 | README descrevia um projeto em TypeScript que nunca existiu | reescrito |
 | 11 | Sem `CLAUDE.md`: regras de trabalho só na memória privada do assistente | criado |
 | 12 | Vault era retrato de 2026-10-22 | atualizado nesta data |
-| 13 | Pendências da revisão de 07/11 nas skills (tamanho, referências antigas, skills de ensino) | pendente |
+| 13 | Pendências da revisão de 07/11 nas skills (tamanho, referências antigas, skills de ensino) | parcial (2026-11-12): as skills foram revisadas contra o código e as lacunas de regra corrigidas; referências e ponteiros estão em dia e travados por teste (`[SKILL-SYNC-REFS]`). Seguem abertos: tamanho de `conduta` e `transcricao` (histórico dentro da skill), as duas skills do simulador (outro projeto; uma cita a UFT e as de ensino, a UNIRG) e as cópias do claude.ai, que só o médico atualiza |
 | 14 | Chave do Gemini na URL e em armazenamento sincronizado; modelo fixo em três lugares | corrigido — ver [Configuração do Gemini](modulos/gemini-config.md) |
 | 15 | Ferramentas: teste de integração num arquivo só, sem CI, sem `.gitattributes` | pendente (a checagem de sintaxe já cobre `config/`) |
 | 16 | Critérios de medicamentos falhavam: nomes em sete listas escritas à mão, guards em fila sobre texto livre | passos 1 e 2 feitos (lista única no [Léxico](modulos/medicamentos-lexico.md)); passo 3 em modo sombra, falta medir em consulta real e decidir se o agente passa a escrever o campo — ver [DecisionEngine](agentes/decision-engine.md) |

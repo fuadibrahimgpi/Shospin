@@ -1,6 +1,6 @@
 ---
 title: Linha do tempo
-date: 2026-11-10
+date: 2026-11-12
 tags: [historico]
 ---
 
@@ -13,6 +13,12 @@ Up: [Histórico](INDEX.md) · Related: [Changelog v5.1](changelog-v5.1.md)
 
 ## 2026-11
 
+- 2026-11-11 · commit: `020c05a` feat(medicamentos): prompt pede a lista medicacoes_itens (passo 3, parte 2: SO O PROMPT)
+- 2026-11-11 · commit: `75a7bf9` feat(medicamentos): modo sombra dos itens de medicacao (passo 3, parte 1: so codigo)
+- 2026-11-11 · commit: `f06bb63` refactor(medicamentos): uma lista so de remedios (lexico); timolol nao vira Combigan; trometolou e Cetorolaco
+- 2026-11-11 · commit: `e95f80d` fix(medicamentos): colirio em uso nao nomeia o colirio novo; "para" nao e "parar"; trometolol e ASR com quebra de linha
+- 2026-11-10 · commit: `53818d1` fix(gemini): chave no cabecalho e so no navegador; modelo e endereco num arquivo so
+- 2026-11-10 · commit: `8b86158` docs(vault): cofre atualizado de 22/10 para 10/11 e travado contra novo atraso
 - 2026-11-10 · commit: `ddfda66` docs: README reescrito sobre o projeto real e CLAUDE.md com as regras de trabalho
 - 2026-11-10 · commit: `8ad3c9b` fix(agentes): agente de medicamentos estacionado — e o recheck volta a carregar no painel
 - 2026-11-10 · commit: `df488b7` refactor(mensagens): contrato unico das mensagens entre painel, aba, background e paginas

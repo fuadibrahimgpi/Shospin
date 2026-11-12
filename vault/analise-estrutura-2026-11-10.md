@@ -19,20 +19,21 @@ A linha principal conversa bem: voz → entrevista → guards → injeção → 
 | # | Achado | Situação |
 |---|---|---|
 | 1 | Guards falhavam abertos: exceção em um derrubava todos e a resposta crua do modelo era injetada | corrigido — ver [DecisionEngine](agentes/decision-engine.md) |
-| 2 | Duas cópias divergentes do projeto (clone git e pasta sincronizada) | aviso posto na cópia; destino dela pendente |
+| 2 | Duas cópias divergentes do projeto (clone git e pasta sincronizada) | avisos postos na cópia (`CLAUDE.md`, `GEMINI.md`, `AGENTS.md`); em 2026-11-11 o Antigravity copiou arquivos da cópia por cima do clone (desfeito, nada foi commitado); destino da cópia pendente |
 | 3 | Trabalho sem commit e `main` 33 commits atrás, sem tags | commits feitos; merge e tags pendentes |
 | 4 | Service worker esquecia o painel e abria um segundo | corrigido — ver [Background](modulos/background.md) |
 | 5 | `sendToTab` sem limite de tempo | corrigido — ver [Mensagens](modulos/mensagens.md) |
 | 6 | Páginas de permissão sem script | corrigido — ver [Páginas de permissão](modulos/paginas-permissao.md) |
 | 7 | Mensagens sem contrato, três grafias de resposta, handlers órfãos | corrigido — ver [Mensagens](modulos/mensagens.md) |
 | 8 | Sequência análise → guards → injeção escrita duas vezes | corrigido junto com o item 1 (porta única `_aplicarDecisionEngine`) |
-| 9 | Agente de medicamentos carregado e ocioso | estacionado — ver [Agente de medicamentos](agentes/medicamentos-agent.md) |
+| 9 | Agente de medicamentos carregado e ocioso | estacionado em 2026-11-10; em modo sombra desde 2026-11-11 (mede, não escreve) — ver [Agente de medicamentos](agentes/medicamentos-agent.md) |
 | 10 | README descrevia um projeto em TypeScript que nunca existiu | reescrito |
 | 11 | Sem `CLAUDE.md`: regras de trabalho só na memória privada do assistente | criado |
 | 12 | Vault era retrato de 2026-10-22 | atualizado nesta data |
 | 13 | Pendências da revisão de 07/11 nas skills (tamanho, referências antigas, skills de ensino) | pendente |
 | 14 | Chave do Gemini na URL e em armazenamento sincronizado; modelo fixo em três lugares | corrigido — ver [Configuração do Gemini](modulos/gemini-config.md) |
 | 15 | Ferramentas: teste de integração num arquivo só, sem CI, sem `.gitattributes` | pendente (a checagem de sintaxe já cobre `config/`) |
+| 16 | Critérios de medicamentos falhavam: nomes em sete listas escritas à mão, guards em fila sobre texto livre | passos 1 e 2 feitos (lista única no [Léxico](modulos/medicamentos-lexico.md)); passo 3 em modo sombra, falta medir em consulta real e decidir se o agente passa a escrever o campo — ver [DecisionEngine](agentes/decision-engine.md) |
 
 ## O achado que a análise não previu
 
@@ -46,6 +47,6 @@ Ao estacionar o agente de medicamentos apareceu que o [Recheck de fidelidade](ag
 
 ## O que não foi verificado
 
-Tudo foi testado fora do Chrome, com navegador simulado. Nada foi conferido na plataforma real: o aviso de injeção suspensa, o painel único, as páginas de permissão e a primeira execução ao vivo do recheck dependem de conferência do médico.
+Atualizado em 2026-11-12. Tudo foi testado fora do Chrome, com navegador simulado. Nada foi conferido na plataforma real: o aviso de injeção suspensa, o painel único, as páginas de permissão e a primeira execução ao vivo do recheck dependem de conferência do médico.
 
 Related: [Revisão de 2026-11-07](revisao-estrutura-agente-2026-11-07.md) · [Linha do tempo](historico/linha-do-tempo.md)

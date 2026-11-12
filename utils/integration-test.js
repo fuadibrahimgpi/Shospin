@@ -3574,16 +3574,123 @@ test('[V6-IDP-4] sidepanel-injection.js reverte flags no else de injectResp.succ
 // 2026-07-03 — Tratamento vazio é injetado como "Sem prescrição de medicação"
 // ──────────────────────────────────────────────────────────────────────────────
 
-test('[TRAT-1] payload de injeção usa fallback "Sem prescrição de medicação" quando tratamento vazio', () => {
-  // O helper _trat injeta o placeholder no prontuário (antes o _tratReal o descartava)
-  expect(injectionJsSource).toContain("const _trat = (v) => _dilatacao ? null : (v || 'Sem prescrição de medicação')");
+test('[TRAT-1] payload de injeção usa o texto padrão (via tratamentoPadrao) quando tratamento vazio', () => {
+  // O helper _trat injeta o placeholder no prontuário (antes o _tratReal o descartava). Desde
+  // 2026-11-12 quem decide é tratamentoPadrao(audioData), não só o valor do campo.
+  expect(injectionJsSource).toContain('const _trat = (v) => _dilatacao ? null : (v || tratamentoPadrao(audioData))');
   expect(injectionJsSource.includes('_tratReal')).toBe(false);
 });
 
 test('[TRAT-2] dilatação (fase 1) mantém tratamento null — placeholder pertence ao pós-dilatação', () => {
-  // O _trat retorna null quando _dilatacao=true; e o painel também não exibe
-  // o placeholder durante a dilatação (displayAudioResults).
-  expect(audioJsSource).toContain("(data.dilatacaoDetectada ? '' : 'Sem prescrição de medicação')");
+  // O _trat retorna null quando _dilatacao=true; e o painel também não exibe o placeholder durante a
+  // dilatação (displayAudioResults, via tratamentoPadrao, que devolve null na dilatação).
+  expect(audioJsSource).toContain("|| tratamentoPadrao(data) || ''");
+  expect(_tratamentoPadrao({ dilatacaoDetectada: true })).toBe(null);
+});
+
+// ──────────────────────────────────────────────────────────────────────────────
+// 2026-11-12 — REGRA DO MÉDICO: nenhum medicamento mencionado na conduta → "Sem prescrição de
+// medicação". Exceção (leitura nossa da regra): tratamento vazio mas a fala PRESCREVE ou MANTÉM
+// medicação → o campo fica vazio e o médico é avisado (não escrever "Sem prescrição" contra a fala).
+// ──────────────────────────────────────────────────────────────────────────────
+function _tratamentoPadrao(data) {
+  const src = require('fs').readFileSync(require('path').join(__dirname, '..', 'scripts', 'sidepanel-constants.js'), 'utf8');
+  const corpo = src.slice(src.indexOf('const TEXTO_SEM_PRESCRICAO'), src.indexOf("const LENTE_CATARATA"));
+  return new Function(corpo + '\nreturn tratamentoPadrao;')()(data);
+}
+const _semPrescDecision = (fala, tratamento, extra, hookFlags) => DecisionEngine.buildDecision({
+  tipo_consulta: 'retorno',
+  dados: { medicacoes_em_uso: 'Nega uso de medicações oculares', conduta: 'Retorno 1 ano', tratamento, ...(extra || {}) },
+}, { transcribedText: fala, hookFlags: hookFlags || {} });
+
+test('[TRAT-3] nenhum medicamento mencionado: o texto padrão "Sem prescrição de medicação" é escrito', () => {
+  for (const fala of [
+    'o grau esta igual vou so manter os oculos volta em um ano',
+    'o grau mudou vou prescrever oculos novos volta em um ano',
+    'tudo normal volta em um ano',
+  ]) {
+    const d = _semPrescDecision(fala, null);
+    expect(d.clonedAIResponse.suprimirTextoPadraoTratamento).toBe(undefined);
+    expect(_tratamentoPadrao(d.clonedAIResponse)).toBe('Sem prescrição de medicação');
+    expect(d.segurarInjecao).toBe(false);
+  }
+});
+
+test('[TRAT-4] fala prescreve ou mantém medicação e o tratamento ficou vazio: NÃO escreve o texto padrão e avisa', () => {
+  for (const fala of [
+    'o grau esta igual vou passar um colirio tres vezes ao dia volta em um mes',
+    'a pressao esta boa continua com o colirio da pressao volta em seis meses',
+    'pode usar um lubrificante quando sentir o olho seco',
+    'mantem o lubrificante quatro vezes ao dia',
+    'vou prescrever xalatan a noite',
+  ]) {
+    const d = _semPrescDecision(fala, null);
+    expect(d.clonedAIResponse.suprimirTextoPadraoTratamento).toBe(true);
+    expect(_tratamentoPadrao(d.clonedAIResponse)).toBe(null);
+    expect(d.avisos.some(a => a.includes('"Sem prescrição de medicação" NÃO foi escrito'))).toBe(true);
+    expect(d.guardsApplied.some(g => g.startsWith('Texto padrão do tratamento suprimido'))).toBe(true);
+    expect(d.segurarInjecao).toBe(false); // a flag fica FORA de `dados`: nunca segura a injeção
+    expect(d.clonedAIResponse.dados.tratamento).toBe(null); // o guard não escreve nada no campo
+  }
+});
+
+test('[TRAT-5] o que NÃO é prescrição mantém o texto padrão: histórico, negação, remédio suspenso, colírio de exame', () => {
+  for (const fala of [
+    'o senhor usa o xalatan toda noite o grau mudou vou fazer oculos novos',          // histórico (usa)
+    'o senhor usa algum colirio ou remedio nao uso nada certo volta em um ano',       // pergunta + negativa
+    'nao precisa de colirio o olho esta bom volta em um ano',                          // negação
+    'sem colirio por enquanto volta em um ano',                                        // negação
+    'nao vou passar colirio nenhum volta em um ano',                                   // negação COM verbo de prescrição
+    'nao precisa usar colirio nem lubrificante volta em um ano',                       // negação + "usar" com modal
+    'nao vou manter o lubrificante pode suspender volta em um ano',                    // negação + manter
+    'pode parar o xalatan ja melhorou volta em um mes',                                // suspenso
+    'vou pingar um colirio pra dilatar a pupila e depois olho o fundo',                // colírio de exame
+    'vou pingar um colirio para dilatar [RETORNO DA DILATACAO] fundo normal volta em um ano', // texto da fase 1 na fase 2
+    'vou passar tropicamida para dilatar',                                             // ciclopégico
+    'vou pingar um colirio anestesico para medir a pressao',                           // anestésico do exame
+  ]) {
+    const d = _semPrescDecision(fala, null);
+    expect(d.clonedAIResponse.suprimirTextoPadraoTratamento).toBe(undefined);
+    expect(_tratamentoPadrao(d.clonedAIResponse)).toBe('Sem prescrição de medicação');
+  }
+});
+
+test('[TRAT-6] tratamento já preenchido, ou dilatação (fase 1): o guard não faz nada', () => {
+  // Preenchido (inclusive só com compressa/higiene): não é vazio, nada é acrescentado nem suprimido.
+  const comCompressa = _semPrescDecision('faz compressa morna e vou passar um colirio', 'Compressa morna 2 min — 2x/dia');
+  expect(comCompressa.clonedAIResponse.suprimirTextoPadraoTratamento).toBe(undefined);
+  expect(comCompressa.clonedAIResponse.dados.tratamento).toBe('Compressa morna 2 min — 2x/dia');
+  // Dilatação: o campo é nulo de qualquer jeito, e _tratamentoPadrao devolve null
+  const dil = _semPrescDecision('vou passar um colirio tres vezes ao dia', null, null, { dilatacaoDetectada: true });
+  expect(dil.clonedAIResponse.suprimirTextoPadraoTratamento).toBe(undefined);
+  expect(_tratamentoPadrao({ dilatacaoDetectada: true })).toBe(null);
+});
+
+test('[TRAT-7] injeção manual com o campo vazio NÃO devolve o texto padrão quando a flag está ligada', () => {
+  // O caminho perigoso: o painel mostra o campo vazio com aviso, o médico clica Injetar sem preencher.
+  // O `_trat` do injectAll lê a flag em audioData (não só o valor do campo).
+  const linha = injectionJsSource.match(/const _trat = \(v\) => [^\n]+;/)[0];
+  const montar = (audioData, dilatacao) => new Function('_dilatacao', 'tratamentoPadrao', 'audioData', linha + '\nreturn _trat;')(
+    dilatacao, (d) => _tratamentoPadrao(d), audioData);
+  expect(montar({ suprimirTextoPadraoTratamento: true }, false)('')).toBe(null);          // campo vazio + flag → não escreve
+  expect(montar({ suprimirTextoPadraoTratamento: true }, false)('Colírio X 3x/dia')).toBe('Colírio X 3x/dia'); // médico preencheu → vale o dele
+  expect(montar({}, false)('')).toBe('Sem prescrição de medicação');                       // sem flag → texto padrão
+  expect(montar({}, true)('')).toBe(null);                                                 // dilatação → null
+  expect(montar({}, false)('Timolol 2x/dia')).toBe('Timolol 2x/dia');
+});
+
+test('[TRAT-8] o texto padrão tem UM só dono: nenhum outro ponto do painel o escreve por conta própria', () => {
+  const semComentario = (s) => s.split('\n').filter(l => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
+  for (const [nome, src] of [['sidepanel-audio.js', audioJsSource], ['sidepanel-injection.js', injectionJsSource]]) {
+    expect([nome, semComentario(src).includes('Sem prescrição de medicação')]).toEqual([nome, false]);
+  }
+});
+
+test('[TRAT-9] a linha [Med] diz a verdade sobre o texto padrão (escrito × suprimido)', () => {
+  const sup = _semPrescDecision('vou passar um colirio tres vezes ao dia', null);
+  expect(sup.diagMedicacao).toContain('o painel NÃO vai escrever "Sem prescrição de medicação"');
+  const normal = _semPrescDecision('eu estou usando o colirio so para hidratar toma omega tres', null, { medicacoes_em_uso: 'Colírio lubrificante' });
+  expect(normal.diagMedicacao).toContain('o painel vai escrever "Sem prescrição de medicação"');
 });
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -6486,7 +6593,9 @@ test('[BLEF-LEIGO-3] pálpebra SOZINHA (sem sinal de blefarite) ainda reverte a 
 test('[BLEF-ROTINA-1] shampoo sem descrição do exame ⇒ flag de pé, template suprimido + aviso', () => {
   const raw = {
     tipo_consulta: 'primeira_consulta',
-    dados: { hda: 'troca de grau', diagnostico: 'H524 - Presbiopia', biomicroscopia: null },
+    // tratamento realista: a fala prescreve shampoo e lubrificante (vazio faria o aviso do texto padrão
+    // do tratamento entrar na contagem de avisos — e o teste é sobre a biomicroscopia)
+    dados: { hda: 'troca de grau', diagnostico: 'H524 - Presbiopia', biomicroscopia: null, tratamento: 'Higiene palpebral com shampoo infantil\nCarmelose sódica ou hialuronato de sódio' },
     injectBlefarite: true,
   };
   const decision = DecisionEngine.buildDecision(raw, {
@@ -6548,7 +6657,7 @@ test('[BLEF-ROTINA-5] "olho irritado" + shampoo nos cílios NÃO é inflamação
   // de rotina. Se "irritad" contasse na conjunção solta, toda uma classe de consultas
   // voltaria a afirmar hiperemia e telangiectasias sem ninguém ter olhado a pálpebra.
   const decision = DecisionEngine.buildDecision(
-    { tipo_consulta: 'retorno', dados: { biomicroscopia: null }, injectBlefarite: true },
+    { tipo_consulta: 'retorno', dados: { biomicroscopia: null, tratamento: 'Higiene palpebral com shampoo infantil\nCarmelose sódica ou hialuronato de sódio' }, injectBlefarite: true },
     {
       transcribedText: 'o olho está irritado, vou passar o shampoo nos cílios e lubrificante',
       hookFlags: {},
@@ -6570,7 +6679,7 @@ test('[BLEF-ROTINA-5] "olho irritado" + shampoo nos cílios NÃO é inflamação
 
 test('[BLEF-ASR-1] "informaçãozinha na pálpebra" (ASR) é inflamação descrita', () => {
   const decision = DecisionEngine.buildDecision(
-    { tipo_consulta: 'primeira_consulta', dados: { biomicroscopia: null }, injectBlefarite: true },
+    { tipo_consulta: 'primeira_consulta', dados: { biomicroscopia: null, tratamento: 'Higiene palpebral com shampoo infantil\nCarmelose sódica ou hialuronato de sódio' }, injectBlefarite: true },
     {
       transcribedText: 'ele tem uma informaçãozinha na pálpebra que é bem comum, por isso o olho ' +
                        'incomoda um pouco; vou passar o shampoo e o lubrificante',

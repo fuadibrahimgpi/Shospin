@@ -816,11 +816,14 @@ async function injectAll(force = false) {
     const tipo = audioData.tipo_consulta;
 
     const _dilatacao = !!audioData.dilatacaoDetectada;
-    // Sem tratamento ditado, o campo TRATAMENTO é injetado com o registro
-    // explícito "Sem prescrição de medicação" (mesmo texto que o painel exibe
-    // via displayAudioResults) — o prontuário nunca fica com tratamento em
-    // branco. Na dilatação (fase 1) permanece null: pertence ao pós-dilatação.
-    const _trat = (v) => _dilatacao ? null : (v || 'Sem prescrição de medicação');
+    // Sem tratamento ditado e nenhum medicamento mencionado, o campo TRATAMENTO é injetado com o
+    // registro explícito "Sem prescrição de medicação" (o mesmo texto que o painel exibe via
+    // displayAudioResults) — o prontuário não fica com tratamento em branco. Quem decide é
+    // tratamentoPadrao(audioData), e NÃO só o valor do campo: se a fala prescreve ou mantém uma
+    // medicação e o tratamento ficou vazio, o painel mostra o campo vazio com aviso, e injetar
+    // não pode devolver o texto "Sem prescrição" (retorna null e o campo não é escrito).
+    // Na dilatação (fase 1) permanece null: pertence ao pós-dilatação.
+    const _trat = (v) => _dilatacao ? null : (v || tratamentoPadrao(audioData));
     if (tipo === 'conclusao') {
       combinedData.audio = {
         tipo: 'conclusao',

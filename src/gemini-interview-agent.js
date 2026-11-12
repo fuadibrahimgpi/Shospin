@@ -1350,7 +1350,9 @@ CAMPOS:
         quando a FALA a diz ("antibiótico", "para pressão", "de alergia").
      ⚠️ Colírio MANTIDO é tratamento: "mantido o timolol 2x/dia", "continua com o colírio da pressão"
         → linha em tratamento ("Timolol 2x/dia"), além de constar em medicacoes_em_uso. NÃO devolva
-        tratamento null só porque o remédio já estava em uso — null vira "Sem prescrição de medicação".
+        tratamento null só porque o remédio já estava em uso — null vira "Sem prescrição de medicação"
+        (texto escrito só quando NENHUM medicamento foi mencionado; se a fala prescreve ou mantém algo e o
+        campo vem vazio, ele fica vazio e o médico é avisado).
      ⚠️ IMPORTANTE: Nunca inclua "1 gota" ou "uma gota" nas prescrições de colírio, pois já é subentendido.
      A posologia (frequência, olho, duração) é preservada em qualquer nível quando mencionada.
 

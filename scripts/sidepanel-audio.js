@@ -1538,7 +1538,7 @@ function displayAudioResults(data) {
     antecedentesFamField.value = data.dados?.antecedentes_familiares || '';
     diagnosticoField.value = data.dados?.diagnostico || '';
     condutaField.value = data.dados?.conduta || '';
-    medicamentosPrescritosField.value = data.dados?.tratamento || data.dados?.medicamentos_prescritos || (data.dilatacaoDetectada ? '' : 'Sem prescrição de medicação');
+    medicamentosPrescritosField.value = data.dados?.tratamento || data.dados?.medicamentos_prescritos || tratamentoPadrao(data) || '';
   } else {
     badge.textContent = 'Retorno';
     badge.className = 'type-badge retorno';
@@ -1549,7 +1549,7 @@ function displayAudioResults(data) {
     medicacoesRetornoField.value = data.dados?.uso || data.dados?.medicacoes_em_uso || '';
     diagnosticoRetornoField.value = data.dados?.diagnostico || '';
     condutaRetornoField.value = data.dados?.conduta || '';
-    medicamentosPrescritosRetornoField.value = data.dados?.tratamento || data.dados?.medicamentos_prescritos || (data.dilatacaoDetectada ? '' : 'Sem prescrição de medicação');
+    medicamentosPrescritosRetornoField.value = data.dados?.tratamento || data.dados?.medicamentos_prescritos || tratamentoPadrao(data) || '';
   }
 
   audioFieldsContainer.classList.remove('hidden');

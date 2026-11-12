@@ -2094,6 +2094,83 @@
   const _MED_GENERICO_TOKEN_RE = /^(?:colirios?|pomadas?|gotas?|gotinhas?|pingar|instilar|lubrific\w*|lagrimas?|omega|remedios?|medicacao|medicacoes|medicamentos?|comprimidos?|capsulas?|suplementos?|vitaminas?)$/;
 
   /**
+   * TEXTO PADRÃO DO TRATAMENTO (regra do médico, 2026-11-12): quando NENHUM medicamento foi
+   * mencionado na conduta, o campo tratamento recebe "Sem prescrição de medicação". Quem
+   * escreve o texto é o painel (`tratamentoPadrao`, em sidepanel-constants.js); este guard
+   * decide só a EXCEÇÃO: o tratamento ficou vazio, mas a fala PRESCREVE ou MANTÉM uma
+   * medicação. Escrever "Sem prescrição" aí seria o oposto da fala; o campo fica vazio e o
+   * médico é avisado para preencher (flag `suprimirTextoPadraoTratamento`, no nível de cima
+   * da resposta: dentro de `dados` seria "formato inesperado" e seguraria a injeção).
+   *
+   * Leitura desta regra (a instrução foi uma frase; a exceção é interpretação, a ser
+   * conferida pelo médico): "medicamento mencionado" = remédio do léxico ou palavra genérica
+   * de medicação (colírio, pomada, gota, pingar, remédio…) perto de um verbo de PRESCRIÇÃO ou
+   * MANUTENÇÃO (passar, prescrever, manter, continuar, iniciar, pingar, "pode usar"…). Verbo
+   * de histórico ("usa", "uso", "usando") não conta: paciente de glaucoma que só relata o
+   * Xalatan, numa consulta de óculos, continua recebendo o texto padrão. Negação perto do
+   * verbo ("não precisa de colírio", "sem colírio") também não conta, nem remédio
+   * negado/suspenso (já excluído por _medicamentosCitadosNaFala).
+   *
+   * Falso positivo = campo vazio + aviso (o médico escreve o texto); falso negativo = o
+   * comportamento de antes. Nenhum dos dois inventa prescrição. Não usa lista de remédios
+   * própria: remédio vem do léxico, e o resto são palavras genéricas.
+   */
+  const _VERBO_PRESCRICAO_TOKEN_RE = /^(?:passar|passo|prescrev\w*|receit\w*|indic\w*|manter|mantem|mantenho|mantido|mantida|mantidos|mantidas|mantendo|continu\w*|inici\w*|comec\w*|aplicar|aplique|pingar|pingue|pinguem|tomar|tome|colocar|coloque|trocar|troco|troque)$/;
+  const _VERBO_USAR_TOKEN_RE = /^(?:usar|use)$/;
+  const _MODAL_ANTES_DE_USAR_RE = /^(?:pode|podem|vai|va|deve|devem|precisa|precisar|vamos|vou|quero|tem|tenha|recomendo|convem)$/;
+  const _NEGACAO_TOKEN_RE = /^(?:nao|sem|nunca|nenhum|nenhuma|dispenso|dispensa|dispensar|desnecessario)$/;
+  // Colírio de EXAME não é prescrição: o que se pinga para dilatar, anestesiar ou corar para medir a
+  // pressão ("vou pingar um colírio pra dilatar") não pode suprimir o texto padrão — dilatação é comum
+  // e o texto da fase 1 volta junto na fase 2.
+  const _CONTEXTO_DE_EXAME_TOKEN_RE = /^(?:dilat\w*|midri\w*|pupilas?|anestesic\w*|fluoresce\w*|corante|medir|exame|tonometria|aplanacao)$/;
+  const _JANELA_PRESCRICAO_TOKENS = 6;
+
+  function _guardTratamentoVazioComMedicacao(cloned, ctx, log) {
+    const d = cloned && cloned.dados;
+    if (!d) return;
+    if (String(d.tratamento == null ? '' : d.tratamento).trim()) return; // o campo não está vazio
+    const flags = ctx.hookFlags || {};
+    if (cloned.dilatacaoDetectada || flags.dilatacaoDetectada) return; // fase 1: o campo fica nulo de qualquer jeito
+    const Lexico = typeof globalThis !== 'undefined' ? globalThis.MedicamentosLexico : null;
+    if (!Lexico) return; // sem léxico: vale o comportamento de antes (texto padrão)
+    const t = Lexico.normalizarLexico(ctx.transcribedText || '');
+    if (!t) return;
+
+    const tokens = t.split(' ');
+    const mencoes = [];
+    tokens.forEach((tk, i) => { if (_MED_GENERICO_TOKEN_RE.test(tk)) mencoes.push(i); });
+    for (const a of _medicamentosCitadosNaFala(ctx.transcribedText).validos) {
+      if (a.classe === 'ciclopegico') continue; // tropicamida/atropina: colírio de exame
+      mencoes.push(t.slice(0, a.indice).split(' ').length - 1); // índice do token
+    }
+    if (!mencoes.length) return;
+
+    const ehVerboDePrescricao = (i) => {
+      const tk = tokens[i];
+      const ehVerbo = _VERBO_PRESCRICAO_TOKEN_RE.test(tk) ||
+        (_VERBO_USAR_TOKEN_RE.test(tk) && tokens.slice(Math.max(0, i - 2), i).some(x => _MODAL_ANTES_DE_USAR_RE.test(x)));
+      if (!ehVerbo) return false;
+      return !tokens.slice(Math.max(0, i - 4), i).some(x => _NEGACAO_TOKEN_RE.test(x));
+    };
+
+    for (const m of mencoes) {
+      const ini = Math.max(0, m - _JANELA_PRESCRICAO_TOKENS);
+      const fim = Math.min(tokens.length - 1, m + _JANELA_PRESCRICAO_TOKENS);
+      if (tokens.slice(ini, fim + 1).some(x => _CONTEXTO_DE_EXAME_TOKEN_RE.test(x))) continue;
+      for (let v = ini; v <= fim; v++) {
+        if (v === m || !ehVerboDePrescricao(v)) continue;
+        const trecho = tokens.slice(Math.max(0, Math.min(m, v) - 2), Math.max(m, v) + 3).join(' ');
+        cloned.suprimirTextoPadraoTratamento = true;
+        _pushAviso(cloned,
+          `Tratamento: a fala indica medicação ("…${trecho}…"), mas o campo ficou vazio. ` +
+          'O texto "Sem prescrição de medicação" NÃO foi escrito — preencha o tratamento manualmente.');
+        log.push(`Texto padrão do tratamento suprimido — tratamento vazio com medicação prescrita/mantida na fala ("…${trecho}…")`);
+        return;
+      }
+    }
+  }
+
+  /**
    * DIAGNÓSTICO [Med] — só log, nunca altera dado. Uma linha por consulta mostrando,
    * lado a lado, o que a fala cita, o que o modelo escreveu e o que sobrou depois dos
    * guards, para dizer ONDE um remédio dito se perdeu (decisão do modelo, guard ou
@@ -2168,9 +2245,12 @@
       if (naoNomeados.length) {
         linhas.push(`      ALERTA: fala cita ${naoNomeados.map(a => a.principio).join(', ')} e nem em_uso nem trat nomeiam`);
       }
-      // Ponto A: o painel troca tratamento vazio por "Sem prescrição de medicação".
+      // Ponto A: o painel troca tratamento vazio por "Sem prescrição de medicação" — salvo quando a
+      // fala prescreve/mantém medicação (_guardTratamentoVazioComMedicacao): aí o campo fica vazio.
       if ((!d.tratamento || !String(d.tratamento).trim()) && (achados.length || genericos.length)) {
-        linhas.push('      ATENÇÃO: trat vazio com palavra de medicação na fala — o painel vai escrever "Sem prescrição de medicação" (conferir se procede)');
+        linhas.push(cloned.suprimirTextoPadraoTratamento
+          ? '      ATENÇÃO: trat vazio com medicação prescrita/mantida na fala — o painel NÃO vai escrever "Sem prescrição de medicação"; o médico foi avisado para preencher'
+          : '      ATENÇÃO: trat vazio com palavra de medicação na fala — o painel vai escrever "Sem prescrição de medicação" (conferir se procede)');
       }
       return linhas.join('\n');
     } catch (e) {
@@ -2308,6 +2388,9 @@
       // biomicroscopia (blefarite literal, lente narrativa da pseudofacia).
       // Reordenar antes deixaria a reescrita pousando na ordem antiga.
       rodar('_ordenaOlhosODPrimeiro', () => _ordenaOlhosODPrimeiro(cloned, guardsApplied));
+      // Depois de TODO guard que pode esvaziar o tratamento (2c remove linha; dilatação zera):
+      // tratamento vazio + medicação prescrita/mantida na fala = o painel não escreve "Sem prescrição".
+      rodar('_guardTratamentoVazioComMedicacao', () => _guardTratamentoVazioComMedicacao(cloned, ctx, guardsApplied));
       rodar('_sombraMedicamentos', () => _sombraMedicamentos(cloned, ctx, guardsApplied));
       // Mede os itens estruturados do modelo contra o tratamento final. Nunca lança nem altera dado.
       sombraItens = rodar('_sombraItensMedicamentos', () => _sombraItensMedicamentos(cloned, ctx, guardsApplied)) || sombraItens;

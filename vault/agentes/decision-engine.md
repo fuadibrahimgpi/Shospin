@@ -39,11 +39,12 @@ Lista tirada do código em 2026-11-11. Inclui a normalização de tipos, os guar
 21. `_guardOculosNaConduta`
 22. `_guardPresbiopiaObrigatoria`
 23. `_ordenaOlhosODPrimeiro`
-24. `_sombraMedicamentos`
-25. `_sombraItensMedicamentos`
-26. `_reconcileInjectFlags`
-27. `_avisoBiomicroscopiaOrfa`
-28. `_avisoFundoscopiaInterpretativa`
+24. `_guardTratamentoVazioComMedicacao`
+25. `_sombraMedicamentos`
+26. `_sombraItensMedicamentos`
+27. `_reconcileInjectFlags`
+28. `_avisoBiomicroscopiaOrfa`
+29. `_avisoFundoscopiaInterpretativa`
 
 ## Modo sombra dos itens de medicação (2026-11-11)
 
@@ -54,7 +55,22 @@ O passo 25 não corrige nada. O modelo devolve, ao lado do texto de `tratamento`
 - **A evidência vale contra a fala crua ou a restaurada.** O modelo lê o texto com os nomes de remédio já restaurados ("bimatoprosta"); o motor recebe a fala crua ("bimato à próstata").
 - **Compressa, higiene, shampoo e ômega 3 não são itens** nem entram na comparação; senão toda consulta de blefarite divergiria.
 
-Para que serve: medir, em consultas reais, quantas vezes o item estruturado discorda do texto. Só com essa medição se decide deixar o agente escrever o campo. Testes `[MED-SOMBRA-0]` a `[MED-SOMBRA-7]`.
+Para que serve: medir, em consultas reais, quantas vezes o item estruturado discorda do texto. Só com essa medição se decide deixar o agente escrever o campo. Testes `[MED-SOMBRA-0]` a `[MED-SOMBRA-8]`.
+
+## Texto padrão do tratamento (2026-11-12)
+
+Regra do médico: quando **nenhum medicamento foi mencionado na conduta**, o campo tratamento recebe "Sem prescrição de medicação". O painel escreve o texto; um ponto só decide (`tratamentoPadrao`, em `scripts/sidepanel-constants.js`), usado pela tela (primeira consulta e retorno) e pela injeção.
+
+O passo 24 (`_guardTratamentoVazioComMedicacao`) trata a exceção: o tratamento ficou vazio, mas a fala **prescreve ou mantém** uma medicação ("vou passar um colírio", "continua com o colírio da pressão", "pode usar um lubrificante"). Escrever "Sem prescrição" aí seria o oposto da fala. O campo fica vazio, o médico recebe um aviso para preencher, e a flag `suprimirTextoPadraoTratamento` (no nível de cima da resposta, fora de `dados`) impede que a injeção reponha o texto.
+
+- **Esta exceção é leitura nossa da regra.** A instrução dizia só "quando não houver medicamento, escreva…"; a exceção é a metade que falta, e deve ser conferida pelo médico.
+- **O que conta:** remédio do léxico ou palavra genérica (colírio, pomada, gota, remédio…) perto de um verbo de prescrição ou manutenção. **O que não conta:** histórico ("o senhor usa o Xalatan"), negação ("não vou passar colírio"), remédio negado ou suspenso, e colírio de exame (dilatar, anestesiar, corar). Os últimos são frequentes e voltam junto na fase 2 da dilatação.
+- **Erro para o lado seguro:** falso positivo = campo vazio com aviso (o médico escreve); falso negativo = o comportamento de antes. Nenhum inventa prescrição.
+- **Tratamento com só compressa, higiene ou ômega 3 não é vazio:** nada é acrescentado nem suprimido.
+- **Na dilatação (fase 1)** o campo continua nulo, como antes.
+- **O caminho perigoso era a injeção manual:** com o campo vazio na tela, `injectAll` leria o valor vazio e repunha o texto. O `_trat` agora consulta a flag.
+
+Testes `[TRAT-1]` a `[TRAT-9]`.
 
 ## Remédio em uso não nomeia colírio novo (2026-11-11)
 

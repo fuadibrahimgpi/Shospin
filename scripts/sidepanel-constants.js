@@ -275,6 +275,20 @@ const BIOMICROSCOPIA_BLEFARITE = 'AO: hiperemia e espessamento da margem palpebr
 const BLEFARITE_CONDUTA_PADRAO = 'Compressa morna por 2 min antes da higiene palpebral — 2x/dia\nHigiene palpebral com shampoo infantil (espuma na base dos cílios, ~20x, enxaguar) — 3x/dia';
 const BLEFARITE_TRATAMENTO_PADRAO = 'Tobramicina + dexametasona 3x/dia após higiene palpebral\nCarmelose sódica ou hialuronato de sódio em cada olho ao longo do dia\nÔmega 3 (EPA+DHA) 1000 mg — 1 comprimido no almoço e 1 no jantar por 30 dias';
 
+// Texto padrão do campo TRATAMENTO (regra do médico, 2026-11-12): quando nenhum medicamento foi
+// mencionado na conduta, o campo recebe "Sem prescrição de medicação". UM só lugar decide, e os três
+// que escrevem o texto (displayAudioResults, primeira consulta e retorno, e o `_trat` do injectAll)
+// passam por aqui — se um deles lesse só o valor do campo, o painel vazio voltaria a receber o texto
+// na hora de injetar. Devolve null quando o texto NÃO deve ser escrito:
+//   • dilatação (fase 1): o tratamento pertence ao pós-dilatação;
+//   • `suprimirTextoPadraoTratamento` (DecisionEngine): o tratamento ficou vazio, mas a fala
+//     prescreve ou mantém uma medicação — "Sem prescrição" seria o oposto da fala; o médico foi avisado.
+const TEXTO_SEM_PRESCRICAO = 'Sem prescrição de medicação';
+function tratamentoPadrao(data) {
+  if (!data || data.dilatacaoDetectada || data.suprimirTextoPadraoTratamento) return null;
+  return TEXTO_SEM_PRESCRICAO;
+}
+
 const LENTE_CATARATA = 'catarata';
 const LENTE_LIO = 'pseudofacia, LIO transparente e bem posicionada';
 const LENTE_OPACIDADE_CAPSULA = 'pseudofacia, opacidade de cápsula posterior';

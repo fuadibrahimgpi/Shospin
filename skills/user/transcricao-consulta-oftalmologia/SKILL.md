@@ -395,6 +395,11 @@ O mesmo vale para `medicacoes_em_uso`, que **nunca** pode ficar em branco:
 > Nunca tente classificar esses campos diretamente aqui.
 > Passe o trecho relevante da transcrição para aquela skill e use o output
 > dela para preencher os dois campos.
+>
+> **Texto padrão do tratamento:** quando nenhum medicamento foi mencionado na conduta, o campo
+> `tratamento` recebe `Sem prescrição de medicação` (escrito pelo painel quando o campo vem `null`;
+> regra do médico, 2026-11-12). Se a fala prescreve ou mantém medicação e o campo ficou vazio, o
+> texto NÃO é escrito: o médico é avisado para preencher. Detalhes na skill de conduta.
 
 ---
 
@@ -414,6 +419,11 @@ tratamento: "Compressa morna 2 min — 2x/dia"
 ---
 
 ## FLAGS DE INJEÇÃO AUTOMÁTICA
+
+> ⚠️ **O verificador não falha aberto (2026-11-10).** Depois do modelo, o `DecisionEngine` roda os guards
+> sobre a resposta. Se algum guard falhar, o motor não carregar ou um campo vier em formato inesperado,
+> a injeção automática é **suspensa**: o painel mostra os campos com um aviso e o médico decide
+> injetar pelo botão. Nunca se injeta a resposta crua do modelo como se estivesse verificada.
 
 ### `injectExamesNormais`
 `true` SOMENTE se o médico afirma que **TODOS** os exames estão normais, sem exceção.

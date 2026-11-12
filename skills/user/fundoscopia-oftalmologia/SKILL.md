@@ -62,6 +62,10 @@ Se o fundo é normal nos dois olhos → `dados.fundoscopia: null` (o sistema inj
 ### Achado REALMENTE bilateral
 - Linha única `AO:` — só quando o achado é dos dois olhos e assim descrito (retinopatia diabética/hipertensiva, papiledema, escavação aumentada simétrica).
 
+## Rede de segurança: alteração de nervo sem a consulta ter falado de nervo (Guard 5c)
+
+Se a fala **não** trata de nervo, papila, escavação, glaucoma, pressão ocular ou de colírio de glaucoma, o `DecisionEngine` (`_guardNervoOpticoSemEvidencia`) não deixa a resposta afirmar doença do nervo. No `diagnostico`, a linha do CID de nervo/glaucoma é removida inteira. Na **fundoscopia** sai **só o trecho** (entre vírgulas) que cita o nervo **e** afirma doença (alteração, suspeita, aumentada, assimetria, glaucoma, escavação 0,5 ou mais). A descrição normal permanece: "escavação simétrica e fisiológica" **não** é apagada (c12d2a8). "A pressão está boa" não sustenta H400. Quem escreve a descrição é o modelo; este guard só retira o que a consulta não sustenta.
+
 ## Consistência diagnóstico ↔ exame (regra crítica)
 
 Se o `diagnostico` registra um achado de **segmento posterior como ATUAL** (retinopatia, descolamento, DMRI, membrana epirretiniana, buraco macular, nevo de coroide, oclusão vascular, glaucoma/escavação aumentada), a fundoscopia não pode afirmar `retina aplicada, escavação simétrica e fisiológica` nos dois olhos. Vale a mesma lógica da biomicroscopia — ver `biomicroscopia-oftalmologia`.

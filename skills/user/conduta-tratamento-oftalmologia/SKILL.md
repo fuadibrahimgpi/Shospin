@@ -16,7 +16,8 @@ metadata:
 > `- tratamento:` dentro de `CAMPOS:`, mais a base de marcas, gerada do léxico por
 > `montarBaseDoPrompt()`).** No mesmo arquivo,
 > `_sanitizeCondutaTratamento` e `_garantirExamesPedidosNaConduta` corrigem a saída;
-> depois vêm os guards de `src/DecisionEngine.js` (2, 2b–2f, 3, 3b, 4, 5) e o léxico
+> depois vêm os guards de `src/DecisionEngine.js` (2, 2b–2g, 3, 3b, 4, 5, 5b, 5c, 6, 8, 9; a lista
+> completa e a ordem estão em `vault/agentes/decision-engine.md`) e o léxico
 > `config/medicamentos-lexico.js`. Editar esta skill NÃO muda a extensão. Regra
 > geral: `skills/user/README.md`.
 
@@ -139,6 +140,8 @@ Ao registrar um medicamento que o médico **prescreve**, use o nível mais espec
 ⚠️ **Nunca omita uma prescrição** porque o nome não foi dito — desça de nível, mas registre. A posologia (frequência, olho, duração) é preservada em qualquer nível quando mencionada.
 
 ⚠️ **Nome que o ASR destruiu NÃO é "nome não dito" nem autoriza classe.** Se o médico pronunciou algo que parece um remédio mas a transcrição saiu ilegível — uma palavra que não aponta nenhum nome da base (ex.: "um colírio zarolou 3 vezes ao dia por 5 dias") —, registre `Medicação ocular prescrita` + posologia. **"Trometolou"/"trometamol"/"trometamina" não é ilegível: é Cetorolaco** (decisão do médico, 2026-11-11) → `Cetorolaco 3x/dia por 5 dias`. É PROIBIDO deduzir a classe pelo contexto clínico (corpo estranho/"machucado" → "Colírio antibiótico"): a classe do nível 2 só vale quando a FALA a diz ("antibiótico", "para pressão", "de alergia"). Backstop determinístico: Guard 2d do DecisionEngine rebaixa "Colírio antibiótico" quando a fala não cita antibiótico.
+
+⚠️ **Texto padrão do tratamento (regra do médico, 2026-11-12).** Quando **nenhum medicamento foi mencionado na conduta**, o campo `tratamento` recebe `Sem prescrição de medicação` — nunca fica em branco. Quem escreve o texto é o painel (`tratamentoPadrao`, em `scripts/sidepanel-constants.js`), não o modelo: para `tratamento: null`, o painel escreve o texto. **Exceção:** se a fala **prescreve ou mantém** uma medicação ("vou passar um colírio", "continua com o colírio da pressão", "pode usar um lubrificante") e o `tratamento` ficou vazio, o texto padrão **não** é escrito — seria o oposto da fala —, o campo fica vazio e o médico recebe um aviso para preencher (guard `_guardTratamentoVazioComMedicacao`). Não contam como prescrição: histórico ("o senhor usa o Xalatan"), negação ("não vou passar colírio"), remédio suspenso e colírio de exame (dilatar, anestesiar, corar). Compressa, higiene ou ômega 3 sozinhos preenchem o campo: nada é acrescentado. Na dilatação (fase 1) o campo continua nulo. A exceção é leitura nossa da regra do médico e deve ser conferida por ele.
 
 ⚠️ **Colírio MANTIDO é tratamento.** "Mantido o timolol 2x/dia", "continua com o colírio da pressão" → linha em `tratamento` (`Timolol 2x/dia`), além de constar em `medicacoes_em_uso`. Não responda `tratamento: null` só porque o remédio já estava em uso — `null` vira "Sem prescrição de medicação" no prontuário, o que contradiz a fala.
 
@@ -341,6 +344,8 @@ Sinais: "não precisa de óculos", "grau não justifica óculos", "sem indicaç�
 
 ❌ ERRO CRÍTICO: "não precisa trocar o grau" ≠ "Sem prescrição de óculos".
 "Não precisa trocar o grau" = paciente já usa óculos e vai CONTINUAR com os mesmos → `Manutenção do óculos atual`.
+
+O guard `_guardManutencaoOculos` do `DecisionEngine` aplica a mesma leitura por código: além de "não precisa trocar o grau", reconhece "os óculos estão servindo/bons" e "não precisa trocar de óculos / os óculos" como manutenção (2026-11-10). O guard de presbiopia lê também "óculos para perto/leitura" dito na conduta.
 
 Quando forem prescritos óculos multifocais, progressivos ou bifocais, isso deve ficar explicitamente documentado na conduta como `Prescrição de óculos multifocais`, salvo se o médico usar outro tipo específico que deva ser preservado.
 
@@ -872,6 +877,13 @@ Antes de finalizar a conduta, confirme:
 - **O que muda no comportamento**: nenhuma lista deixou de reconhecer nada (comparação em 240 termos); todas passaram a reconhecer as marcas que faltavam (Xalatan, Vigamox, Zymar, Maxidex, Pred Fort, FML…). Na base do prompt, "Maleato de timolol" virou "Timolol" e os subgrupos de glaucoma viraram uma lista só.
 - **Regra para quem mexer**: marca nova, princípio novo ou variante de voz entra **só** no léxico. Lista de remédios escrita em outro arquivo é barrada pelo teste `[LEXICO-UNICO-1]`.
 - **Testes**: `[LEXICO-UNICO-1..7]`.
+
+### 2026-11-12 — Texto padrão do tratamento só quando nenhum medicamento foi mencionado
+
+- **Regra do médico**: quando não houver nenhum medicamento mencionado na conduta, escrever "Sem prescrição de medicação". Já era o comportamento do painel; faltava a exceção.
+- **Correção aplicada**: um só ponto decide o texto (`tratamentoPadrao`), usado pela tela e pela injeção; o guard `_guardTratamentoVazioComMedicacao` suprime o texto quando a fala prescreve ou mantém medicação e o tratamento ficou vazio, avisando o médico. A injeção manual também respeita a flag (`suprimirTextoPadraoTratamento`): sem isso, clicar em Injetar com o campo vazio repunha o texto.
+- **Medição em andamento (modo sombra)**: o modelo também devolve `medicacoes_itens`, uma lista estruturada da mesma medicação (nome, nível, novo/mantido/suspenso, posologia, trecho da fala). O `DecisionEngine` só a compara com o `tratamento` e registra no console; **não escreve no prontuário**. A saída desta skill (`tratamento_sugerido`) não muda.
+- **Testes**: `[TRAT-1..9]`, `[MED-SOMBRA-0..8]`.
 
 
 ---

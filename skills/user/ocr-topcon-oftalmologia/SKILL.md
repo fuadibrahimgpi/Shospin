@@ -329,6 +329,8 @@ Depois do JSON, apresente ao médico o valor final de cada olho (`esf`, `cil`, `
 
 Não existe um sinalizador único de "bloquear tudo". Um olho inseguro vira `null` e ganha um aviso como "Refração do OD NÃO injetada — <motivo>. O outro olho foi preservado." Se a refração inteira cair, tonometria e paquimetria da mesma captura continuam valendo, com o aviso "Refração NÃO injetada — <motivo>". Só quando nada se aproveita a captura inteira falha.
 
+**Resgate de olho reprovado só pelo S.E. (`_rescueEyesFailedBySE`, 2026-11-09).** Se a 1ª leitura reprova um olho **apenas** porque a linha `S.E.` não fecha com a conta `S + C/2`, e a 2ª leitura independente confirma exatamente S, C e A da 1ª e fecha a conta (ou o S.E. da 1ª errou só o sinal e a 2ª leitura e a leitura ampliada confirmam S, C e A), o olho é **resgatado** em vez de descartado. Caso real: pós-dilatação, a 1ª leitura leu OD +0.75 −2.00 x170 em todas as medições e na média, mas `S.E. +0.25` onde o ticket diz `−0.25`. O resgate nunca inventa valor: sem a confirmação da 2ª leitura o olho continua `null`.
+
 Valores extremos clinicamente possíveis (ESF de −20.00 a +20.00, CIL até −8.00) não são corrigidos: se estiverem claramente impressos, registre e acrescente um aviso para o médico conferir.
 
 ## Campo `cid_refracao` — computado pelo código, não pela IA

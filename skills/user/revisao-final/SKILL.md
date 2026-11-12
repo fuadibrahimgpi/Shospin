@@ -70,6 +70,8 @@ Perguntas que valem para toda skill:
 - **Consistência interna**: diagnóstico × exame × conduta × tratamento não se contradizem.
 - **Campo certo**: cada informação está no campo que a skill manda (ex.: conduta × tratamento, HDA × antecedentes).
 - **Formato**: o formato de saída da skill foi seguido à risca (campos, ordem, códigos, sem texto extra).
+- **Tratamento vazio**: sem nenhum medicamento mencionado, o campo é `Sem prescrição de medicação`; se a fala prescreve ou mantém medicação e o campo está vazio, **não** escrever o texto — avisar o médico (regra de 2026-11-12, skill de conduta).
+- **Verificação automática**: se a verificação do `DecisionEngine` não rodou por inteiro (injeção suspensa), o passo final automático **não** é liberado; o médico decide pelo botão.
 
 ## Passo 3 — Decidir
 

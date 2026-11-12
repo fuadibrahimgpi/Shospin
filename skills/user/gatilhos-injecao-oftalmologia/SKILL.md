@@ -60,6 +60,11 @@ Todo texto é **normalizado antes da comparação**:
 | `STOP_FORCAR_COMMANDS` | Parada forçada | Ordem explícita ("encerrar a consulta"); ignora o gate de captura | ✅ Sim |
 | `EXAME_EM_ANDAMENTO_COMMANDS` | Guard pré-análise | Instrução de exame nos últimos 300 caracteres ("olha para cima") adia a análise e guarda a transcrição como pausa armada do mesmo paciente (`detectaExameEmAndamento`, `sidepanel-audio.js`) | ❌ Não |
 | `DILATACAO_COMBOS` | Co-ocorrência | Pares de palavras que juntos indicam dilatação (ex.: tropicamida + dilatar) | ✅ Sim |
+| `CONDUTA_FALA_MARKERS` / `CONDUTA_FALA_REGEXES` | Gate de captura | Decisão clínica falada (retorno, encaminhamento, exame, óculos, cirurgia, alta); conta como conduta ditada | — |
+| `CONDUTA_REFRATIVA_MARKERS` / `CONDUTA_REFRATIVA_REGEXES` | Gate de captura | Conduta refrativa (óculos, ótica): conta como conduta **e** satisfaz o tratamento, porque a receita resolve a consulta | — |
+| `CONDUTA_PROCEDIMENTO_MARKERS` | Gate de captura | Procedimento em consultório ("vou resolver isso aqui"): conta como conduta **e** satisfaz o tratamento | — |
+| `TRATAMENTO_FALA_MARKERS` / `TRATAMENTO_FALA_REGEXES` | Gate de captura | Prescrição ou posologia falada; negativa explícita ("não precisa de tratamento") também conta como captada | — |
+| `EXAMES_CATALOGO` | Rede da conduta | Exames pedidos que a fala NOMEIA (OCT, campo visual, retinografia, mapeamento de retina…); um exame ditado e ausente da conduta é acrescentado por `_garantirExamesPedidosNaConduta`. Lê a fala, nunca o diagnóstico | — |
 
 ---
 
@@ -91,6 +96,10 @@ A ordem de verificação é crítica para evitar conflitos:
 > Blefarite seta `examesNormaisInjetados = true`, bloqueando o gatilho de normais.
 
 ---
+
+## INJEÇÃO AUTOMÁTICA SUSPENSA (2026-11-10)
+
+Os gatilhos acima decidem **quando** injetar; o `DecisionEngine` decide **se a análise pode ser injetada sozinha**. Se um guard falhar, o motor não carregar ou um campo vier em formato inesperado, a injeção automática do fim da consulta é suspensa: o painel mostra os campos com um aviso e a injeção passa a depender do botão. Isso vale também para o "Não era dilatação" (reprocessamento). Um gatilho que dispara não ultrapassa essa suspensão.
 
 ## TEXTOS INJETADOS
 

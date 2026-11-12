@@ -6215,8 +6215,12 @@ for (const [label, naSkill, noPrompt] of SKILL_PROMPT_ANCHORS_OCR) {
 // entre aspas num bloco "### NOME_DA_LISTA" existe de fato na lista do código
 // (linhas "REMOVIDA(S)" e suas continuações são o registro do que saiu e ficam de fora).
 const gatilhosSkillSource = readSrcNormalized('skills', 'user', 'gatilhos-injecao-oftalmologia', 'SKILL.md');
+// Todas as listas do config: gatilhos de voz (_COMMANDS, _COMBOS) e, desde 2026-11-12, também os
+// marcadores do gate de captura (_MARKERS, _REGEXES) e o catálogo de exames. Até então a skill não
+// citava 8 delas, e o teste não via porque só olhava _COMMANDS/_COMBOS.
+const _SUFIXO_LISTA_GATILHO = /_(COMMANDS|COMBOS|MARKERS|REGEXES)$|^EXAMES_CATALOGO$/;
 const _listasGatilho = Object.keys(ClinicalTriggers)
-  .filter(k => /_(COMMANDS|COMBOS)$/.test(k) && Array.isArray(ClinicalTriggers[k]));
+  .filter(k => _SUFIXO_LISTA_GATILHO.test(k) && Array.isArray(ClinicalTriggers[k]));
 
 test('[SKILL-SYNC-GATILHOS] toda lista de gatilho exportada é citada na skill pelo nome', () => {
   const ausentes = _listasGatilho.filter(k => !gatilhosSkillSource.includes(k));
@@ -6224,9 +6228,84 @@ test('[SKILL-SYNC-GATILHOS] toda lista de gatilho exportada é citada na skill p
 });
 
 test('[SKILL-SYNC-GATILHOS] toda lista citada na skill existe em clinical-triggers.js', () => {
-  const citadas = [...new Set(gatilhosSkillSource.match(/\b[A-Z][A-Z_]*_(?:COMMANDS|COMBOS)\b/g) || [])];
+  const citadas = [...new Set(gatilhosSkillSource.match(/\b[A-Z][A-Z_]*_(?:COMMANDS|COMBOS|MARKERS|REGEXES)\b|\bEXAMES_CATALOGO\b/g) || [])];
   const inexistentes = citadas.filter(k => !Array.isArray(ClinicalTriggers[k]));
   expect(inexistentes).toEqual([]);
+});
+
+// ──────────────────────────────────────────────────────────────────────────────
+// 2026-11-12 — REVISÃO DE TODAS AS SKILLS: o que a skill cita tem que existir no código.
+// A auditoria achou as skills defasadas em regras (guard de nervo, verificador que segura a injeção,
+// resgate de S.E., texto padrão do tratamento); as REFERÊNCIAS, ao contrário, estavam todas de pé.
+// Este teste mantém assim: arquivo, guard, função e teste citados nas skills têm que existir.
+// ──────────────────────────────────────────────────────────────────────────────
+test('[SKILL-SYNC-REFS] tudo o que as skills citam existe: arquivos, guards, funções e testes', () => {
+  const fsMod = require('fs');
+  const pathMod = require('path');
+  const raiz = pathMod.join(__dirname, '..');
+  const lerPasta = (dir, ext) => {
+    let t = '';
+    (function andar(d) {
+      for (const e of fsMod.readdirSync(d, { withFileTypes: true })) {
+        const p = pathMod.join(d, e.name);
+        if (e.isDirectory()) andar(p);
+        else if (e.name.endsWith(ext)) t += '\n' + fsMod.readFileSync(p, 'utf8');
+      }
+    })(pathMod.join(raiz, dir));
+    return t;
+  };
+  const codigo = ['src', 'scripts', 'config'].map(d => lerPasta(d, '.js')).join('\n');
+  const suiteTestes = lerPasta('utils', '.js');
+  const skillsDir = pathMod.join(raiz, 'skills', 'user');
+  const skills = fsMod.readdirSync(skillsDir, { withFileTypes: true }).filter(e => e.isDirectory()).map(e => e.name);
+  expect(skills.length >= 10).toBe(true);
+
+  const faltando = [];
+  for (const s of skills) {
+    const txt = fsMod.readFileSync(pathMod.join(skillsDir, s, 'SKILL.md'), 'utf8');
+    for (const c of new Set([...txt.matchAll(/`((?:src|config|scripts|utils|vault|skills)\/[A-Za-z0-9_./-]*\.(?:js|md|json|html|css))`/g)].map(m => m[1]))) {
+      if (!fsMod.existsSync(pathMod.join(raiz, c))) faltando.push(`${s}: arquivo ${c}`);
+    }
+    for (const id of new Set([...txt.matchAll(/`\[([A-Z][A-Z0-9]+(?:-[A-Za-z0-9]+)*)\]`/g)].map(m => m[1]))) {
+      if (!suiteTestes.includes(`'[${id}`)) faltando.push(`${s}: teste [${id}]`);
+    }
+    for (const id of new Set([...txt.matchAll(/`(_guard[A-Za-z0-9]+|_aviso[A-Za-z0-9]+|_sombra[A-Za-z0-9]+)`/g)].map(m => m[1]))) {
+      if (!codigo.includes(id)) faltando.push(`${s}: guard ${id}`);
+    }
+    for (const id of new Set([...txt.matchAll(/`(_?[a-z][A-Za-z0-9]{5,})\(\)`/g)].map(m => m[1]))) {
+      if (!codigo.includes(id)) faltando.push(`${s}: função ${id}()`);
+    }
+  }
+  expect(faltando).toEqual([]);
+});
+
+test('[SKILL-SYNC-REFS] o detector enxerga uma referência morta (regressão do próprio teste)', () => {
+  const codigo = 'function _guardExiste() {}';
+  const acha = (txt) => [...txt.matchAll(/`(_guard[A-Za-z0-9]+)`/g)].map(m => m[1]).filter(id => !codigo.includes(id));
+  expect(acha('veja `_guardExiste` e `_guardApagado`')).toEqual(['_guardApagado']);
+});
+
+test('[SKILL-SYNC] regras de 2026-11-10/12 estão na skill E no código (texto padrão, guard 5c, verificador, resgate de S.E.)', () => {
+  const skill = (nome) => readSrcNormalized('skills', 'user', nome, 'SKILL.md');
+  const conduta = skill('conduta-tratamento-oftalmologia');
+  const de = readSrcNormalized('src', 'DecisionEngine.js');
+  // texto padrão do tratamento
+  expect(conduta).toContain('`Sem prescrição de medicação`');
+  expect(conduta).toContain('_guardTratamentoVazioComMedicacao');
+  expect(de).toContain('function _guardTratamentoVazioComMedicacao');
+  expect(readSrcNormalized('scripts', 'sidepanel-constants.js')).toContain("const TEXTO_SEM_PRESCRICAO = 'Sem prescrição de medicação'");
+  expect(skill('transcricao-consulta-oftalmologia')).toContain('Sem prescrição de medicação');
+  expect(skill('revisao-final')).toContain('Sem prescrição de medicação');
+  // guard de nervo (fundoscopia)
+  expect(skill('fundoscopia-oftalmologia')).toContain('_guardNervoOpticoSemEvidencia');
+  expect(de).toContain('function _guardNervoOpticoSemEvidencia');
+  // verificador que segura a injeção (transcrição, gatilhos, revisão final)
+  for (const s of ['transcricao-consulta-oftalmologia', 'gatilhos-injecao-oftalmologia']) expect(skill(s)).toContain('suspensa');
+  expect(skill('revisao-final')).toContain('injeção suspensa');
+  expect(de).toContain('segurarInjecao');
+  // resgate de olho reprovado só pelo S.E. (OCR)
+  expect(skill('ocr-topcon-oftalmologia')).toContain('_rescueEyesFailedBySE');
+  expect(readSrcNormalized('src', 'gemini-exam-agent.js')).toContain('_rescueEyesFailedBySE(processed, verify');
 });
 
 test('[SKILL-SYNC-GATILHOS] todo exemplo da skill existe na lista do código', () => {

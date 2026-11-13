@@ -48,11 +48,19 @@ function hideResults() {
 // INJEÇÃO PRINCIPAL — ORQUESTRAÇÃO
 // ============================================================================
 
+// Início de cadeia: zera os acumuladores por cadeia — CIDs recusados (aviso de
+// fim de cadeia) e CIDs já reagendados (limite de uma retentativa por termo).
+function _startCidChain() {
+  handleSearchCid._failed = [];
+  handleSearchCid._requeued = new Set();
+}
+
+// Início de cadeia manual (não é recursão).
 if (btnSearchCid) {
-  btnSearchCid.addEventListener('click', () => handleSearchCid(diagnosticoField));
+  btnSearchCid.addEventListener('click', () => { _startCidChain(); handleSearchCid(diagnosticoField); });
 }
 if (btnSearchCidRetorno) {
-  btnSearchCidRetorno.addEventListener('click', () => handleSearchCid(diagnosticoRetornoField));
+  btnSearchCidRetorno.addEventListener('click', () => { _startCidChain(); handleSearchCid(diagnosticoRetornoField); });
 }
 
 // Remove CIDs duplicados pelo código (ex: H010 = H01.0) antes de iniciar a cadeia.
@@ -77,13 +85,18 @@ function _dropUnspecifiedRefraction(fieldValue) {
   });
   const hasSpecific = codes.some(c => c && /^H52[0-4]$/.test(c));
   if (!hasSpecific) return fieldValue;
-  return lines.filter((_, i) => codes[i] !== 'H529').join('\n');
+  // H527 = "transtorno da refração, não especificado" (o código real; H529 não
+  // existe na CID-10 nem no cadastro do SHOSP — verificado em 2026-07-30). H529
+  // continua sendo removido porque saída antiga da IA pode trazê-lo.
+  return lines.filter((_, i) => codes[i] !== 'H527' && codes[i] !== 'H529').join('\n');
 }
 
 const _CLINICAL_TERM_TO_CID = [
   [/presbiop/i,      'H524'],
   [/blefarite/i,     'H010'],
-  [/pterigio/i,      'H111'],
+  // H11.0 = pterígio. H11.1 (degenerações e depósitos conjuntivais) é outro sítio e
+  // era o que estava aqui — a ficha recebia "degeneração da conjuntiva" no lugar.
+  [/pterigio/i,      'H110'],
   [/catarata/i,      'H260'],  // fallback genérico; preferência para código específico se vier com dash
   [/glaucoma/i,      'H409'],
   // H52.x — erros refrativos: gerados pelo OCR (_inferCidRefracao) e frequentemente
@@ -103,16 +116,29 @@ function _cidKeyFromText(text) {
   return null;
 }
 
+/**
+ * Chave canônica de um termo de CID — base ÚNICA de deduplicação do módulo.
+ * "H522 - Astigmatismo OD", "H52.2 - Astigmatismo", "H522" e "Astigmatismo"
+ * colapsam todos em "H522" (a IA e o OCR escrevem o mesmo código em formatos
+ * diferentes: com ponto, sem ponto, com e sem lateralidade).
+ */
+function _cidKey(term) {
+  const t = (term || '').trim();
+  if (!t) return '';
+  const m = t.match(CID_CODE_PATTERN);
+  if (m) return m[1].replace(/\./g, '').toUpperCase();
+  const bare = t.match(/^([A-Za-z]\d+(?:\.\d+)?)$/);
+  if (bare) return bare[1].replace(/\./g, '').toUpperCase();
+  return _cidKeyFromText(t) || t.toUpperCase();
+}
+
 function _deduplicateCidField(field) {
   if (!field || !field.value.trim()) return;
   const terms = field.value.split(/\n|,|;/).map(t => t.trim()).filter(Boolean);
   if (terms.length <= 1) return;
   const seen = new Set();
   const unique = terms.filter(t => {
-    const m = t.match(CID_CODE_PATTERN);
-    const key = m
-      ? m[1].replace(/\./g, '').toUpperCase()
-      : (_cidKeyFromText(t) || t.toUpperCase());
+    const key = _cidKey(t);
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
@@ -123,13 +149,52 @@ function _deduplicateCidField(field) {
   }
 }
 
-async function handleSearchCid(field) {
+/**
+ * Espelha `_cidsLancadosNaSessao` no content script (fronteira de paciente).
+ *
+ * O content script mantém o próprio Set de dedup, mas a fronteira dele era
+ * `location.href` — e o SHOSP abre toda ficha na mesma URL, então o Set nunca
+ * zerava e passou a suprimir CIDs legítimos do paciente seguinte (log
+ * 2026-07-31). Aqui o painel assume a autoridade: `_cidsLancadosNaSessao` já
+ * tem a semântica certa (zera em resetSession() a cada gravação nova; semeado
+ * com a fase 1 quando há dilatação armada), então basta empurrá-lo antes de
+ * cada cadeia. Melhor esforço — falha aqui nunca aborta a busca de CID.
+ *
+ * Vai para TODAS as abas do SHOSP, não só a escolhida para esta cadeia: o Set
+ * vive por aba, e uma aba não-sincronizada guardaria o Set do paciente anterior
+ * indefinidamente — se `selectShospTab` a escolhesse numa cadeia seguinte, o bug
+ * original voltaria inteiro. A mensagem é idempotente, então mandar para todas
+ * não custa nada.
+ */
+async function _syncCidsLancadosToTabs(tabs) {
+  const codes = [..._cidsLancadosNaSessao];
+  const acks = await Promise.all(
+    tabs.map(t => sendToTab(t.id, { action: 'setInjectedCids', codes }, { silent: true }))
+  );
+  const ok = acks.filter(a => a?.success).length;
+  if (ok > 0) {
+    console.log(`[CID] Fronteira de paciente sincronizada em ${ok}/${tabs.length} aba(s) do SHOSP:`, codes);
+  }
+  if (ok < tabs.length) {
+    console.warn(`[CID] ${tabs.length - ok} aba(s) do SHOSP não responderam à sincronização da fronteira ` +
+      '— dê F5 nelas. Sem isso, um CID legítimo repetido do paciente anterior pode ser ignorado em silêncio.');
+  }
+}
+
+/**
+ * @param {HTMLElement} field
+ * @param {{ _continuation?: boolean }} [opts] `_continuation` marca as chamadas
+ *        recursivas (termo seguinte da MESMA cadeia): elas não re-sincronizam a
+ *        fronteira de paciente, senão apagariam os códigos que o content script
+ *        acabou de registrar nesta mesma cadeia.
+ */
+async function handleSearchCid(field, opts = {}) {
   // Guard: previne chamadas paralelas (câmera + áudio, botão duplo, etc.)
   // Reagenda em vez de descartar silenciosamente — evita perda de CIDs do áudio
   // quando a cadeia do OCR ainda está em andamento.
   if (handleSearchCid._running) {
     console.warn('[CID] Já em execução — reagendando para 2s');
-    setTimeout(() => handleSearchCid(field), 2000);
+    setTimeout(() => handleSearchCid(field, opts), 2000);
     return;
   }
   handleSearchCid._running = true;
@@ -156,10 +221,15 @@ async function handleSearchCid(field) {
   const codeMatch = rawTerm.match(CID_CODE_PATTERN);
   let termToSearch = codeMatch ? codeMatch[1] : rawTerm;
 
-  // Normalizar códigos de 4 caracteres sem ponto (ex: H400 -> H40.0) para compatibilidade com o autocomplete do SHOSP
-  if (/^[A-Z]\d{3}$/.test(termToSearch)) {
-    termToSearch = termToSearch.slice(0, 3) + '.' + termToSearch.slice(3);
-  }
+  // O SHOSP grava os códigos SEM ponto — as linhas do resultado vêm como
+  // "H522ASTIGMATISMO.", "H010BLEFARITE." (log 2026-07-30). A versão anterior
+  // fazia o INVERSO: convertia "H400" em "H40.0" antes de buscar, "para
+  // compatibilidade com o autocomplete". Só não quebrava porque o content script
+  // tenta a variante sem ponto primeiro — ou seja, o ponto era adicionado aqui e
+  // removido lá. Normalizar na origem alinha o formato à plataforma e faz o log
+  // dizer a verdade sobre o que foi buscado ([SearchCid] termo="H522").
+  // Cobre também o caminho do OCR, que emite o código com ponto.
+  termToSearch = termToSearch.replace(/\./g, '');
 
   // Feedback visual imediato
   successMessage.classList.remove('hidden');
@@ -179,6 +249,9 @@ async function handleSearchCid(field) {
     // Seleciona a aba com o prontuário aberto (não tabs[0] cega) para não lançar o
     // CID na ficha errada quando há 2+ abas SHOSP.
     const cidTab = await selectShospTab(tabs, { retries: 1, reinject: false }) || tabs[0];
+
+    // Início de cadeia: declarar ao content script de quem é esta ficha.
+    if (!opts._continuation) await _syncCidsLancadosToTabs(tabs);
 
     console.log(`[SearchCid] termo="${termToSearch}" → tab=${cidTab.id}`);
     const resp = await sendToTab(cidTab.id, { action: 'searchCid', term: termToSearch });
@@ -202,20 +275,40 @@ async function handleSearchCid(field) {
     }
 
     if (resp && resp.success) {
+      // Memória de lançamento: o campo é consumido termo a termo logo abaixo e
+      // acaba vazio — sem este registro, a passada seguinte (OCR) perde a base de
+      // deduplicação e relança o mesmo CID no SHOSP.
+      const _key = _cidKey(rawTerm);
+      if (_key) _cidsLancadosNaSessao.add(_key);
       // Atualiza o campo com os restantes (remove o termo já buscado)
       field.value = terms.slice(1).join('\n');
-      // Feedback de sucesso
+      // Feedback de sucesso.
+      // `skipped` = o content script NÃO clicou (código já estava na ficha, ou
+      // H52.9 redundante). Dizer "C.I.D. lançado" aí é mentira — foi assim que
+      // a supressão cross-paciente do log 2026-07-31 passou despercebida.
       successMessage.classList.remove('hidden');
-      successMessage.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg><span>C.I.D. lançado: ${termToSearch}</span>`;
-      successMessage.style.background = '#dcfce7';
-      successMessage.style.color = '#166534';
-      setTimeout(() => successMessage.classList.add('hidden'), 3000);
+      if (resp.skipped) {
+        const _redundante = resp.reason === 'redundant';
+        console.log(_redundante
+          ? `[SearchCid] "${termToSearch}" redundante (CID refrativo específico já lançado) — não relançado`
+          : `[SearchCid] "${termToSearch}" já estava na ficha — não relançado`);
+        successMessage.innerHTML = _redundante
+          ? `<span>C.I.D. redundante, não lançado: ${termToSearch}</span>`
+          : `<span>C.I.D. já estava na ficha: ${termToSearch}</span>`;
+        successMessage.style.background = '#eff6ff';
+        successMessage.style.color = '#1e40af';
+      } else {
+        successMessage.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg><span>C.I.D. lançado: ${termToSearch}</span>`;
+        successMessage.style.background = '#dcfce7';
+        successMessage.style.color = '#166534';
+      }
+      _armHideSuccess();
       // Auto-encadear próximo termo após delay.
       // O lock é mantido logicamente: liberamos e re-adquirimos dentro do callback
       // do setTimeout (JS é single-threaded — nenhum outro código corre entre as duas linhas).
       const stillHasCid = field.value.trim();
       if (stillHasCid) {
-        setTimeout(() => { handleSearchCid._running = false; handleSearchCid(field); }, 1800);
+        setTimeout(() => { handleSearchCid._running = false; handleSearchCid(field, { _continuation: true }); }, 1800);
         return; // Não liberar o lock antes do próximo passo
       } else {
         handleSearchCid._running = false;
@@ -224,19 +317,51 @@ async function handleSearchCid(field) {
         if (!anyPending) {
           audioFieldsContainer.classList.add('hidden');
         }
+        _surfaceFailedCids(); // fim de cadeia — mostra CIDs recusados, se houver
       }
     } else {
       // S2: pular termo com falha e continuar a cadeia (não interromper por um CID inválido)
       const errMsg = resp?.error || 'Aba C.I.D. não encontrada na página';
       console.warn(`[CID] Falha ao buscar "${rawTerm}": ${errMsg}`);
-      showError(`CID não encontrado: ${rawTerm}`);
+
+      // Falha AMBIENTAL (a seção C.I.D. ainda não estava visível) ≠ "o SHOSP não
+      // tem o código". Reagendar UMA vez no FIM da cadeia é o que o log de
+      // 2026-08-04 mostra que basta: naquele dia o H010 falhou assim e o H524,
+      // buscado 1,8s depois na mesma página, passou — a seção tinha acabado de
+      // montar. Sem o reagendamento, um CID legítimo (a presbiopia daquela
+      // consulta) simplesmente não entra no prontuário.
+      // Vai para o FIM, não para a frente: o próximo termo dá o tempo de
+      // assentamento de graça. `_requeued` limita a uma tentativa por termo, para
+      // que uma seção genuinamente inacessível não vire laço infinito.
+      const _rekey = _cidKey(rawTerm) || rawTerm;
+      const _requeued = handleSearchCid._requeued || (handleSearchCid._requeued = new Set());
+      if (resp?.code === 'CID_SECTION_HIDDEN' && !_requeued.has(_rekey)) {
+        _requeued.add(_rekey);
+        field.value = [...terms.slice(1), rawTerm].join('\n');
+        console.warn(`[CID] "${rawTerm}" reagendado para o fim da cadeia — seção C.I.D. ainda montando`);
+        successMessage.classList.remove('hidden');
+        successMessage.innerHTML = `<span>⏳ Aba C.I.D. abrindo — ${rawTerm} será tentado de novo</span>`;
+        successMessage.style.background = '#fef3c7';
+        successMessage.style.color = '#92400e';
+        setTimeout(() => { handleSearchCid._running = false; handleSearchCid(field, { _continuation: true }); }, 1800);
+        return;
+      }
+
+      // Acumula para o aviso persistente de fim de cadeia (o toast some em 3s).
+      (handleSearchCid._failed || (handleSearchCid._failed = [])).push(rawTerm);
+      // Segunda falha por seção oculta não é "código inexistente" — dizer isso ao
+      // médico o mandaria procurar o CID errado.
+      showError(resp?.code === 'CID_SECTION_HIDDEN'
+        ? `Aba C.I.D. não abriu — lance ${rawTerm} manualmente`
+        : `CID não encontrado: ${rawTerm}`);
       field.value = terms.slice(1).join('\n');
       const stillHasCid = field.value.trim();
       if (stillHasCid) {
-        setTimeout(() => { handleSearchCid._running = false; handleSearchCid(field); }, 1800);
+        setTimeout(() => { handleSearchCid._running = false; handleSearchCid(field, { _continuation: true }); }, 1800);
         return;
       } else {
         handleSearchCid._running = false;
+        _surfaceFailedCids(); // fim de cadeia — mostra CIDs recusados, se houver
       }
     }
   } catch (err) {
@@ -246,6 +371,8 @@ async function handleSearchCid(field) {
   }
 }
 handleSearchCid._running = false;
+handleSearchCid._failed = []; // CIDs recusados pelo SHOSP na cadeia atual
+handleSearchCid._requeued = new Set(); // CIDs já reagendados nesta cadeia (1 tentativa cada)
 
 function _setRunningState(running) {
   injectAll._running = running;
@@ -302,9 +429,15 @@ async function selectShospTab(tabs, { retries = 0, reinject = false } = {}) {
   const probeAll = async () => {
     let responsiveTab = null;
     const prontuarioTabs = [];
-    for (const t of tabs) {
-      const resp = await sendToTab(t.id, { action: 'checkPage' }, { silent: true });
-      if (resp === 'CONTEXT_INVALIDATED') throw new Error('Extension context invalidated');
+    // Sondas em paralelo (cada aba é independente); a escolha abaixo percorre os
+    // resultados na ORDEM ORIGINAL das abas, então o desempate não muda.
+    const resps = await Promise.all(
+      tabs.map(t => sendToTab(t.id, { action: 'checkPage' }, { silent: true }))
+    );
+    if (resps.includes('CONTEXT_INVALIDATED')) throw new Error('Extension context invalidated');
+    for (let i = 0; i < tabs.length; i++) {
+      const t = tabs[i];
+      const resp = resps[i];
       if (resp?.isShospPage) {
         if (!responsiveTab) responsiveTab = t;
         if (resp.prontuarioOpen) prontuarioTabs.push(t);
@@ -420,6 +553,19 @@ async function injectAll(force = false) {
 
   if (!temAudio && !temCamera) {
     _setRunningState(false);
+    // "Nada capturado ainda" ≠ "já injetado". Conflatar os dois fazia o botão
+    // manual acusar "Dados já injetados" quando nada havia sido injetado: a
+    // análise do Gemini estava em voo (audioData ainda null) e o ramo estática
+    // acabara de zerar cameraData de propósito. Log 2026-07-29, 20:07 e 20:10.
+    if (!audioData && !cameraData) {
+      const motivo = isRecording
+        ? 'Gravação em andamento — pare a gravação para injetar.'
+        : _analiseEmAndamento
+          ? 'Análise em andamento — aguarde o resultado para injetar.'
+          : 'Nada capturado ainda — grave a consulta ou fotografe o ticket.';
+      showError(motivo);
+      throw new Error('Nada para injetar');
+    }
     showError('Dados já injetados! Limpe para injetar novamente.');
     throw new Error('Dados já injetados');
   }
@@ -434,6 +580,9 @@ async function injectAll(force = false) {
   // selectShospTab prefere a aba com o PRONTUÁRIO ABERTO (não escolhe cega tabs[0]),
   // espera o background concluir a re-injeção pós-nav SPA (retries) e re-injeta o
   // content script nas candidatas órfãs como último recurso (reinject).
+  // A leitura do slot de dilatação (storage local) não depende da aba escolhida:
+  // roda junto com a sondagem das abas em vez de depois dela.
+  const _phase1Promise = DilatacaoPausas.obterRetomada().catch(() => null);
   let tab;
   try {
     tab = await selectShospTab(tabs, { retries: 4, reinject: true });
@@ -450,17 +599,34 @@ async function injectAll(force = false) {
   }
   console.log('[InjectAll] Aba de injeção selecionada:', tab.id, tab.url?.slice(0, 60));
 
-  // Carregar dados persistidos da fase 1 de dilatação (se existirem e não expiraram em 6h)
-  let _phase1Data = null;
-  try {
-    _phase1Data = await new Promise(resolve =>
-      chrome.storage.local.get('_shospDilatacaoPhase1', d => resolve(d._shospDilatacaoPhase1 || null))
-    );
-    if (_phase1Data && Date.now() - (_phase1Data.ts || 0) > 6 * 60 * 60 * 1000) {
-      _phase1Data = null;
-      chrome.storage.local.remove('_shospDilatacaoPhase1');
-    }
-  } catch (_e) { _phase1Data = null; }
+  // Carregar dados persistidos da fase 1 SOMENTE do slot ARMADO da fila de
+  // pausas (retomar=true — o médico confirmou o retorno DESTE paciente). Sem
+  // slot armado, nenhum campo de fase 1 é mesclado na injeção atual — evita
+  // levar a entrevista de um paciente ao prontuário de outro atendido durante
+  // a espera (caso 2026-07-17). Slots expirados são podados na leitura; os
+  // não-armados são apenas ignorados (seguem aguardando na sala de espera).
+  const _phase1Data = await _phase1Promise;
+
+  // Retomada armada = MESMO paciente voltando. `_cidsLancadosNaSessao` foi
+  // zerado por resetSession() ao iniciar a gravação da fase 2, então sem esta
+  // semeadura a fase 2 relançaria no SHOSP os CIDs que a fase 1 já pôs na ficha
+  // (H520 duplicado no caso da dilatação de 2026-07-31). Antes isso não
+  // acontecia só porque o Set do content script nunca zerava — a mesma falha
+  // que suprimia CIDs entre pacientes diferentes.
+  if (Array.isArray(_phase1Data?.cids) && _phase1Data.cids.length) {
+    const _antes = _cidsLancadosNaSessao.size;
+    _phase1Data.cids.forEach(c => { if (c) _cidsLancadosNaSessao.add(c); });
+    console.log('[InjectAll] CIDs da fase 1 restaurados para a dedup da fase 2:',
+      _phase1Data.cids, `(${_antes} → ${_cidsLancadosNaSessao.size})`);
+  }
+
+  // Sanidade anti-contaminação: se a pausa armada nasceu em OUTRO prontuário
+  // (URL diferente da aba de injeção), avisar — o médico pode ter armado a
+  // retomada errada ou trocado de paciente sem desarmar.
+  if (_phase1Data?.tabUrl && tab?.url && _phase1Data.tabUrl !== tab.url) {
+    console.warn('[InjectAll] ⚠️ Prontuário aberto difere do prontuário da pausa armada:',
+      { pausa: _phase1Data.tabUrl.slice(0, 80), atual: tab.url.slice(0, 80) });
+  }
 
   // 5. Preparar dados combinados
   const combinedData = { audio: null, exames: null, examesNormais: null };
@@ -472,6 +638,25 @@ async function injectAll(force = false) {
   const transcricaoNorm = normalizeText(recognizedText || '');
   const mencionouFundoNaFala = transcricaoNorm.includes('fundo') || transcricaoNorm.includes('fundoscop');
 
+  // Reconciliação de PSEUDOFACIA a partir dos dados do LLM (rede determinística).
+  // Origem (log 2026-08-03): paciente operada de catarata AO há 1 ano; nenhum gatilho
+  // de voz de LIO disparou (a fala era do PACIENTE — "eu fiz a cirurgia" — e
+  // LIO_COMMANDS só tinha a 3ª pessoa), então a biomicroscopia foi injetada com
+  // "cristalino transparente" num olho sem cristalino. O CID não salvava: a consulta
+  // não emitiu Z96.1; a cirurgia estava em antecedentes_oftalmologicos.
+  // Só liga a flag com o LADO conhecido — pseudofacia sem lado, aplicada em bloco,
+  // inventaria cirurgia no olho fácico de quem operou um olho só.
+  if (!SessionFlags.lioDetectada && !SessionFlags.opacidadeCapsulaDetectada) {
+    const _pf = parsePseudofaciaFromDados(audioData?.dados);
+    if (_pf.detected && _pf.lado) {
+      SessionFlags.lioDetectada = true;
+      SessionFlags.lioLado = _pf.lado;
+      console.log('[LIO] Flag derivada dos dados (gatilho de voz não disparou) — lado:', _pf.lado);
+    } else if (_pf.detected) {
+      console.warn('[LIO] Pseudofacia identificada nos dados, mas sem lado definido — lente NÃO substituída. Confira o cristalino na biomicroscopia.');
+    }
+  }
+
   // Reconciliação de catarata a partir do diagnóstico do LLM.
   // O cristalino dinâmico (getBiomicroscopiaComLente) depende de catarataDetectada,
   // ligada apenas pelos gatilhos de voz. Quando a fala do médico é embaralhada pelo
@@ -480,29 +665,82 @@ async function injectAll(force = false) {
   // contradizendo o diagnóstico. Aqui derivamos a flag do próprio diagnóstico.
   // Respeita a prioridade da lente (opacidade cápsula > LIO > catarata): olho pseudofácico
   // (LIO/opacidade já detectadas) NÃO recebe catarata — a menção seria histórica.
-  if (!catarataDetectada && !lioDetectada && !opacidadeCapsulaDetectada) {
+  if (!SessionFlags.catarataDetectada && !SessionFlags.lioDetectada && !SessionFlags.opacidadeCapsulaDetectada) {
     const _cat = parseCatarataFromDiagnostico(audioData?.dados?.diagnostico);
     if (_cat.detected) {
-      catarataDetectada = true;
-      if (!catarataGrau && _cat.grau) catarataGrau = _cat.grau;
-      console.log('[Catarata] Flag derivada do diagnóstico (gatilho de voz não disparou):', catarataGrau || '(grau não especificado)');
+      SessionFlags.catarataDetectada = true;
+      if (!SessionFlags.catarataGrau && _cat.grau) SessionFlags.catarataGrau = _cat.grau;
+      console.log('[Catarata] Flag derivada do diagnóstico (gatilho de voz não disparou):', SessionFlags.catarataGrau || '(grau não especificado)');
     }
   }
 
-  if (!blefariteInjetada && !examesNormaisInjetados) {
+  // Nunca afirmar exame NORMAL que contradiz o próprio diagnóstico da consulta.
+  // Origem (log 2026-07-29): diagnóstico "H111 - Pterígio OD" + biomicroscopia null →
+  // o fallback de despedida injetou "AO: olho calmo" logo abaixo do pterígio.
+  // `_temTratamentoAtivo` não cobria: a consulta não tinha tratamento nem encaminhamento.
+  // Política (mesma do _guardExamesNormaisFase2): campo VAZIO — que o médico redige —
+  // é preferível a texto fabricado que contradiz o prontuário. Não compomos a descrição
+  // por olho aqui: "pterígio nasal grau I" seria invenção; só o médico dita o detalhe.
+  const _dxAnterior  = temAchadoAnteriorNoDiagnostico(audioData?.dados?.diagnostico);
+  const _dxPosterior = temAchadoPosteriorNoDiagnostico(audioData?.dados?.diagnostico);
+  const _bioNormalSeguro = () => {
+    if (_dxAnterior) {
+      console.warn('[ExamesNormais] Biomicroscopia normal SUPRIMIDA — diagnóstico afirma achado de segmento anterior. Campo deixado vazio para descrição manual.');
+      return null;
+    }
+    return getBiomicroscopiaComLente(BIOMICROSCOPIA_NORMAL);
+  };
+  const _fundoNormalSeguro = () => {
+    if (_dxPosterior) {
+      console.warn('[ExamesNormais] Fundoscopia normal SUPRIMIDA — diagnóstico afirma achado de segmento posterior. Campo deixado vazio para descrição manual.');
+      return null;
+    }
+    return FUNDOSCOPIA_NORMAL;
+  };
+
+  if (!SessionFlags.blefariteInjetada && !SessionFlags.examesNormaisInjetados) {
     if (!audioData?.dilatacaoDetectada && audioData?.injectExamesNormais && !_temTratamentoAtivo) {
+      // `injectExamesNormais` significa, por definição do prompt, que o médico
+      // afirmou que TODOS os exames estão normais — o fundo já está dentro da
+      // flag. Exigir aqui o token "fundo" na fala era desconfiar da própria
+      // entrada: em 2026-08-05 (consulta das 17:54) o médico declarou "o resto
+      // tá tudo tranquilo, ... normal" e o prontuário ficou sem fundoscopia
+      // porque a palavra "fundo" não apareceu (o ASR devolveu "produção normal"
+      // no lugar de "escavação normal"). Ampliar o léxico não resolveria: a
+      // palavra simplesmente não sobrevive ao reconhecimento.
+      // O risco que o gate protegia — laudar fundo não examinado no pós-dilatação
+      // — continua coberto duas vezes acima: pelo `!dilatacaoDetectada` desta
+      // mesma condição e pelo Guard 7 (_guardExamesNormaisFase2), que derruba a
+      // flag quando a fase 2 não fala dos exames. O achado real, quando existe,
+      // ainda prevalece via _fundoNormalSeguro().
       combinedData.examesNormais = {
-        biomicroscopia: getBiomicroscopiaComLente(BIOMICROSCOPIA_NORMAL),
-        fundoscopia: (fundoscopiaDetectada || mencionouFundoNaFala) ? FUNDOSCOPIA_NORMAL : null
+        biomicroscopia: _bioNormalSeguro(),
+        fundoscopia: _fundoNormalSeguro()
       };
     } else if (!audioData?.dilatacaoDetectada && audioData?.injectBlefarite) {
       // Blefarite: se Gemini gerou biomicroscopia personalizada (ex: pterígio + blefarite),
       // usa ela; caso contrário usa o template padrão de blefarite.
       // Com dilatação pendente NÃO injeta — descrição de exames pertence à fase 2.
-      const _bioBase = audioData?.dados?.biomicroscopia || BIOMICROSCOPIA_BLEFARITE;
+      //
+      // O template descreve achados ("hiperemia e espessamento da margem palpebral,
+      // telangiectasias, disfunção de meibômio") e por isso NÃO é rotina: só entra quando o
+      // médico descreveu inflamação palpebral (blefariteDescritaNoExame). Blefarite
+      // inferida apenas do tratamento (shampoo/compressa/higiene) mantém conduta e
+      // medicação, mas deixa a biomicroscopia em branco para o médico redigir — o
+      // DecisionEngine emite o aviso correspondente (log 2026-08-04).
+      const _blefDescrita = audioData?.blefariteDescritaNoExame === true;
+      const _bioBase = audioData?.dados?.biomicroscopia ||
+        (_blefDescrita ? BIOMICROSCOPIA_BLEFARITE : null);
+      if (!_bioBase) {
+        console.warn('[Blefarite] Template de biomicroscopia SUPRIMIDO — nenhuma inflamação palpebral descrita na consulta. Campo deixado vazio para descrição manual.');
+      }
       combinedData.examesNormais = {
-        biomicroscopia: getBiomicroscopiaComLente(_bioBase),
-        fundoscopia: FUNDOSCOPIA_NORMAL // blefarite sempre injeta fundoscopia normal
+        biomicroscopia: _bioBase ? getBiomicroscopiaComLente(_bioBase) : null,
+        // Blefarite é achado de segmento ANTERIOR — não implica fundo normal.
+        // Se o médico discutiu achado posterior (ex.: escavação aumentada suspeita de
+        // glaucoma), o Gemini preenche dados.fundoscopia e ela prevalece; o template
+        // normal só entra quando nada foi descrito no fundo.
+        fundoscopia: audioData?.dados?.fundoscopia || _fundoNormalSeguro()
       };
     } else if (!audioData?.dilatacaoDetectada &&
                (audioData?.dados?.biomicroscopia || audioData?.dados?.fundoscopia)) {
@@ -510,21 +748,52 @@ async function injectAll(force = false) {
       // Quando só fundoscopia foi preenchida (achado posterior com segmento anterior normal),
       // injeta o template normal de biomicroscopia para não deixar o campo em branco.
       combinedData.examesNormais = {
-        biomicroscopia: getBiomicroscopiaComLente(
-          audioData.dados.biomicroscopia || BIOMICROSCOPIA_NORMAL
-        ),
+        biomicroscopia: audioData.dados.biomicroscopia
+          ? getBiomicroscopiaComLente(audioData.dados.biomicroscopia)
+          : _bioNormalSeguro(),
         fundoscopia: audioData.dados.fundoscopia || null
       };
-    } else if (audioData && consultaEncerradaDetectada && !audioData.dilatacaoDetectada && !_temTratamentoAtivo) {
+    } else if (audioData && SessionFlags.consultaEncerradaDetectada && !audioData.dilatacaoDetectada && !_temTratamentoAtivo) {
       // Fallback de despedida: a consulta foi encerrada pelo STOP (despedida) e
       // nenhum gatilho de exame disparou (garantido pelo guard externo).
       // Guard: _temTratamentoAtivo impede injeção de exames "normais" em consultas
       // com patologia ativa (conduta com encaminhamento ou tratamento prescrito).
       combinedData.examesNormais = {
-        biomicroscopia: getBiomicroscopiaComLente(BIOMICROSCOPIA_NORMAL),
-        fundoscopia: mencionouFundoNaFala ? FUNDOSCOPIA_NORMAL : null,
+        biomicroscopia: _bioNormalSeguro(),
+        fundoscopia: mencionouFundoNaFala ? _fundoNormalSeguro() : null,
       };
     }
+  } else if (!audioData?.dilatacaoDetectada &&
+             (audioData?.dados?.biomicroscopia || audioData?.dados?.fundoscopia)) {
+    // Correção pós-análise: um gatilho de voz (blefarite/exames normais) já injetou
+    // os templates no momento em que disparou — antes de o médico descrever o exame.
+    // Se a análise depois identificou um achado, o achado real prevalece sobre o
+    // template, que afirmaria "olho calmo" / "escavação simétrica e fisiológica" e
+    // contradiria o diagnóstico.
+    // A condição cobre biomicroscopia TAMBÉM (2026-07-29): o caso mais provável é o
+    // médico disparar "exames normais" cedo e achar o pterígio depois — antes, só
+    // fundoscopia entrava aqui e o "AO: olho calmo" do gatilho ficava no prontuário.
+    const _bioExplicita = audioData?.dados?.biomicroscopia ||
+      (SessionFlags.blefariteInjetada ? BIOMICROSCOPIA_BLEFARITE : null);
+    combinedData.examesNormais = {
+      biomicroscopia: _bioExplicita ? getBiomicroscopiaComLente(_bioExplicita) : _bioNormalSeguro(),
+      // null = nada a corrigir no fundo; a fundoscopia já injetada pelo gatilho permanece.
+      fundoscopia: audioData.dados.fundoscopia || null,
+    };
+    console.log('[ExamesNormais] Exame do gatilho corrigido —',
+      [audioData?.dados?.biomicroscopia && 'biomicroscopia',
+       audioData?.dados?.fundoscopia && 'fundoscopia'].filter(Boolean).join(' + '),
+      'descrito(s) na consulta.');
+  }
+
+  // Se a supressão zerou os dois campos, não enviar o objeto vazio: `examesNormais`
+  // truthy com tudo null faz o content.js reportar "não foram injetadas" — aviso
+  // enganoso, já que a supressão é deliberada. null é o estado pré-existente de
+  // "nada a injetar" e já é tratado pelo handler.
+  if (combinedData.examesNormais &&
+      !combinedData.examesNormais.biomicroscopia &&
+      !combinedData.examesNormais.fundoscopia) {
+    combinedData.examesNormais = null;
   }
 
   if (audioData?.injectBlefarite) {
@@ -547,11 +816,14 @@ async function injectAll(force = false) {
     const tipo = audioData.tipo_consulta;
 
     const _dilatacao = !!audioData.dilatacaoDetectada;
-    // Sem tratamento ditado, o campo TRATAMENTO é injetado com o registro
-    // explícito "Sem prescrição de medicação" (mesmo texto que o painel exibe
-    // via displayAudioResults) — o prontuário nunca fica com tratamento em
-    // branco. Na dilatação (fase 1) permanece null: pertence ao pós-dilatação.
-    const _trat = (v) => _dilatacao ? null : (v || 'Sem prescrição de medicação');
+    // Sem tratamento ditado e nenhum medicamento mencionado, o campo TRATAMENTO é injetado com o
+    // registro explícito "Sem prescrição de medicação" (o mesmo texto que o painel exibe via
+    // displayAudioResults) — o prontuário não fica com tratamento em branco. Quem decide é
+    // tratamentoPadrao(audioData), e NÃO só o valor do campo: se a fala prescreve ou mantém uma
+    // medicação e o tratamento ficou vazio, o painel mostra o campo vazio com aviso, e injetar
+    // não pode devolver o texto "Sem prescrição" (retorna null e o campo não é escrito).
+    // Na dilatação (fase 1) permanece null: pertence ao pós-dilatação.
+    const _trat = (v) => _dilatacao ? null : (v || tratamentoPadrao(audioData));
     if (tipo === 'conclusao') {
       combinedData.audio = {
         tipo: 'conclusao',
@@ -612,13 +884,21 @@ async function injectAll(force = false) {
   combinedData.requestId = requestId;
 
   let injectResp = null;
+  let injectTimedOut = false;
   for (let attempt = 1; attempt <= 2; attempt++) {
-    injectResp = await sendToTab(tab.id, { action: 'injectAll', data: combinedData });
+    injectResp = await sendToTab(tab.id, { action: 'injectAll', data: combinedData },
+      { onTimeout: () => { injectTimedOut = true; } });
     if (injectResp === 'CONTEXT_INVALIDATED') {
       showError('Recarregue a aba do SHOSP (F5) e tente novamente.');
       throw new Error('Extension context invalidated');
     }
     if (injectResp) break;
+    // Limite estourado: a mensagem CHEGOU e a aba travou no meio. Reenviar só
+    // faria esperar outra vez — e parte dos campos pode já estar escrita.
+    if (injectTimedOut) {
+      showError('O SHOSP não respondeu à injeção. Confira o prontuário: parte dos campos pode ter sido preenchida. Recarregue a aba (F5) antes de injetar de novo.');
+      throw new Error('Erro na injeção');
+    }
     if (attempt < 2) {
       await new Promise(r => setTimeout(r, 800));
       // ← sem executeScript aqui — content.js já está no manifest
@@ -633,6 +913,10 @@ async function injectAll(force = false) {
   // 7. Processar resposta
   // (audioDataInjected/cameraDataInjected já foram setados antes dos awaits)
   _setRunningState(false);
+
+  // Recheck de fidelidade: o que foi enviado (console) × o que ficou no prontuário.
+  // Só relata — não corrige nada no SHOSP.
+  if (injectResp.readback) _recheckInjecao(combinedData, injectResp.readback);
 
   if (injectResp.success) {
     // v5.1: surfacear warnings clínicos (campos que silenciosamente não
@@ -653,19 +937,43 @@ async function injectAll(force = false) {
     }
     // Persistir dados de áudio quando a dilatação foi detectada, para que a fase 2
     // possa re-injetá-los caso o SHOSP descarte campos não salvos durante o período.
-    // Em injeções normais (sem dilatação), limpar o dado persistido se existir.
+    // O payload vai para o slot DESTA sessão na fila (criado por
+    // processAudioInBackground) — junto com a identidade do prontuário da
+    // injeção, usada como rótulo e sanidade na retomada. Slots de OUTROS
+    // pacientes em espera nunca são tocados aqui: era exatamente o remove
+    // incondicional do modelo antigo que apagava a pausa de quem dilatava
+    // quando um paciente intercalado era injetado.
     if (combinedData.audio && audioData?.dilatacaoDetectada) {
-      // Preservar a transcrição da fase 1 já persistida pelo sidepanel-audio
-      // (acumula fases anteriores); fallback para o texto da sessão atual.
-      chrome.storage.local.set({ _shospDilatacaoPhase1: {
+      const _slotId = dilatacaoPausaAtualId || _phase1Data?.id || null;
+      const _patch = {
         audio: combinedData.audio,
-        transcript: _phase1Data?.transcript || recognizedText || '',
         ts: Date.now(),
         motivo: 'dilatacao',
-      } });
-      console.log('[InjectAll] Dados da fase 1 (dilatação) salvos para re-injeção pós-dilatação.');
-    } else {
-      chrome.storage.local.remove('_shospDilatacaoPhase1');
+        retomar: false,
+        tabUrl: tab?.url || null,
+        tabTitle: tab?.title || null,
+        // CIDs que a fase 1 já lançou nesta ficha. A fase 2 os restaura para não
+        // relançá-los (resetSession() zera a memória a cada gravação nova).
+        cids: [..._cidsLancadosNaSessao],
+      };
+      try {
+        const _atualizado = _slotId ? await DilatacaoPausas.atualizar(_slotId, _patch) : null;
+        if (!_atualizado) {
+          // Slot não localizado (sessão fora de ordem) — criar para não perder a fase 1
+          await DilatacaoPausas.criar({
+            ..._patch,
+            transcript: _phase1Data?.transcript || recognizedText || '',
+          });
+        }
+        console.log('[InjectAll] Dados da fase 1 (dilatação) salvos no slot da fila para re-injeção pós-dilatação.');
+      } catch (_e) { console.warn('[InjectAll] Falha ao persistir slot de dilatação (não-fatal):', _e?.message); }
+    } else if (_phase1Data && combinedData.audio) {
+      // Fase 2 concluída (injeção de ÁUDIO sem dilatação): consumir SOMENTE o
+      // slot retomado deste paciente. Injeção só de câmera (OCR capturado no
+      // meio da fase 2) NÃO consome — a transcrição da fase 1 ainda será
+      // anexada quando a gravação da fase 2 terminar.
+      try { await DilatacaoPausas.remover(_phase1Data.id); } catch (_e) { /* não-fatal */ }
+      console.log('[InjectAll] Fase 2 concluída — pausa retomada removida da fila.');
     }
 
     showSuccess();
@@ -683,6 +991,17 @@ async function injectAll(force = false) {
       const ocrCids = (combinedData.exames && cameraData?.cid_refracao?.length)
         ? [...cameraData.cid_refracao]
         : [];
+      // Persistir os específicos do ticket: a passada de áudio (entrevista) que vem
+      // DEPOIS sobrescreve o diagnosticoField com o diagnóstico dela (ex: H52.9 via
+      // displayAudioResults) e cameraData já foi anulado pelo clearAll da câmera —
+      // sem persistir, H52.0/H52.2 se perdem (regressão do log 2026-07-27).
+      if (ocrCids.length) _pendingOcrRefracaoCids = [...ocrCids];
+
+      // CIDs a mesclar: os do OCR desta passada OU, numa passada de áudio, os CIDs
+      // refrativos pendentes de uma passada de câmera anterior do mesmo paciente.
+      const cidsToMerge = ocrCids.length
+        ? ocrCids
+        : (combinedData.audio && _pendingOcrRefracaoCids.length ? [..._pendingOcrRefracaoCids] : []);
 
       clearAll({
         clearAudio: !!combinedData.audio,
@@ -691,24 +1010,28 @@ async function injectAll(force = false) {
 
       // Mesclar CIDs do OCR ao campo de diagnóstico (deduplicados contra CIDs de áudio)
       let novosCids = [];
-      const cidTarget = cidField || (ocrCids.length ? diagnosticoField : null);
-      if (ocrCids.length && cidTarget) {
-        // Normaliza removendo pontos para comparar "H521" e "H52.1" como iguais
-        const normCid = s => s.replace(/\./g, '').toUpperCase();
-        const existingCodes = new Set(
-          (cidTarget.value || '').split(/\n|,|;/)
-            .map(t => { const m = t.match(CID_CODE_PATTERN); return normCid(m ? m[1] : t.trim()); })
-            .filter(Boolean)
-        );
-        novosCids = ocrCids.filter(cid => {
-          const m = cid.match(CID_CODE_PATTERN);
-          return !existingCodes.has(normCid(m ? m[1] : cid.trim()));
-        });
+      const cidTarget = cidField || (cidsToMerge.length ? diagnosticoField : null);
+      if (cidsToMerge.length && cidTarget) {
+        // Base de deduplicação = o que ainda está no campo + o que JÁ FOI LANÇADO
+        // nesta consulta. A segunda parcela é indispensável: quando a entrevista
+        // vem antes do OCR, a cadeia de handleSearchCid já esvaziou o campo e o
+        // campo sozinho não prova nada (H52.2 duplicado, log 2026-07-29).
+        const existingCodes = new Set([
+          ..._cidsLancadosNaSessao,
+          ...(cidTarget.value || '').split(/\n|,|;/).map(t => _cidKey(t)).filter(Boolean),
+        ]);
+        novosCids = cidsToMerge.filter(cid => !existingCodes.has(_cidKey(cid)));
+        const _jaLancados = cidsToMerge.filter(cid => existingCodes.has(_cidKey(cid)));
+        if (_jaLancados.length) {
+          console.log('[AutoCID-OCR] CIDs ignorados (já lançados nesta consulta):', _jaLancados);
+        }
         if (novosCids.length) {
           cidTarget.value = [cidTarget.value, ...novosCids].filter(Boolean).join('\n');
           console.log('[AutoCID-OCR] CIDs de refração adicionados:', novosCids);
         }
       }
+      // Passada de áudio consumiu os pendentes — não devem vazar p/ o próximo paciente.
+      if (combinedData.audio) _pendingOcrRefracaoCids = [];
 
       // Retificação: remove H52.9 (refração NE) quando já há CID refrativo específico
       // no diagnóstico (vindo do OCR ou da própria entrevista).
@@ -727,9 +1050,10 @@ async function injectAll(force = false) {
       const activeField = (cidField?.value?.trim() ? cidField : null)
         || (novosCids.length && cidTarget?.value?.trim() ? cidTarget : null);
       if (activeField) {
-        setTimeout(() => handleSearchCid(activeField), 800);
+        _startCidChain(); // início de cadeia — zera recusados e reagendados
+        setTimeout(() => handleSearchCid(activeField), 300);
       }
-    }, 1500);
+    }, 500);
     return true;
   } else {
     console.warn('[InjectAll] Injeção não sucedida (success=false). Revertendo flags para permitir nova tentativa.');
@@ -751,14 +1075,95 @@ async function injectAll(force = false) {
 // Helper: enviar mensagem para tab com tratamento de erros
 // Retorna:
 //   'CONTEXT_INVALIDATED' — extensão foi recarregada/atualizada; o sidepanel deve pedir F5
-//   null                  — erro transiente (SPA ainda carregando, content script reiniciando)
+//   null                  — sem resposta: erro transiente (SPA ainda carregando, content
+//                           script reiniciando) OU limite de tempo estourado (aba travada)
 //   <resp>                — resposta normal do content script
 // silent=true suprime o warn para erros transientes esperados (ex: checkPage retries)
-function sendToTab(tabId, message, { silent = false } = {}) {
+
+// Recheck de fidelidade (src/agents/recheck-agent.js): compara o payload enviado
+// com o readback do prontuário. Só registra no console e avisa — não corrige nada.
+//
+// Até 2026-11-10 este recheck NUNCA rodou no painel: recheck-agent.js e
+// medicamentos-agent.js declaravam `const _Contrato` no topo, e scripts clássicos
+// dividem um escopo só — o segundo falhava ao carregar ("Identifier '_Contrato'
+// has already been declared") e RecheckAgent ficava indefinido, caindo em silêncio
+// no `return null` abaixo. Por isso o aviso quando ele falta, e o try/catch: é
+// código que só relata, e a estreia dele não pode derrubar uma injeção já feita.
+function _recheckInjecao(enviado, readback) {
+  if (typeof RecheckAgent === 'undefined') {
+    console.warn('[Recheck] RecheckAgent não carregou — a conferência enviado × prontuário NÃO foi feita. Veja erros de carregamento no console do painel.');
+    return null;
+  }
+  try {
+    const r = RecheckAgent.conferirFidelidade(RecheckAgent.montarEnviado(enviado), readback);
+    const titulo = `[Recheck] ${r.conferidos} linha(s) conferida(s), ${r.divergencias.length} divergência(s)`;
+    console.groupCollapsed(titulo);
+    if (r.divergencias.length) console.table(r.divergencias);
+    if (r.naoVerificaveis.length) console.log('[Recheck] não verificável (aba fora do DOM):', r.naoVerificaveis);
+    console.groupEnd();
+    return r;
+  } catch (e) {
+    console.warn('[Recheck] falhou ao conferir (a injeção em si não foi afetada):', e && e.message);
+    return null;
+  }
+}
+
+/**
+ * Quanto esperar a resposta do content script, por ação. Sem limite, uma aba que
+ * recebe a mensagem e nunca responde (página congelada pelo economizador do
+ * Chrome, handler preso num await) deixava a promise pendurada para sempre: a
+ * sondagem `checkPage` roda em Promise.all, então UMA aba muda travava a injeção
+ * inteira sem mensagem nenhuma.
+ *
+ * Os limites são folgados de propósito — as esperas internas do content script
+ * são de poucos segundos por passo. Estourar o limite significa "travou", não
+ * "está lento".
+ */
+function _sendToTabTimeoutMs(action) {
+  switch (action) {
+    case 'checkPage':        // sondagem: resposta síncrona
+    case 'setInjectedCids':  // idempotente, resposta síncrona
+      return 5000;
+    case 'injectAll':        // percorre abas, Froala, readback
+      return 180000;
+    default:                 // searchCid, exames, refração estática, OCT, dumps
+      return 60000;
+  }
+}
+
+/**
+ * @param {{ silent?: boolean, timeoutMs?: number, onTimeout?: Function }} [opts]
+ *   onTimeout — chamado quando o limite estoura (a promise resolve null, a mesma
+ *   forma de "sem resposta"); serve para quem precisa NÃO reenviar depois disso.
+ */
+function sendToTab(tabId, message, opts) {
+  // Sem desestruturar na assinatura: o _extractFn dos testes acha o corpo pela
+  // primeira chave depois do nome.
+  const silent = !!(opts && opts.silent);
+  const timeoutMs = opts && opts.timeoutMs;
+  const onTimeout = opts && opts.onTimeout;
   return new Promise(resolve => {
+    const action = message && message.action;
+    const limite = (typeof timeoutMs === 'number' && timeoutMs > 0) ? timeoutMs : _sendToTabTimeoutMs(action);
+    let encerrado = false;
+    const timer = setTimeout(() => {
+      if (encerrado) return;
+      encerrado = true;
+      // Sempre avisa, mesmo com silent: travamento não é erro transiente esperado.
+      console.warn(`[sendToTab] tab=${tabId} action=${action} sem resposta em ${Math.round(limite / 1000)}s — a aba do SHOSP não respondeu`);
+      if (typeof onTimeout === 'function') { try { onTimeout(); } catch (_e) { /* aviso nunca derruba o envio */ } }
+      resolve(null);
+    }, limite);
+
     chrome.tabs.sendMessage(tabId, message, (resp) => {
-      if (chrome.runtime.lastError) {
-        const errMsg = chrome.runtime.lastError.message || '';
+      // Ler lastError mesmo depois do limite: sem a leitura o Chrome registra
+      // "Unchecked runtime.lastError" no console.
+      const lastError = chrome.runtime.lastError;
+      if (encerrado) return; // resposta atrasada — o chamador já seguiu
+      encerrado = true;
+      clearTimeout(timer);
+      if (lastError) {
+        const errMsg = lastError.message || '';
         const err = errMsg.toLowerCase();
         if (err.includes('context invalidated') || err.includes('extension context')) {
           // Contexto da extensão foi destruído — única situação que exige F5
@@ -796,20 +1201,23 @@ function clearAll(options = { clearAudio: true, clearCamera: true }) {
     }
 
     // ── 2. Resetar flags de gatilhos (SOMENTE se NÃO está gravando) ──
-    // Cada flag corresponde a um hook em sidepanel-hooks.js.
-    // Para adicionar uma nova flag: declarar em sidepanel-constants.js,
-    // registrar o hook em sidepanel-hooks.js e adicionar o reset aqui.
+    // Subconjunto INTENCIONAL: lenteLimpaDetectada, consultaEncerradaDetectada
+    // e despedidaNaSessao NÃO são zeradas aqui (só no resetSession da próxima
+    // gravação) — são sticky da sessão. Para adicionar flag nova: registrar em
+    // SESSION_FLAG_DEFAULTS (sidepanel-constants.js), criar o hook em
+    // sidepanel-hooks.js e decidir se ela entra neste reset parcial.
     if (clearAudio && !isRecording) {
-      examesNormaisInjetados = false;
-      blefariteInjetada = false;
-      fundoscopiaDetectada = false;
-      receitaOlhoIrritadoInjetada = false;
-      catarataDetectada = false;
-      catarataGrau = null;
-      lioDetectada = false;
-      opacidadeCapsulaDetectada = false;
-      dilatacaoDetectada = false;
-      fase2DilatacaoAtiva = false;
+      SessionFlags.examesNormaisInjetados = false;
+      SessionFlags.blefariteInjetada = false;
+      SessionFlags.fundoscopiaDetectada = false;
+      SessionFlags.receitaOlhoIrritadoInjetada = false;
+      SessionFlags.catarataDetectada = false;
+      SessionFlags.catarataGrau = null;
+      SessionFlags.lioDetectada = false;
+      SessionFlags.lioLado = null;
+      SessionFlags.opacidadeCapsulaDetectada = false;
+      SessionFlags.dilatacaoDetectada = false;
+      SessionFlags.fase2DilatacaoAtiva = false;
       lastTriggerTime = 0;
       if (stopCommandTimeout) { clearTimeout(stopCommandTimeout); stopCommandTimeout = null; }
       stopPendingInfo = null;
@@ -821,7 +1229,7 @@ function clearAll(options = { clearAudio: true, clearCamera: true }) {
     // dilatacaoDetectada também é resetada se limpar câmera sem áudio
     // (evita que flag de sessão anterior suprima conduta da próxima gravação)
     if (clearCamera && !clearAudio && !isRecording) {
-      dilatacaoDetectada = false;
+      SessionFlags.dilatacaoDetectada = false;
     }
 
     // ── 4. Limpar campos de áudio ──
@@ -834,6 +1242,11 @@ function clearAll(options = { clearAudio: true, clearCamera: true }) {
         antecedentesFamField, retornoField, medicacoesRetornoField, condutaField,
         medicamentosPrescritosField, condutaRetornoField, medicamentosPrescritosRetornoField];
       audioFields.forEach(f => { if (f) f.value = ''; });
+      // NÃO remover o clinicalWarningBanner aqui: este clearAll é o AUTOMÁTICO
+      // pós-injeção, que roda ~1,5s depois da análise. Removê-lo aqui apagaria o
+      // aviso (ex: biomicroscopia em branco) antes de o médico conseguir lê-lo —
+      // justamente no momento em que o campo acabou de entrar vazio no prontuário.
+      // O banner morre só na fronteira de PACIENTE (limpeza manual / nova gravação).
       hideResults();
     }
 
@@ -894,11 +1307,18 @@ function clearAll(options = { clearAudio: true, clearCamera: true }) {
       chrome.storage.local.remove(['lastGeminiReasoning', 'lastGeminiDate']);
     }
 
-    // Limpeza manual (novo paciente): descartar fase 1 de dilatação persistida,
-    // para que a entrevista de um paciente não contamine a análise do próximo.
-    // O clearAll automático pós-injeção NÃO passa esta opção — preserva a fase 1.
+    // Limpeza manual (novo paciente): DESARMAR qualquer retomada pendente —
+    // a próxima gravação volta a ser paciente novo. As pausas em si ficam na
+    // fila (outros pacientes seguem dilatando); descarte individual é pelo ✕
+    // da sala de espera. O clearAll automático pós-injeção não passa a opção.
     if (options.discardDilatacao === true) {
-      chrome.storage.local.remove('_shospDilatacaoPhase1');
+      try { DilatacaoPausas.desmarcarRetomadas(); } catch (_e) { /* não-fatal */ }
+      // Novo paciente: a memória de CIDs lançados não pode atravessar fichas —
+      // senão um CID legítimo do próximo paciente seria silenciosamente ignorado.
+      _cidsLancadosNaSessao = new Set();
+      // Fronteira de paciente: o aviso clínico da consulta anterior sai de cena.
+      const _warnBanner = document.getElementById('clinicalWarningBanner');
+      if (_warnBanner) _warnBanner.remove();
     }
 
     console.log('[ClearAll] Limpeza concluída', options);
@@ -912,12 +1332,26 @@ function clearAll(options = { clearAudio: true, clearCamera: true }) {
 // FEEDBACK VISUAL
 // ============================================================================
 
+// successMessage é um elemento COMPARTILHADO (sucesso, erro, "buscando", e o
+// aviso persistente de CIDs recusados). Cada feedback transitório armava seu
+// próprio setTimeout de hide sem cancelar os anteriores — então um toast antigo
+// podia esconder um aviso posterior. Centralizar num único slot (clear-antes-de-
+// set) garante que só há um timer pendente e que o aviso persistente possa
+// cancelá-lo. Passar delay=0 (ou omitir o arm) deixa a mensagem fixa.
+function _armHideSuccess(delay = 3000) {
+  if (successMessage._hideTimer) clearTimeout(successMessage._hideTimer);
+  successMessage._hideTimer = setTimeout(() => {
+    successMessage.classList.add('hidden');
+    successMessage._hideTimer = null;
+  }, delay);
+}
+
 function showSuccess() {
   successMessage.classList.remove('hidden');
   successMessage.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg><span>Dados injetados com sucesso!</span>';
   successMessage.style.background = '#dcfce7';
   successMessage.style.color = '#166534';
-  setTimeout(() => successMessage.classList.add('hidden'), 3000);
+  _armHideSuccess();
   // Nota: chrome.notifications não funciona em sidepanels, apenas feedback visual acima
 }
 
@@ -926,7 +1360,32 @@ function showError(message) {
   successMessage.innerHTML = '<span>' + message + '</span>';
   successMessage.style.background = '#fee2e2';
   successMessage.style.color = '#991b1b';
-  setTimeout(() => successMessage.classList.add('hidden'), 3000);
+  _armHideSuccess();
+}
+
+// Monta a mensagem PERSISTENTE de CIDs recusados pelo SHOSP. Pura (testável):
+// retorna null quando não há falhas. Ver _surfaceFailedCids para a exibição.
+function _formatFailedCidsMessage(failed) {
+  if (!failed || !failed.length) return null;
+  const lista = failed.map(c => String(c).trim()).filter(Boolean);
+  if (!lista.length) return null;
+  const s = lista.length > 1 ? 's' : '';
+  return `⚠️ ${lista.length} CID${s} não aceito${s} pelo SHOSP — adicione manualmente: ${lista.join(', ')}`;
+}
+
+// Exibe (sem auto-hide) os CIDs que o SHOSP recusou durante a cadeia e consome
+// o acumulador. Cancela qualquer hide pendente para o aviso não sumir em 3s.
+function _surfaceFailedCids() {
+  const msg = _formatFailedCidsMessage(handleSearchCid._failed);
+  handleSearchCid._failed = [];
+  handleSearchCid._requeued = new Set(); // fim de cadeia — a próxima começa do zero
+  if (!msg) return;
+  if (successMessage._hideTimer) { clearTimeout(successMessage._hideTimer); successMessage._hideTimer = null; }
+  successMessage.classList.remove('hidden');
+  successMessage.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg><span>' + msg + '</span>';
+  successMessage.style.background = '#fef3c7';
+  successMessage.style.color = '#92400e';
+  // Sem _armHideSuccess: persistente até a próxima ação de feedback.
 }
 
 // ============================================================================
@@ -952,7 +1411,7 @@ async function injectExamesNormaisDirect() {
     action: 'injectExamesNormais',
     data: {
       biomicroscopia: getBiomicroscopiaComLente(BIOMICROSCOPIA_NORMAL),
-      fundoscopia: fundoscopiaDetectada ? FUNDOSCOPIA_NORMAL : null,
+      fundoscopia: SessionFlags.fundoscopiaDetectada ? FUNDOSCOPIA_NORMAL : null,
     },
   });
   if (response?.success) {
@@ -995,3 +1454,121 @@ async function injectReceitaOlhoIrritadoDirect() {
     statusText.textContent = 'Gravando... (receita não injetada)';
   }
 }
+
+/**
+ * Injeção pós-dilatação: escreve o grau capturado APENAS no bloco Refração
+ * ESTÁTICA, sem passar pelo injectAll (não toca em receita, tono, paqui, CID,
+ * áudio nem clearAll). Estrutura idêntica à refração dinâmica; só muda o alvo.
+ * @param {{od:object|null, oe:object|null}} refracao objeto no formato do OCR
+ * @returns {Promise<boolean>} true se ao menos um campo foi preenchido
+ */
+async function injectRefracaoEstaticaDirect(refracao) {
+  if (!refracao || (refracao.od == null && refracao.oe == null)) return false;
+  const tab = await _getShospTab();
+  if (!tab) return false;
+  const response = await sendToTab(tab.id, {
+    action: 'injectRefracaoEstatica',
+    data: { refracao },
+  });
+
+  // Falha de TRANSPORTE não traz diag: sendToTab resolve a string
+  // 'CONTEXT_INVALIDATED' ou null. Sem separar esses casos, o painel mandaria o
+  // médico colar um dump que nunca foi impresso — a mesma pista falsa que este
+  // diagnóstico existe para eliminar.
+  if (response === 'CONTEXT_INVALIDATED') {
+    console.warn('[RefracaoEstatica] Contexto da extensão invalidado — dê F5 na página do SHOSP e refaça a captura.');
+    return false;
+  }
+  if (!response || typeof response !== 'object') {
+    console.warn('[RefracaoEstatica] Sem resposta do content script (SPA ainda carregando?) — refaça a captura.');
+    return false;
+  }
+
+  // JSON.stringify de propósito: o console imprime objeto como "Object" e o log
+  // copiado pelo médico perde exatamente o conteúdo que interessa. Ver
+  // [InjectAll] check: Object no log 2026-07-29.
+  const diag = response.diag;
+  if (diag) {
+    console.log('[RefracaoEstatica] IDs resolvidos:', JSON.stringify(diag.resolvidos), '| aba clicada:', diag.tabClicked);
+    if (diag.candidatos) _printRefracaoDump(diag.candidatos);
+  }
+  if (!response.success) {
+    if (diag && diag.tabClicked === false) {
+      console.warn('[RefracaoEstatica] A aba Refração não foi aberta — o mapeamento nem chegou a ser testado. Abra o prontuário na aba Refração e refaça.');
+    } else {
+      console.warn('[RefracaoEstatica] Nada injetado — bloco ESTÁTICA não mapeado. ' +
+        'Cole as linhas [DumpRefracao] acima (da #00 até a marca FIM) para fixar os 6 IDs em FALLBACK_IDS (src/content.js:56-61).');
+    }
+  }
+  return !!response.success;
+}
+
+/**
+ * Imprime o dump estrutural UMA LINHA POR CAMPO.
+ *
+ * Um único console.log com todos os campos é justamente o que falhou: o log de
+ * 2026-07-30 saiu cortado em `"id": "prontuario_res` — o Chrome trunca strings
+ * longas, e os IDs do bloco ESTÁTICA estavam depois do corte. Cada campo em seu
+ * próprio console.log não tem esse limite, e o cabeçalho/rodapé com a contagem
+ * deixa evidente se o que foi colado veio inteiro.
+ * @param {Array<object>} candidatos
+ */
+function _printRefracaoDump(candidatos) {
+  const lista = Array.isArray(candidatos) ? candidatos : [];
+  // Recarregar a extensão NÃO re-injeta o content script numa aba já aberta: o
+  // dump volta no formato antigo (labels/ph, sem ctx/narrow/vis) e o formatter
+  // imprime "vis=0 ctx=- narrow=-" em TODOS os campos — indistinguível de
+  // "a seção estática não está montada". Dizer isso aqui evita perseguir um
+  // fantasma que só se resolve com F5.
+  if (lista.length && !('ctx' in lista[0])) {
+    console.warn('[DumpRefracao] A aba do SHOSP ainda roda o content script ANTIGO (dump sem ctx/narrow/vis). Dê F5 na aba do SHOSP e repita — este dump não serve.');
+  }
+  console.log(`[DumpRefracao] ${lista.length} campos de refração no DOM (estrutura, sem valores):`);
+  for (const c of lista) console.log(_formatRefracaoDumpLine(c));
+  console.log(`[DumpRefracao] FIM — ${lista.length} campos. Se a última linha não for #${String(Math.max(lista.length - 1, 0)).padStart(2, '0')}, o console cortou o log.`);
+}
+
+/**
+ * Uma linha compacta por campo. `ctx` é o texto do mesmo container que a detecção
+ * inspeciona e `narrow` é o rótulo que o seletor de _refractionBlockOf enxerga —
+ * juntos dizem se a estática falha na porta de entrada (ctx vazio ⇒ o campo nunca
+ * entra no cache) ou na classificação do bloco (ctx ok, narrow sem "ESTATICA").
+ * @param {object} c
+ * @returns {string}
+ */
+function _formatRefracaoDumpLine(c) {
+  const q = (v) => (v == null || v === '' ? '-' : `"${v}"`);
+  return `[DumpRefracao] #${String(c.i ?? 0).padStart(2, '0')} ${c.id}` +
+    ` | bloco=${c.bloco} vis=${c.vis ? 1 : 0}` +
+    ` | linha=${q(c.linha)} col=${c.col ?? '-'} head=${q(c.head)}` +
+    ` | ctx=${q(c.ctx)} | narrow=${q(c.narrow)}` +
+    ` | labs=${(c.labs || []).join(' > ') || '-'}`;
+}
+
+/**
+ * Dump estrutural dos campos de refração, sob demanda e sem injetar nada.
+ * Uso: abrir o console do painel com o prontuário aberto e chamar
+ * `dumpRefracaoBlocks()`. Serve para fixar os 6 IDs do bloco ESTÁTICA sem
+ * precisar refazer uma captura pós-dilatação.
+ * @returns {Promise<boolean>} true se o dump foi obtido
+ */
+async function dumpRefracaoBlocks() {
+  const tab = await _getShospTab();
+  if (!tab) { console.warn('[DumpRefracao] Nenhuma aba do SHOSP encontrada.'); return false; }
+  const response = await sendToTab(tab.id, { action: 'dumpRefracaoBlocks' });
+  if (response === 'CONTEXT_INVALIDATED') {
+    console.warn('[DumpRefracao] Contexto da extensão invalidado — dê F5 na página do SHOSP.');
+    return false;
+  }
+  if (!response || typeof response !== 'object' || !response.success) {
+    console.warn('[DumpRefracao] Falhou:', (response && response.error) || 'sem resposta do content script');
+    return false;
+  }
+  _printRefracaoDump(response.candidatos);
+  return true;
+}
+
+// Exposto explicitamente: a instrução ao médico é "chame dumpRefracaoBlocks() no
+// console do painel", e isso tem que valer independente de como o console resolve
+// o escopo dos scripts concatenados.
+window.dumpRefracaoBlocks = dumpRefracaoBlocks;

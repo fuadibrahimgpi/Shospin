@@ -142,3 +142,11 @@ Ao executar qualquer tarefa para este projeto:
 | `caso-clinico-oftalmologia` (skill) | Gera casos clínicos no padrão do projeto |
 | Banco de 14 casos (módulo trauma/urgência) | Casos prontos para uso no agente |
 | Prompt do agente simulador | Instrução do agente paciente para o Claude |
+
+---
+
+## Antes do passo final — revisão obrigatória
+
+**Passo final desta skill:** entregar o artefato pedido (caso, prompt do agente, devolutiva ou ajuste de fluxo) — conferido contra a Arquitetura Central, a Avaliação e os Princípios Pedagógicos desta skill.
+
+Antes de executá-lo, rodar a skill `revisao-final` sobre o resultado pronto: ela relê os parâmetros desta skill (regras críticas, checagem final, formato de saída, histórico de erros) e as regras do médico na memória, confere item por item e só então libera o passo final. Com algum item violado, corrige e revisa de novo (no máximo 3 rodadas); se ainda falhar, o passo final não é executado e o problema vai para o Fuad.

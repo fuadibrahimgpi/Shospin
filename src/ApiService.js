@@ -1,9 +1,12 @@
 /**
  * API SERVICE v5.0 — Retry Exponencial + Rate Limiting
+ *
+ * Modelo, endereço e chave vêm de config/gemini.js (ShospGemini), carregado antes
+ * deste arquivo. A chave vai no cabeçalho da requisição, nunca na URL.
  */
 
-const GEMINI_API_ENDPOINT    = 'https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent';
-const GEMINI_API_ENDPOINT_BETA = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent';
+const GEMINI_API_ENDPOINT      = ShospGemini.endpoint('v1');
+const GEMINI_API_ENDPOINT_BETA = ShospGemini.endpoint('v1beta');
 
 const DEFAULT_GEMINI_CONFIG = {
   temperature: 0,
@@ -20,8 +23,8 @@ const DEFAULT_RETRY_CONFIG = {
 };
 
 const DEFAULT_RATE_LIMIT_CONFIG = {
-  maxRequestsPerMinute: 15,
-  maxRequestsPerHour: 100
+  maxRequestsPerMinute: 30,
+  maxRequestsPerHour: 200
 };
 
 // ============================================================================
@@ -167,8 +170,8 @@ class ApiService {
 
   async loadApiKey() {
     try {
-      const result = await chrome.storage.sync.get(['geminiApiKey']);
-      this.apiKey = result.geminiApiKey || null;
+      // Local primeiro; a chave antiga do sync é migrada na primeira leitura.
+      this.apiKey = (await ShospGemini.lerChave(chrome.storage)) || null;
       return this.apiKey;
     } catch (err) {
       this.logger.error('Erro ao carregar API key', err);
@@ -179,7 +182,7 @@ class ApiService {
 
   async saveApiKey(apiKey) {
     try {
-      await chrome.storage.sync.set({ geminiApiKey: apiKey });
+      await ShospGemini.salvarChave(chrome.storage, apiKey);
       this.apiKey = apiKey;
       this.logger.success('API key salva com sucesso');
       return true;
@@ -242,8 +245,9 @@ class ApiService {
       generationConfig.thinkingConfig = { thinkingBudget };
     }
 
-    const baseEndpoint = thinkingBudget !== undefined ? GEMINI_API_ENDPOINT_BETA : GEMINI_API_ENDPOINT;
-    const endpoint = `${baseEndpoint}?key=${this.apiKey}`;
+    const useBetaEndpoint = thinkingBudget !== undefined || Boolean(generationConfig.responseMimeType);
+    // Só o endereço: a chave vai no cabeçalho (ver _executeRequest).
+    const endpoint = useBetaEndpoint ? GEMINI_API_ENDPOINT_BETA : GEMINI_API_ENDPOINT;
 
     let lastError = null;
 
@@ -288,7 +292,7 @@ class ApiService {
     try {
       const response = await fetch(endpoint, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: ShospGemini.cabecalhos(this.apiKey),
         body: JSON.stringify({ contents: [{ parts }], generationConfig }),
         signal: controller.signal
       });

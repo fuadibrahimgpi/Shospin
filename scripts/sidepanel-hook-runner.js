@@ -47,6 +47,19 @@ function _negadoAntes(src, idx) {
 }
 
 /**
+ * Frase CONDICIONAL antes do comando ("vamos ver se os exames estão normais",
+ * "será que o fundo de olho está normal"): é intenção de examinar, não
+ * declaração de resultado. Só vale para hooks com `bloqueiaCondicional`
+ * (simulação 2026-11-08, caso H09: injetava exames normais antes do exame).
+ * Janela curta (25 chars) para não pegar um "se" de cláusula distante.
+ */
+function _condicionalAntes(src, idx) {
+  if (idx <= 0) return false;
+  const prefix = src.slice(Math.max(0, idx - 25), idx);
+  return /\b(ver|saber|checar|conferir|verificar|confirmar|olhar|examinar)\s+se\b|\bsera\s+que\b|\bse\s+(os\s+|o\s+|seus\s+|suas\s+|a\s+|as\s+)?$/.test(prefix);
+}
+
+/**
  * Fronteira de palavra no INÍCIO do comando: rejeita matches que começam no
  * meio de outra palavra. Sem isso, comandos curtos casam por substring dentro
  * de palavras maiores — 'e catarata' casava em "cirurgiada d[e catarata]",
@@ -96,7 +109,14 @@ function _hookMatches(hook, normalizedFinal, normalizedCurrent, recentTextBuffer
     return null;
   }
 
-  const sources = hook.tailOnly
+  // Fase 2 da dilatação: quando o hook é fase2TailOnly e esta sessão é o
+  // retorno de uma dilatação, só a CAUDA conta. Assim uma narração
+  // retrospectiva ("já dilatou?", "pinguei o colírio para dilatar") no meio do
+  // transcript acumulado não re-arma a pausa; apenas um comando dito agora, no
+  // fim da fala (recentTextBuffer), dispara. Sem isso, o multiSource varreria o
+  // transcript inteiro e qualquer menção retrospectiva pausaria a consulta.
+  const fase2Tail = hook.fase2TailOnly && HOOK_STATE.fase2DilatacaoAtiva;
+  const sources = (hook.tailOnly || fase2Tail)
     ? [recentTextBuffer]
     : hook.multiSource
       ? [normalizedFinal, normalizedCurrent, recentTextBuffer]
@@ -109,7 +129,8 @@ function _hookMatches(hook, normalizedFinal, normalizedCurrent, recentTextBuffer
       // a afirmativa deve disparar.
       let idx = src.indexOf(cmd);
       while (idx !== -1) {
-        if (_inicioDePalavra(src, idx) && !_negadoAntes(src, idx)) return cmd;
+        if (_inicioDePalavra(src, idx) && !_negadoAntes(src, idx) &&
+            !(hook.bloqueiaCondicional && _condicionalAntes(src, idx))) return cmd;
         idx = src.indexOf(cmd, idx + cmd.length);
       }
     }
@@ -250,13 +271,19 @@ function _scheduleStop(hook, matchedCmd) {
     cmd: matchedCmd,
     endAnchored: !!hook.endAnchored,
     endAnchorSlack: hook.endAnchorSlack ?? 10,
+    stopDelay: hook.stopDelay ?? 500,
     onCancel: hook.onCancel || null,
   };
+  _armStopTimer(stopPendingInfo.stopDelay);
+}
+
+/** Arma (ou re-arma) o timer que confirma o stop pendente por silêncio. */
+function _armStopTimer(delayMs) {
   stopCommandTimeout = setTimeout(() => {
     if (isRecording) stopRecording();
     stopCommandTimeout = null;
     stopPendingInfo = null;
-  }, hook.stopDelay ?? 500);
+  }, delayMs);
 }
 
 /**
@@ -270,6 +297,19 @@ function _maybeCancelAnchoredStop(normalizedCurrent) {
   const idx = normalizedCurrent.lastIndexOf(cmd);
   const aindaNoFim = idx !== -1 && (idx + cmd.length) >= normalizedCurrent.length - endAnchorSlack;
   if (aindaNoFim) return false;
+
+  // Despedida em cadeia ("ta bom entao ate daqui a pouquinho obrigada"): se a
+  // continuação é vocabulário de despedida, a intenção de encerrar se mantém —
+  // prorroga o timer de silêncio em vez de cancelar. Caso real 2026-07-17.
+  if (idx !== -1) {
+    const tail = normalizedCurrent.slice(idx + cmd.length);
+    if (ClinicalTriggers.isContinuacaoDespedida(tail)) {
+      clearTimeout(stopCommandTimeout);
+      _armStopTimer(stopPendingInfo.stopDelay ?? 2000);
+      console.log(`[HookRunner] STOP "${cmd}" prorrogado — a despedida continuou ("${tail.trim()}")`);
+      return false;
+    }
+  }
 
   clearTimeout(stopCommandTimeout);
   stopCommandTimeout = null;
@@ -320,8 +360,12 @@ function _runStopCheck(normalizedFinal, normalizedCurrent, recentTextBuffer) {
     if (!matchedCmd) continue;
 
     // Encerramento (sticky): uma despedida foi DETECTADA — registra mesmo que o
-    // gate bloqueie ou o stop seja cancelado. Suprime dilatação subsequente.
-    if (hook.id !== 'dilatacao') HOOK_STATE.despedidaNaSessao = true;
+    // gate bloqueie. NÃO marca para stops endAnchored (stop_curto/saudacao/
+    // ancorado): essas frases são canceladas quando a fala continua ("bom
+    // dia"/"até mais" no meio da consulta), e marcar aqui deixava a flag presa,
+    // suprimindo em silêncio uma dilatação legítima depois (caso real
+    // 2026-07-17). Só despedida FORTE/não-cancelável é sticky de imediato.
+    if (hook.id !== 'dilatacao' && !hook.endAnchored) HOOK_STATE.despedidaNaSessao = true;
 
     // Gate de captura: sem conduta+tratamento ditados, não encerra a consulta
     if (_stopGateBlocks(hook, normalizedCurrent, matchedCmd)) continue;
@@ -379,8 +423,10 @@ function runHooks(normalizedFinal, normalizedCurrent, recentTextBuffer) {
     const matchedCmd = _hookMatches(hook, normalizedFinal, normalizedCurrent, recentTextBuffer);
     if (!matchedCmd) continue;
 
-    // ── Encerramento (sticky): despedida detectada → suprime dilatação depois ──
-    if (hook.type === 'stop' && hook.id !== 'dilatacao') HOOK_STATE.despedidaNaSessao = true;
+    // ── Encerramento (sticky): despedida detectada → suprime dilatação depois.
+    //    Exclui stops endAnchored (canceláveis): marcá-los deixava a flag presa
+    //    após um "bom dia"/"até mais" cancelado, matando dilatação legítima. ──
+    if (hook.type === 'stop' && hook.id !== 'dilatacao' && !hook.endAnchored) HOOK_STATE.despedidaNaSessao = true;
 
     // ── Gate de captura (stop de fim de consulta): sem conduta+tratamento
     //    ditados na fala, o encerramento é bloqueado e a gravação continua ──

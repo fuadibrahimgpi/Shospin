@@ -15,40 +15,25 @@
 // ============================================================================
 // ESTADO COMPARTILHADO — referência única lida e escrita pelos hooks
 // ============================================================================
-// Os hooks recebem este objeto por referência — mutações são refletidas
-// nas flags globais via getters/setters, sem quebrar compatibilidade com o
-// código existente que lê as variáveis diretamente (ex: fundoscopiaDetectada).
+// Os hooks recebem este objeto por referência — mutações são refletidas em
+// SessionFlags. Os acessores das flags são GERADOS do registro canônico
+// SESSION_FLAG_DEFAULTS (flag nova entra aqui automaticamente).
 
-const HOOK_STATE = {
-  get catarataDetectada()        { return catarataDetectada; },
-  set catarataDetectada(v)       { catarataDetectada = v; },
-  get catarataGrau()             { return catarataGrau; },
-  set catarataGrau(v)            { catarataGrau = v; },
-  get lioDetectada()             { return lioDetectada; },
-  set lioDetectada(v)            { lioDetectada = v; },
-  get opacidadeCapsulaDetectada(){ return opacidadeCapsulaDetectada; },
-  set opacidadeCapsulaDetectada(v){ opacidadeCapsulaDetectada = v; },
-  get lenteLimpaDetectada()      { return lenteLimpaDetectada; },
-  set lenteLimpaDetectada(v)     { lenteLimpaDetectada = v; },
-  get examesNormaisInjetados()   { return examesNormaisInjetados; },
-  set examesNormaisInjetados(v)  { examesNormaisInjetados = v; },
-  get blefariteInjetada()        { return blefariteInjetada; },
-  set blefariteInjetada(v)       { blefariteInjetada = v; },
-  get fundoscopiaDetectada()     { return fundoscopiaDetectada; },
-  set fundoscopiaDetectada(v)    { fundoscopiaDetectada = v; },
-  get receitaOlhoIrritadoInjetada(){ return receitaOlhoIrritadoInjetada; },
-  set receitaOlhoIrritadoInjetada(v){ receitaOlhoIrritadoInjetada = v; },
-  get dilatacaoDetectada()       { return dilatacaoDetectada; },
-  set dilatacaoDetectada(v)      { dilatacaoDetectada = v; },
-  get consultaEncerradaDetectada(){ return consultaEncerradaDetectada; },
-  set consultaEncerradaDetectada(v){ consultaEncerradaDetectada = v; },
-  get despedidaNaSessao()        { return despedidaNaSessao; },
-  set despedidaNaSessao(v)       { despedidaNaSessao = v; },
-  get fase2DilatacaoAtiva()      { return fase2DilatacaoAtiva; },
-  set fase2DilatacaoAtiva(v)     { fase2DilatacaoAtiva = v; },
-  get lastTriggerTime()          { return lastTriggerTime; },
-  set lastTriggerTime(v)         { lastTriggerTime = v; },
-};
+const HOOK_STATE = {};
+for (const _flagName of Object.keys(SESSION_FLAG_DEFAULTS)) {
+  Object.defineProperty(HOOK_STATE, _flagName, {
+    get: () => SessionFlags[_flagName],
+    set: (v) => { SessionFlags[_flagName] = v; },
+    enumerable: true,
+  });
+}
+// lastTriggerTime (cooldown unificado) não é flag de sessão — ponte manual
+// para a variável em sidepanel-constants.js.
+Object.defineProperty(HOOK_STATE, 'lastTriggerTime', {
+  get: () => lastTriggerTime,
+  set: (v) => { lastTriggerTime = v; },
+  enumerable: true,
+});
 
 // ============================================================================
 // HOOKS REGISTRADOS
@@ -62,8 +47,9 @@ const HOOK_STATE = {
 //   20–29 → inject sem bloqueio mútuo (olho irritado)
 //   50    → stop de dilatação (pausa, não fim de consulta)
 //   98    → stop forçado (STOP_FORCAR_COMMANDS — ordem explícita, ignora o gate)
-//   99    → stop global (STOP_COMMANDS fortes + STOP_COMMANDS_CURTOS e
-//           STOP_SAUDACAO_COMMANDS ancorados no fim da fala)
+//   99    → stop global (STOP_COMMANDS fortes + STOP_COMMANDS_ANCORADOS,
+//           STOP_COMMANDS_CURTOS e STOP_SAUDACAO_COMMANDS ancorados no fim
+//           da fala, com cancelamento se a fala continuar)
 //
 // GATE DE CAPTURA (requireCaptura): os stops de FIM DE CONSULTA só encerram
 // a gravação se conduta E tratamento já tiverem sido ditados na fala
@@ -106,6 +92,16 @@ const VOICE_HOOKS = [
     commands: LIO_COMMANDS,
     guard: (s) => s.lioDetectada,
     onMatch: (text, s) => {
+      // Veto do TIPO da cirurgia (caso real 2026-09-02): "operou o olho"/"operei os
+      // olhos" são formas genéricas da lista — não dizem de QUÊ. A paciente daquela
+      // consulta tinha sido operada de PTERÍGIO nos dois olhos, e a lente inferida
+      // daí escreveria pseudofacia em olho fácico (e apagaria a presbiopia dela pelo
+      // veto de pseudofacia bilateral). Quando a fala nomeia outra cirurgia e não
+      // cita catarata/lente, a lente não pode ser inferida.
+      if (typeof cirurgiaNomeadaNaoCatarata === 'function' && cirurgiaNomeadaNaoCatarata(text)) {
+        console.log('[Hook] LIO NÃO marcada — a fala nomeia outra cirurgia (não catarata)');
+        return null;
+      }
       s.lioDetectada = true;
       console.log('[Hook] Flag: LIO detectada');
       return { statusMessage: 'LIO detectada!', statusColor: '#eab308' };
@@ -165,11 +161,26 @@ const VOICE_HOOKS = [
     type: 'inject',
     priority: 11,
     commands: EXAMES_NORMAIS_COMMANDS,
+    // "vamos ver se os exames estão normais" é intenção, não resultado.
+    bloqueiaCondicional: true,
     guard: (s) => s.examesNormaisInjetados || s.dilatacaoDetectada,
     inject: () => injectExamesNormaisDirect(),
     onMatch: (text, s) => {
       s.examesNormaisInjetados = true;
-      s.fundoscopiaDetectada = text.includes('fundo') || text.includes('fundoscop');
+      // O que decide se o FUNDO entra é o ESCOPO da declaração, não a palavra
+      // "fundo" estar presente. A lista tem frases de escopo global ("exames
+      // estão todos normais", "seus olhos estão normais", "sem nenhuma
+      // alteração") e frases restritas ao segmento anterior ("biomicroscopia
+      // sem alterações") — só as segundas devem suprimir a fundoscopia.
+      // Antes, exigir o token "fundo" fazia toda declaração global cair no ramo
+      // restrito: a mesma classe de falha do log 2026-08-05 (o médico declarou
+      // os exames normais e o campo de fundoscopia ficou vazio), agravada aqui
+      // porque `examesNormaisInjetados` faz o injectAll pular o bloco de exames
+      // depois — ninguém corrige a omissão.
+      const _soAnterior =
+        (text.includes('biomicroscopia') || text.includes('segmento anterior')) &&
+        !text.includes('fundo') && !text.includes('fundoscop');
+      s.fundoscopiaDetectada = !_soAnterior;
       s.lastTriggerTime = Date.now();
       return {
         statusMessage: s.fundoscopiaDetectada
@@ -210,12 +221,17 @@ const VOICE_HOOKS = [
     // consulta está em fim/encerrada — um "vamos dilatar" agora provavelmente
     // se refere a outra pessoa (acompanhante/próximo paciente), não ao paciente
     // atual. Não sequestrar a consulta encerrada com uma pausa de dilatação.
-    // fase2DilatacaoAtiva: esta sessão é o RETORNO de uma dilatação — frases
-    // retrospectivas ("já dilatou", "pinguei o colírio para dilatar") não são
-    // anúncio de nova pausa. Uma nova dilatação real nesta fase é coberta pelo
-    // fallback onstop (parada manual), que varre a cauda do texto.
-    guard: (s) => s.dilatacaoDetectada || s.despedidaNaSessao || s.fase2DilatacaoAtiva,
+    // fase2DilatacaoAtiva: esta sessão é o RETORNO de uma dilatação. NÃO
+    // suprimimos mais o hook por completo (isso matava a pausa quando a
+    // gravação seguinte era um PACIENTE DIFERENTE, e não o retorno — caso real
+    // 2026-07-17, dois irmãos em sequência). Em vez de bloquear, restringimos o
+    // match à CAUDA da fala (fase2TailOnly) — narração retrospectiva espalhada
+    // pelo transcript ("já dilatou", "pinguei o colírio para dilatar") não
+    // conta; só um comando dito agora, no fim, dispara. Espelha o slice(-300)
+    // dos fallbacks onstop/pós-Gemini e a regra dos combos.
+    guard: (s) => s.dilatacaoDetectada || s.despedidaNaSessao,
     multiSource: true,
+    fase2TailOnly: true,
     onMatch: (text, s) => {
       s.dilatacaoDetectada = true;
       console.log('[Hook] DILATAÇÃO detectada — stop agendado (pausa, não fim de consulta)');
@@ -264,6 +280,32 @@ const VOICE_HOOKS = [
       s.consultaEncerradaDetectada = true;
       console.log('[Hook] STOP detectado');
       return { statusMessage: 'Comando detectado! Parando...', statusColor: '#16a34a' };
+    },
+  },
+
+  {
+    id: 'stop_ancorado',
+    type: 'stop',
+    priority: 99,
+    commands: STOP_COMMANDS_ANCORADOS,
+    cooldown: 0,
+    // Frases de encerramento que também são ditado de conduta ("pode trocar os
+    // oculos", "retorno em seis meses") ou entrega de documento ("declaracao de
+    // comparecimento"). Na lista forte elas paravam a gravação NO MEIO da
+    // consulta: o próprio texto satisfaz o gate de captura. endAnchored: só
+    // valem como despedida quando são a ÚLTIMA coisa dita — se a fala
+    // continuar, o stop é cancelado (mesma mecânica dos STOP curtos).
+    endAnchored: true,
+    stopDelay: 2000,
+    requireCaptura: true,
+    guard: (s) => s.consultaEncerradaDetectada,
+    onMatch: (text, s) => {
+      s.consultaEncerradaDetectada = true;
+      console.log('[Hook] STOP ancorado detectado (aguardando confirmação por silêncio)');
+      return { statusMessage: 'Encerramento detectado! Parando em 2s — fale para cancelar', statusColor: '#16a34a' };
+    },
+    onCancel: (s) => {
+      s.consultaEncerradaDetectada = false;
     },
   },
 

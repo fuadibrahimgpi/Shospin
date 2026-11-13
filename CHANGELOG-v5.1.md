@@ -1,3 +1,97 @@
+# CHANGELOG — v5.1.5
+
+## Correções de segurança clínica (2026-07-21, a partir do log de 4 consultas)
+
+### Presbiopia (H52.4) era removida do diagnóstico em 3 de 3 consultas
+
+`_guardPresbiopiaObrigatoria` (`src/DecisionEngine.js`) falhava por **duas**
+razões independentes, ambas exigindo correção:
+
+1. **Plural.** O padrão era `/multifocal/`, mas a frase canônica que o prompt
+   manda emitir é *"Prescrição de óculos **multifocais**"* — e `multifocais`
+   não contém `multifocal`. O guard nunca reconhecia a própria conduta do
+   sistema. Os testes PRES-1..8 passavam porque usavam o singular: drift
+   entre teste e produção. Agora `/multifoca(?:l|is)|bifoca(?:l|is)|progressiv/`,
+   com o teste `[PRES-13]` travando a sincronia prompt↔guard.
+2. **Evidência de "perto" lexical demais.** Exigia o token `oculos` a ≤6
+   palavras de `perto`. Na fala real o médico explica o multifocal sem repetir
+   "óculos" (*"tem grau de longe perto junto"*). A evidência agora aceita
+   também a dupla longe+perto e o vocabulário de leitura (óculos de farmácia,
+   para ler). Menção explícita de "presbiopia" passou a bastar sozinha.
+
+O AND foi preservado: "óculos para perto" isolado continua insuficiente
+(`PRES-6`), e multifocal declarado só para longe também (`PRES-7`).
+
+### Fase 2 pós-dilatação laudava exames que não foram descritos
+
+Novo `_guardExamesNormaisFase2` (Guard 7). Na consulta das 13:39 a fase 2 teve
+37 palavras, nenhuma sobre fundo de olho, e `injectExamesNormais` saiu `true`:
+o LLM se apoiou em *"o resto tá tudo em paz com olho"*, dito **antes** da
+dilatação. A dilatação existe justamente para ver o fundo.
+
+O guard varre **apenas** o trecho após o marcador `[RETORNO DA DILATACAO]`. Se
+a fase 2 não descreve os exames, derruba `injectExamesNormais` e a
+`fundoscopia`. Perder uma biomicroscopia legítima da fase 1 (o médico redigita)
+é preferível a fabricar fundoscopia. Testes `[F2-1]`..`[F2-4]`.
+
+
+Fila de pausas de dilatação multi-paciente ("sala de espera"). Atende a rotina
+real do consultório: o paciente sai para dilatar e OUTRAS consultas acontecem
+enquanto o colírio faz efeito — inclusive outras dilatações. A extensão nunca
+fica em stand-by esperando o retorno.
+
+## Versão
+
+- `manifest.json` e `package.json`: `5.1.4` → **5.1.5**.
+
+## Nova lógica — fila `_shospDilatacaoPausas` (`scripts/dilatacao-pausas.js`, novo)
+
+- Cada pausa de dilatação (ou de exame) vira um **slot independente** na fila
+  persistida em `chrome.storage.local` (TTL 6h por slot), com a identidade do
+  prontuário aberto (URL/título da aba) capturada na hora da pausa.
+- O painel renderiza a **sala de espera** (`renderDilatacaoPausas`): uma linha
+  por paciente pausado, com rótulo (tipo + hora + nome da aba), botão
+  **Retomar** próprio e **✕** para descartar. Slot armado vira linha verde com
+  **Desarmar**.
+- Retomada é **exclusiva** (armar um slot desarma os demais) e **opt-in**
+  (sem clique, toda gravação é paciente novo — preserva o fix de 2026-07-17).
+- Migração automática: a chave legada `_shospDilatacaoPhase1` é convertida em
+  slot na primeira leitura e removida.
+
+## Defeitos corrigidos (modelo antigo de chave única)
+
+1. **Injeção intercalada apagava a pausa de quem esperava** — o ramo `else`
+   pós-sucesso do `injectAll` removia `_shospDilatacaoPhase1`
+   incondicionalmente; a consulta completa de um paciente atendido no meio da
+   espera destruía a fase 1 do paciente dilatando (o botão "retomar" sumia).
+   Agora o consumo remove **só o slot armado**, e apenas quando a injeção de
+   ÁUDIO da fase 2 acontece (injeção só de câmera no meio da fase 2 preserva).
+2. **Segunda dilatação sobrescrevia a primeira** — com um único slot, dois
+   pacientes dilatando ao mesmo tempo perdiam a fase 1 do primeiro. Agora cada
+   pausa nasce em slot próprio; a fila comporta N pacientes.
+
+## Mudanças de comportamento
+
+- **Limpar** manual agora apenas DESARMA retomadas pendentes; as pausas dos
+  demais pacientes ficam na fila (descarte individual pelo ✕). Antes apagava a
+  única pausa persistida.
+- Pausa com `motivo='exame'` (parada manual no meio do exame — paciente segue
+  na sala) nasce **armada**: a gravação seguinte continua a mesma consulta sem
+  clique extra. Dilatação continua exigindo o clique em Retomar.
+- Sanidade anti-contaminação: se o prontuário aberto na injeção da fase 2
+  difere do prontuário onde a pausa nasceu, um aviso é logado no console.
+- "Não era dilatação — reprocessar" age sobre a pausa MAIS RECENTE da fila.
+
+## Testes
+
+- 10 testes novos em `utils/integration-test.js`: `[DILQ-SRC-1..3]`
+  (âncoras de código dos fixes) e `[DILQ-1..7]` (comportamentais, com
+  `chrome.storage` mockado: coexistência de slots, exclusividade da retomada,
+  remoção seletiva, migração da chave legada, TTL, desarme sem perda, pausa de
+  exame armada). Runner ganhou suporte a testes assíncronos (`testAsync`).
+
+---
+
 # CHANGELOG — v5.1.2
 
 Patch de segurança clínica. Sem mudanças em runtime JS, sem alterações em

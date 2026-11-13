@@ -49,20 +49,17 @@ function stopRecording() { _injectCounts.stop++; isRecording = false; }
 
 `;
 
-// Bridge: exposta ao escopo do vm via var, acessa os let do constants.js
-// Definida DEPOIS dos módulos para garantir que os lets já existem.
+// Bridge: exposta ao escopo do vm via var. As flags de sessão delegam a
+// SessionFlags (acessores GERADOS do registro canônico — flag nova entra
+// automaticamente); as demais variáveis (lets de constants.js e mocks)
+// continuam com acessores manuais.
+// Definida DEPOIS dos módulos para garantir que os bindings já existem.
 const BRIDGE_SRC = `
 var _BRIDGE = {
   get stopCommandTimeout()  { return stopCommandTimeout; },
   set stopCommandTimeout(v) { stopCommandTimeout = v; },
   get isRecording()         { return isRecording; },
   set isRecording(v)        { isRecording = v; },
-  get dilatacaoDetectada()  { return dilatacaoDetectada; },
-  set dilatacaoDetectada(v) { dilatacaoDetectada = v; },
-  get examesNormaisInjetados()  { return examesNormaisInjetados; },
-  set examesNormaisInjetados(v) { examesNormaisInjetados = v; },
-  get blefariteInjetada()  { return blefariteInjetada; },
-  set blefariteInjetada(v) { blefariteInjetada = v; },
   get lastTriggerTime()    { return lastTriggerTime; },
   set lastTriggerTime(v)   { lastTriggerTime = v; },
   get sessionStartTime()   { return sessionStartTime; },
@@ -75,45 +72,35 @@ var _BRIDGE = {
     stopPendingInfo        = null;
     stopGateOffset         = 0;
     stopGateBlockCount     = 0;
-    examesNormaisInjetados = false;
-    blefariteInjetada      = false;
-    receitaOlhoIrritadoInjetada = false;
-    catarataDetectada      = false;
-    catarataGrau           = null;
-    lioDetectada           = false;
-    opacidadeCapsulaDetectada = false;
-    lenteLimpaDetectada    = false;
-    dilatacaoDetectada     = false;
-    fundoscopiaDetectada   = false;
-    consultaEncerradaDetectada = false;
-    despedidaNaSessao      = false;
-    fase2DilatacaoAtiva    = false;
+    Object.assign(SessionFlags, SESSION_FLAG_DEFAULTS);
     lastTriggerTime        = 0;
     isRecording            = true;
     recentTextBuffer       = '';
     sessionStartTime       = Date.now() - 600000;
   },
-  get catarataDetectada()        { return catarataDetectada; },
-  set catarataDetectada(v)       { catarataDetectada = v; },
-  get catarataGrau()             { return catarataGrau; },
-  set catarataGrau(v)            { catarataGrau = v; },
-  get lioDetectada()             { return lioDetectada; },
-  set lioDetectada(v)            { lioDetectada = v; },
-  get opacidadeCapsulaDetectada()  { return opacidadeCapsulaDetectada; },
-  set opacidadeCapsulaDetectada(v) { opacidadeCapsulaDetectada = v; },
-  get lenteLimpaDetectada()        { return lenteLimpaDetectada; },
-  set lenteLimpaDetectada(v)       { lenteLimpaDetectada = v; },
   SESSION_FLAG_DEFAULTS: SESSION_FLAG_DEFAULTS,
+  SessionFlags: SessionFlags,
   StateManager: StateManager,
   HOOK_STATE: HOOK_STATE,
   shospState: window.__shospState,
   getBiomicroscopiaComLente: getBiomicroscopiaComLente,
   parseCatarataFromDiagnostico: parseCatarataFromDiagnostico,
+  parsePseudofaciaFromDados: parsePseudofaciaFromDados,
+  temAchadoAnteriorNoDiagnostico: temAchadoAnteriorNoDiagnostico,
+  temAchadoPosteriorNoDiagnostico: temAchadoPosteriorNoDiagnostico,
   BIOMICROSCOPIA_NORMAL: BIOMICROSCOPIA_NORMAL,
   BIOMICROSCOPIA_BLEFARITE: BIOMICROSCOPIA_BLEFARITE,
   normalizeText: normalizeText,
   runHooks: runHooks,
 };
+// Acessores das flags de sessão — gerados do registro canônico.
+for (const _flagName of Object.keys(SESSION_FLAG_DEFAULTS)) {
+  Object.defineProperty(_BRIDGE, _flagName, {
+    get: () => SessionFlags[_flagName],
+    set: (v) => { SessionFlags[_flagName] = v; },
+    enumerable: true,
+  });
+}
 `;
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -230,8 +217,8 @@ test('[STOP-2] "pode ir na recepção" → após timeout, chama stopRecording', 
   expect(ctx._BRIDGE.isRecording).toBe(false);
 });
 
-test('[STOP-3] "algo que eu possa ajudar" agenda stop', () => {
-  speak('algo que eu possa ajudar');
+test('[STOP-3] "algo mais que eu possa ajudar" agenda stop', () => {
+  speak('algo mais que eu possa ajudar');
   expect(ctx._BRIDGE.stopCommandTimeout).not.toBe(null);
 });
 
@@ -240,8 +227,8 @@ test('[STOP-4] "até a próxima consulta" agenda stop', () => {
   expect(ctx._BRIDGE.stopCommandTimeout).not.toBe(null);
 });
 
-test('[STOP-5] "qualquer dúvida me liga" agenda stop', () => {
-  speak('qualquer dúvida me liga');
+test('[STOP-5] "pode passar no balcão" agenda stop', () => {
+  speak('pode passar no balcão');
   expect(ctx._BRIDGE.stopCommandTimeout).not.toBe(null);
 });
 
@@ -273,9 +260,86 @@ test('[STOP-10] stop não cria segunda entrada na fila de timeouts', () => {
   expect(_timeoutCallbackQueue.length).toBe(countAfterFirst);
 });
 
-test('[STOP-11] "ficou alguma dúvida" agenda stop', () => {
-  speak('ficou alguma dúvida');
+test('[STOP-11] "passe no balcão" agenda stop (caso real 2026-07-16)', () => {
+  speak('a receita está pronta passe no balcão');
   expect(ctx._BRIDGE.stopCommandTimeout).not.toBe(null);
+});
+
+test('[STOP-12] "paga lá no balcão" agenda stop', () => {
+  speak('está tudo certo paga lá no balcão');
+  expect(ctx._BRIDGE.stopCommandTimeout).not.toBe(null);
+});
+
+test('[STOP-13] "ajudar" sem "mais" NÃO agenda stop (removidas na revisão 2026-07-16)', () => {
+  speak('algo que eu possa ajudar na sua adaptação é explicar como usar a lente');
+  expect(ctx._BRIDGE.stopCommandTimeout).toBe(null);
+});
+
+// ──────────────────────────────────────────────────────────────────────────────
+// STOP ANCORADO — frases de conduta só encerram quando são a ÚLTIMA coisa dita
+// (revisão 2026-07-16: na lista forte elas paravam a gravação NO MEIO da
+// consulta, porque o próprio texto satisfaz o gate de captura)
+// ──────────────────────────────────────────────────────────────────────────────
+
+test('[ANC-1] "pode trocar os óculos" no MEIO da fala NÃO agenda stop', () => {
+  speak('pode trocar os óculos se quiser mas antes deixa eu medir a sua pressão');
+  expect(ctx._BRIDGE.stopCommandTimeout).toBe(null);
+});
+
+test('[ANC-2] "pode trocar os óculos" no FIM da fala agenda stop e encerra', () => {
+  speak('está tudo certo pode trocar os óculos');
+  expect(ctx._BRIDGE.stopCommandTimeout).not.toBe(null);
+  flushTimeouts();
+  expect(ctx._BRIDGE.isRecording).toBe(false);
+});
+
+test('[ANC-3] stop ancorado é CANCELADO se a fala continuar após a frase', () => {
+  speak('está tudo certo pode trocar os óculos');
+  expect(ctx._BRIDGE.stopCommandTimeout).not.toBe(null);
+  speak('está tudo certo pode trocar os óculos porque o grau mudou e eu vou medir de novo');
+  expect(ctx._BRIDGE.stopCommandTimeout).toBe(null);
+  expect(ctx._BRIDGE.consultaEncerradaDetectada).toBe(false);
+});
+
+test('[ANC-4] "retorno em seis meses" ditado no meio da conduta NÃO para a gravação', () => {
+  speak('a conduta é retorno em seis meses e vou passar um lubrificante para usar duas vezes ao dia');
+  expect(ctx._BRIDGE.stopCommandTimeout).toBe(null);
+});
+
+test('[ANC-5] "declaração de comparecimento" no fim da fala agenda stop', () => {
+  speak('vou deixar pronta a sua declaração de comparecimento');
+  expect(ctx._BRIDGE.stopCommandTimeout).not.toBe(null);
+});
+
+// ──────────────────────────────────────────────────────────────────────────────
+// GATE — conduta de PROCEDIMENTO em consultório satisfaz conduta E tratamento
+// (caso real 2026-07-16: excisão de calázio "vou resolver isso aqui" não tinha
+// marcador; a despedida seria bloqueada com "falta ditar CONDUTA e TRATAMENTO")
+// ──────────────────────────────────────────────────────────────────────────────
+
+test('[GATE-PROC-1] "vou resolver isso aqui" satisfaz conduta E tratamento no gate', () => {
+  const r = ctx.ClinicalTriggers.checkCondutaTratamentoCaptados(
+    'esse carocinho é um cisto eu vou resolver isso aqui no consultório mesmo'
+  );
+  expect(r.conduta).toBe(true);
+  expect(r.tratamento).toBe(true);
+  expect(r.ok).toBe(true);
+});
+
+test('[GATE-PROC-2] consulta de calázio resolvida em consultório + balcão → stop sem bloqueio', () => {
+  speakSemCaptura(
+    'esse carocinho e um cisto eu vou resolver isso aqui agora prontinho resolvido o seu problema pode passar no balcao'
+  );
+  expect(ctx._BRIDGE.stopCommandTimeout).not.toBe(null);
+  flushTimeouts();
+  expect(ctx._BRIDGE.isRecording).toBe(false);
+});
+
+test('[STOP-11] "ficou alguma dúvida" NÃO agenda stop (pergunta aberta removida 2026-07-15)', () => {
+  // Perguntas abertas sem ação/destino aparecem no meio da explicação e
+  // cortariam a gravação antes do fim real da consulta.
+  speak('ficou alguma dúvida');
+  expect(ctx._BRIDGE.stopCommandTimeout).toBe(null);
 });
 
 test('[STOP-12] "tudo bom então" agenda stop', () => {
@@ -336,6 +400,52 @@ test('[STOP-CURTO-5] stop curto confirmado por silêncio chama stopRecording', (
   speak('então é isso até logo');
   flushTimeouts();
   expect(ctx._injectCounts.stop).toBe(1);
+  expect(ctx._BRIDGE.isRecording).toBe(false);
+});
+
+// Despedida em cadeia — caso real 2026-07-17: "ta bom entao ate daqui a
+// pouquinho obrigada" cancelava o stop e nada re-disparava; precisou do
+// "consulta encerrada" forçado. Continuação de despedida deve PRORROGAR.
+
+test('[STOP-CURTO-6] cadeia de despedida PRORROGA o stop em vez de cancelar (caso real 2026-07-17)', () => {
+  speak('tá bom então');
+  expect(ctx._BRIDGE.stopCommandTimeout).not.toBe(null);
+  speak('tá bom então até daqui a pouquinho obrigada');
+  expect(ctx._BRIDGE.stopCommandTimeout).not.toBe(null); // prorrogado, não cancelado
+  flushTimeouts();
+  expect(ctx._injectCounts.stop).toBe(1);
+  expect(ctx._BRIDGE.isRecording).toBe(false);
+});
+
+test('[STOP-CURTO-7] cadeia de despedida seguida de conteúdo clínico CANCELA', () => {
+  speak('tá bom então');
+  speak('tá bom então até daqui a pouquinho obrigada'); // prorroga
+  speak('tá bom então até daqui a pouquinho obrigada deixa eu ver a pressão'); // cancela
+  expect(ctx._BRIDGE.stopCommandTimeout).toBe(null);
+  expect(ctx._BRIDGE.HOOK_STATE.consultaEncerradaDetectada).toBe(false); // onCancel desfez
+  flushTimeouts();
+  expect(ctx._BRIDGE.isRecording).toBe(true);
+});
+
+test('[STOP-CURTO-8] continuação clínica direta ainda CANCELA (sem regressão do STOP-CURTO-3)', () => {
+  speak('tá bom então');
+  speak('tá bom então agora vamos conferir o grau no aparelho');
+  expect(ctx._BRIDGE.stopCommandTimeout).toBe(null);
+});
+
+test('[STOP-ANCORADO-CADEIA-1] "declaração de comparecimento" + conteúdo não-despedida CANCELA', () => {
+  speak('ela pode pegar a declaração de comparecimento');
+  expect(ctx._BRIDGE.stopCommandTimeout).not.toBe(null);
+  speak('ela pode pegar a declaração de comparecimento para alguma atividade física');
+  expect(ctx._BRIDGE.stopCommandTimeout).toBe(null);
+});
+
+test('[STOP-SAUDACAO-CADEIA-1] "bom dia" seguido de "tchau tchau" mantém o stop agendado', () => {
+  speak('tá certo obrigada bom dia');
+  expect(ctx._BRIDGE.stopCommandTimeout).not.toBe(null);
+  speak('tá certo obrigada bom dia tchau tchau');
+  expect(ctx._BRIDGE.stopCommandTimeout).not.toBe(null);
+  flushTimeouts();
   expect(ctx._BRIDGE.isRecording).toBe(false);
 });
 
@@ -418,9 +528,64 @@ test('[DIL-ENCERR-2] sem despedida, a MESMA frase de dilatação dispara normalm
   expect(ctx._BRIDGE.dilatacaoDetectada).toBe(true);
 });
 
+test('[DIL-ENCERR-3] despedida endAnchored ("até mais") NÃO trava despedidaNaSessao', () => {
+  // 2026-07-17: "bom dia"/"até mais" (endAnchored, canceláveis) marcavam
+  // despedidaNaSessao já no match; se a fala continuava e o stop era cancelado,
+  // a flag ficava presa e suprimia em silêncio uma dilatação legítima depois.
+  // Agora só despedida FORTE/não-cancelável é sticky de imediato.
+  speak('ok então até mais');
+  expect(ctx._BRIDGE.HOOK_STATE.despedidaNaSessao).toBe(false);
+  // A fala continua com uma dilatação real → deve disparar (cancela o stop curto).
+  speak('vou dilatar a pupila');
+  expect(ctx._BRIDGE.dilatacaoDetectada).toBe(true);
+});
+
 test('[DIL-2] "pode esperar lá fora" → dilatacaoDetectada=true', () => {
   speak('pode esperar lá fora');
   expect(ctx._BRIDGE.dilatacaoDetectada).toBe(true);
+});
+
+test('[DIL-AREM-1] infinitivo pessoal plural "esperarem lá fora" → dilatacaoDetectada=true', () => {
+  // Log 2026-07-29 (criança + acompanhante): a fala terminou em
+  // "...esperarem lá fora um pouquinho vou colher de fazer efeito para dilatar
+  // em seguida a gente acaba usando óculos tá bom obrigada" e NADA disparou.
+  // 'esperar la fora' não casa "esperarem la fora" por substring.
+  speak('vocês vão esperarem lá fora um pouquinho');
+  expect(ctx._BRIDGE.dilatacaoDetectada).toBe(true);
+});
+
+test('[DIL-AREM-2] "ficarem/sentarem/aguardarem lá fora" também disparam', () => {
+  for (const frase of ['podem ficarem lá fora',
+                       'podem sentarem ali fora',
+                       'vão aguardarem aqui fora']) {
+    ctx._BRIDGE.resetFlags();
+    ctx._BRIDGE.stopCommandTimeout = null; // resetFlags não limpa o stop agendado (ver DIL-4)
+    speak(frase);
+    expect(ctx._BRIDGE.dilatacaoDetectada).toBe(true);
+  }
+});
+
+test('[DIL-EFEITO-1] "fazer efeito para dilatar" dispara mesmo sem a palavra "colírio"', () => {
+  // Mesmo log: o ASR transformou "vou colocar o colírio" em "vou colher",
+  // derrubando o combo ['colirio','dilatar'] — e nada mais casava a frase.
+  speak('vou colher de fazer efeito para dilatar');
+  expect(ctx._BRIDGE.dilatacaoDetectada).toBe(true);
+});
+
+test('[DIL-LOG-2026-07-29] cauda real do log dispara DILATAÇÃO (e não o stop de fim de consulta)', () => {
+  // Cauda exata registrada no console (slice(-120)), com o "esper" recomposto:
+  // a fala junta o envio para fora, a aplicação do dilatador E a despedida.
+  // Nada disparou no dia. A dilatação (prioridade 50) tem de vencer o stop (99):
+  // é pausa, não fim de consulta — conduta/tratamento vêm na fase 2.
+  speak('esperarem la fora um pouquinho vou colher de fazer efeito para dilatar ' +
+        'em seguida a gente acaba usando oculos ta bom obrigada');
+  expect(ctx._BRIDGE.dilatacaoDetectada).toBe(true);
+  expect(ctx._BRIDGE.consultaEncerradaDetectada).toBe(false);
+});
+
+test('[DIL-EFEITO-2] "fazer efeito" de medicação SEM dilatar NÃO dispara (sem falso positivo)', () => {
+  speak('esse colírio leva uns vinte minutos para fazer efeito use de oito em oito horas');
+  expect(ctx._BRIDGE.dilatacaoDetectada).toBe(false);
 });
 
 test('[DIL-3] "vou pedir para esperar lá fora" → stop agendado', () => {
@@ -591,11 +756,39 @@ test('[DIL-STT-2] "lata" + "aparelho" sem contexto cirúrgico NÃO dispara se em
 // TESTES FASE 2 DE DILATAÇÃO + FALSOS POSITIVOS RETROSPECTIVOS (2026-07-09)
 // ──────────────────────────────────────────────────────────────────────────────
 
-test('[DIL-FASE2-1] fase2DilatacaoAtiva suprime o hook de dilatação ("vou dilatar" não pausa)', () => {
+test('[DIL-FASE2-1] fase2: comando FRESCO na cauda ("vou dilatar" no fim) AINDA pausa', () => {
+  // Contrato novo (2026-07-17): fase2 não suprime mais o hook por completo —
+  // só restringe o match à cauda. Um "vou dilatar" dito agora, no fim da fala,
+  // é uma pausa real (paciente diferente, ou nova dilatação do mesmo) e dispara.
   ctx._BRIDGE.StateManager.setHookFlag('fase2DilatacaoAtiva', true);
   speak('vou dilatar agora');
+  expect(ctx._BRIDGE.dilatacaoDetectada).toBe(true);
+});
+
+test('[DIL-FASE2-1b] fase2: narração retrospectiva LONGE da cauda NÃO pausa', () => {
+  // "vou dilatar" enterrado no meio do transcript acumulado, com >300 chars até
+  // o fim (fora do recentTextBuffer) — narração do retorno, não nova pausa.
+  ctx._BRIDGE.StateManager.setHookFlag('fase2DilatacaoAtiva', true);
+  const normFinal = ctx._BRIDGE.normalizeText('ja dilatou vou dilatar ' + 'a'.repeat(400) + ' otimo pupila reagente');
+  const buf = normFinal.slice(-300);
+  ctx._BRIDGE.runHooks(normFinal, normFinal, buf);
   expect(ctx._BRIDGE.dilatacaoDetectada).toBe(false);
-  expect(ctx._BRIDGE.stopCommandTimeout).toBe(null);
+});
+
+test('[DIL-FASE2-LIMIT] LIMITAÇÃO CONHECIDA: narração retrospectiva NA CAUDA ainda pausa em fase2', () => {
+  // O tail-scan restaura o disparo ao vivo de um comando FRESCO (o bug do
+  // paciente diferente, 2026-07-17), mas NÃO distingue narração retrospectiva
+  // de comando novo quando a frase é dita AGORA, no fim da fala: ao vivo, a
+  // narração do retorno também está na cauda no momento em que é falada.
+  // Ex.: no retorno da dilatação do MESMO paciente, "já pinguei o colírio para
+  // dilatar" dispara uma pausa falsa. Recuperação: botão "Desfazer dilatação"
+  // (cancelarDilatacao). Fix definitivo = fase2 explícita por botão, não
+  // adivinhada por "próxima gravação em 6h". Este teste documenta o
+  // comportamento atual — se ele mudar (ex.: heurística de tempo verbal ou
+  // fase2 opt-in), reavaliar a asserção.
+  ctx._BRIDGE.StateManager.setHookFlag('fase2DilatacaoAtiva', true);
+  speakSemCaptura('deixa eu ver o fundo ja pinguei o colirio para dilatar');
+  expect(ctx._BRIDGE.dilatacaoDetectada).toBe(true);
 });
 
 test('[DIL-FASE2-2] sem fase2, "vou dilatar" continua pausando normalmente', () => {
@@ -708,7 +901,7 @@ test('[NO-AUTO-2] "consegue ver melhor assim ou assim" não dispara stop no hook
 // ──────────────────────────────────────────────────────────────────────────────
 
 test('[STOP-FALLBACK-1] frase forte em qualquer posição → encerramento detectado', () => {
-  const t = 'qualquer dúvida me liga e a gente conversa sobre o resultado dos exames depois';
+  const t = 'qualquer dúvida me procura e a gente conversa sobre o resultado dos exames depois';
   expect(ctx.ClinicalTriggers.detectaEncerramentoNaFala(t)).toBe(true);
 });
 
@@ -743,8 +936,8 @@ test('[REGRESSION-STOP-1] "pode ir na recepção" ainda agenda stop (regressão)
   expect(ctx._BRIDGE.isRecording).toBe(false);
 });
 
-test('[REGRESSION-STOP-2] "qualquer dúvida me liga" ainda agenda stop (regressão)', () => {
-  speak('qualquer dúvida me liga');
+test('[REGRESSION-STOP-2] "qualquer dúvida me procura" ainda agenda stop (regressão)', () => {
+  speak('qualquer dúvida me procura');
   expect(ctx._BRIDGE.stopCommandTimeout).not.toBe(null);
 });
 
@@ -958,6 +1151,42 @@ noiseTest('[NOISE-4] _guardOculosNaConduta NÃO adiciona texto quando noiseDetec
   }
 });
 
+noiseTest('[NOISE-5] transcrição clínica com colírios (brimonidina + timolol) NÃO ativa noiseDetected nem revisao_manual', () => {
+  // Transcrição real do log 2026-10-21: retorno de glaucoma com prescrição de colírios
+  const REAL_GLAUCOMA_TRANSCRIPT = 'entao se a gente vem parafuso intencional de area em uso de brimonidina com timolol das vezes ao dia acoes quanto ao quadro retorno em quatro meses para acompanhamento medicacao primonidina continua la o duas vezes ao dia';
+  const raw = {
+    tipo_consulta: 'retorno',
+    dados: {
+      diagnostico: 'Glaucoma NE',
+      conduta: 'Manutenção da medicação atual, Explicado o quadro clínico, Retorno 4 meses',
+      tratamento: null,
+      antecedentes_familiares: null,
+      antecedentes_oftalmologicos: null,
+    },
+  };
+  const decision = DecisionEngine.buildDecision(raw, { transcribedText: REAL_GLAUCOMA_TRANSCRIPT });
+  expect(decision.clonedAIResponse.noiseDetected).toBe(undefined);
+  expect(decision.clonedAIResponse.revisao_manual).toBe(undefined);
+  expect(decision.clonedAIResponse.dados.diagnostico).toBe('Glaucoma NE');
+  expect(decision.clonedAIResponse.dados.conduta.includes('Manutenção')).toBe(true);
+});
+
+noiseTest('[NOISE-6] transcrição com lubrificantes e posologia NÃO ativa noiseDetected', () => {
+  const LUBRICANT_TRANSCRIPT = 'paciente com queixa de olho seco orientada a usar lubrificante carmelose quatro vezes ao dia e manter acompanhamento';
+  const raw = {
+    tipo_consulta: 'retorno',
+    dados: {
+      diagnostico: 'Olho seco',
+      conduta: 'Uso de colirio lubrificante',
+      tratamento: 'Carmelose 4x/dia',
+    },
+  };
+  const decision = DecisionEngine.buildDecision(raw, { transcribedText: LUBRICANT_TRANSCRIPT });
+  expect(decision.clonedAIResponse.noiseDetected).toBe(undefined);
+  expect(decision.clonedAIResponse.revisao_manual).toBe(undefined);
+  expect(decision.clonedAIResponse.dados.diagnostico).toBe('Olho seco');
+});
+
 // ──────────────────────────────────────────────────────────────────────────────
 // LENTE DINÂMICA NA BIOMICROSCOPIA — getBiomicroscopiaComLente()
 // Prioridade: opacidade cápsula > LIO > catarata > padrão.
@@ -990,6 +1219,188 @@ test('[LENTE-4] opacidade de cápsula tem prioridade máxima (acima de LIO)', ()
   ctx._BRIDGE.catarataDetectada = true;
   const out = ctx._BRIDGE.getBiomicroscopiaComLente(ctx._BRIDGE.BIOMICROSCOPIA_NORMAL);
   expect(out.includes('catarata')).toBe(false);
+});
+
+test('[LENTE-5] texto MISTO: linha com LIO escrita + linha com placeholder → placeholder NÃO vira LIO', () => {
+  // Desde 2026-08-03 o modelo escreve a lente direto na linha do olho operado.
+  // O placeholder que sobra é do olho FÁCICO — substituí-lo inventaria a cirurgia.
+  const misto = 'OD: olho calmo, córnea transparente, pseudofacia, LIO transparente e bem posicionada\n' +
+                'OE: olho calmo, córnea transparente, cristalino transparente';
+  ctx._BRIDGE.lioDetectada = true;
+  const out = ctx._BRIDGE.getBiomicroscopiaComLente(misto);
+  expect(out).toBe(misto);
+});
+
+test('[LENTE-6] lioLado=OD → só a linha do OD recebe a lente', () => {
+  const base = 'OD: olho calmo, córnea transparente, cristalino transparente\n' +
+               'OE: olho calmo, córnea transparente, cristalino transparente';
+  ctx._BRIDGE.lioDetectada = true;
+  ctx._BRIDGE.lioLado = 'OD';
+  const out = ctx._BRIDGE.getBiomicroscopiaComLente(base);
+  const [lOD, lOE] = out.split('\n');
+  expect(lOD.includes('pseudofacia')).toBe(true);
+  expect(lOD.includes('cristalino transparente')).toBe(false);
+  expect(lOE.includes('cristalino transparente')).toBe(true);
+  expect(lOE.includes('pseudofacia')).toBe(false);
+});
+
+test('[LENTE-7] lioLado unilateral + template "AO" → placeholder preservado (não bilateraliza)', () => {
+  ctx._BRIDGE.lioDetectada = true;
+  ctx._BRIDGE.lioLado = 'OE';
+  const out = ctx._BRIDGE.getBiomicroscopiaComLente(ctx._BRIDGE.BIOMICROSCOPIA_NORMAL);
+  expect(out).toBe(ctx._BRIDGE.BIOMICROSCOPIA_NORMAL);
+});
+
+test('[LENTE-8] lioLado=AO → substitui em todas as linhas (comportamento do gatilho de voz)', () => {
+  ctx._BRIDGE.lioDetectada = true;
+  ctx._BRIDGE.lioLado = 'AO';
+  const out = ctx._BRIDGE.getBiomicroscopiaComLente(ctx._BRIDGE.BIOMICROSCOPIA_BLEFARITE);
+  expect(out.includes('cristalino transparente')).toBe(false);
+  expect(out.includes('pseudofacia')).toBe(true);
+});
+
+test('[LENTE-9] caso 2026-08-05: modelo escreveu a LIO LIMPA + opacidade detectada → cápsula atualizada', () => {
+  // O guard de texto misto devolvia o texto INTACTO aqui: a flag de opacidade não
+  // tinha placeholder para trocar e o prontuário saía "LIO transparente e bem
+  // posicionada" logo depois de o médico dizer que a lente estava embaçada.
+  const base = 'AO: olho calmo, córnea transparente, câmara anterior formada, pupila regular e reagente, pseudofacia, LIO transparente e bem posicionada';
+  ctx._BRIDGE.opacidadeCapsulaDetectada = true;
+  const out = ctx._BRIDGE.getBiomicroscopiaComLente(base);
+  expect(out.includes('opacidade de cápsula posterior')).toBe(true);
+  expect(out.includes('LIO transparente')).toBe(false);
+  expect(out.includes('pseudofacia')).toBe(true);
+});
+
+test('[LENTE-10] opacidade + texto misto: só a linha pseudofácica muda, o olho fácico fica intacto', () => {
+  const misto = 'OD: olho calmo, córnea transparente, pseudofacia, LIO transparente e bem posicionada\n' +
+                'OE: olho calmo, córnea transparente, cristalino transparente';
+  ctx._BRIDGE.opacidadeCapsulaDetectada = true;
+  const [lOD, lOE] = ctx._BRIDGE.getBiomicroscopiaComLente(misto).split('\n');
+  expect(lOD.includes('opacidade de cápsula posterior')).toBe(true);
+  expect(lOE).toBe('OE: olho calmo, córnea transparente, cristalino transparente');
+});
+
+test('[LENTE-11] opacidade com lado OD → linha "AO" pseudofácica NÃO é bilateralizada', () => {
+  const base = 'AO: olho calmo, córnea transparente, pseudofacia, LIO transparente e bem posicionada';
+  ctx._BRIDGE.opacidadeCapsulaDetectada = true;
+  ctx._BRIDGE.lioLado = 'OD';
+  expect(ctx._BRIDGE.getBiomicroscopiaComLente(base)).toBe(base);
+});
+
+test('[LENTE-12] opacidade + texto que JÁ diz opacidade de cápsula → inalterado', () => {
+  const base = 'AO: olho calmo, córnea transparente, pseudofacia, opacidade de cápsula posterior';
+  ctx._BRIDGE.opacidadeCapsulaDetectada = true;
+  expect(ctx._BRIDGE.getBiomicroscopiaComLente(base)).toBe(base);
+});
+
+// ──────────────────────────────────────────────────────────────────────────────
+// PSEUDOFACIA DERIVADA DOS DADOS — parsePseudofaciaFromDados()
+// Regressão (log 2026-08-03): paciente operada de catarata AO há 1 ano, gatilho de
+// voz não disparou (fala em 1ª pessoa) e a biomicroscopia saiu "cristalino
+// transparente" num olho sem cristalino.
+// ──────────────────────────────────────────────────────────────────────────────
+
+test('[PSEUDO-1] caso real: cirurgia combinada AO em antecedentes → detected + lado AO', () => {
+  const r = ctx._BRIDGE.parsePseudofaciaFromDados({
+    antecedentes_oftalmologicos: 'Cirurgia combinada de catarata e glaucoma AO há ~1 ano. Diagnóstico de glaucoma desde 2015.',
+    diagnostico: 'H401 - Glaucoma primário ângulo aberto AO (avançado)\nH524 - Presbiopia\nH010 - Blefarite bilateral',
+  });
+  expect(r.detected).toBe(true);
+  expect(r.lado).toBe('AO');
+});
+
+test('[PSEUDO-2] regressão ponta a ponta: dados do caso real → lente deixa de ser "cristalino transparente"', () => {
+  const r = ctx._BRIDGE.parsePseudofaciaFromDados({
+    antecedentes_oftalmologicos: 'Facectomia com implante de LIO em ambos os olhos há 1 ano',
+  });
+  ctx._BRIDGE.lioDetectada = r.detected;
+  ctx._BRIDGE.lioLado = r.lado;
+  const out = ctx._BRIDGE.getBiomicroscopiaComLente(ctx._BRIDGE.BIOMICROSCOPIA_BLEFARITE);
+  expect(out.includes('cristalino transparente')).toBe(false);
+  expect(out.includes('pseudofacia')).toBe(true);
+});
+
+test('[PSEUDO-3] cirurgia PLANEJADA não é pseudofacia', () => {
+  expect(ctx._BRIDGE.parsePseudofaciaFromDados({
+    diagnostico: 'H259 - Catarata senil AO',
+    antecedentes_oftalmologicos: 'Indicada cirurgia de catarata AO',
+  }).detected).toBe(false);
+  expect(ctx._BRIDGE.parsePseudofaciaFromDados({
+    antecedentes_oftalmologicos: 'Paciente vai fazer cirurgia de catarata no olho direito',
+  }).detected).toBe(false);
+});
+
+test('[PSEUDO-4] negativa explícita não vira pseudofacia', () => {
+  expect(ctx._BRIDGE.parsePseudofaciaFromDados({
+    antecedentes_oftalmologicos: 'Nega cirurgia de catarata prévia',
+  }).detected).toBe(false);
+});
+
+test('[PSEUDO-5] lado ambíguo → detected sem lado (chamador não liga a flag)', () => {
+  const r = ctx._BRIDGE.parsePseudofaciaFromDados({
+    antecedentes_oftalmologicos: 'Cirurgia de catarata há 2 anos',
+  });
+  expect(r.detected).toBe(true);
+  expect(r.lado).toBe(null);
+});
+
+test('[PSEUDO-6] pseudofacia unilateral → lado do olho operado', () => {
+  const r = ctx._BRIDGE.parsePseudofaciaFromDados({
+    antecedentes_oftalmologicos: 'Facectomia com LIO no olho esquerdo em 2023',
+  });
+  expect(r.detected).toBe(true);
+  expect(r.lado).toBe('OE');
+});
+
+test('[PSEUDO-8] hda na voz do paciente dá o lado que os antecedentes não deram', () => {
+  const r = ctx._BRIDGE.parsePseudofaciaFromDados({
+    antecedentes_oftalmologicos: 'Facectomia bilateral',
+    hda: 'Refere que fez a cirurgia de catarata em um olho e depois o outro, há cerca de um ano',
+  });
+  expect(r.detected).toBe(true);
+  expect(r.lado).toBe('AO');
+});
+
+test('[PSEUDO-12] cirurgia SEM TIPO nos antecedentes não vira pseudofacia (caso 2026-09-02)', () => {
+  // Com o prompt corrigido o antecedente sai sem o nome do procedimento — o parser
+  // não pode "completar" a catarata que ninguém disse.
+  expect(ctx._BRIDGE.parsePseudofaciaFromDados({
+    antecedentes_oftalmologicos: 'Cirurgia ocular prévia AO há ~15 anos (tipo não especificado)'
+  }).detected).toBe(false);
+  expect(ctx._BRIDGE.parsePseudofaciaFromDados({
+    hda: 'Refere cirurgia nos dois olhos há mais de 10 anos'
+  }).detected).toBe(false);
+});
+
+test('[PSEUDO-9] cirurgia de TERCEIRO na hda não vira pseudofacia do paciente', () => {
+  expect(ctx._BRIDGE.parsePseudofaciaFromDados({
+    hda: 'Conta que a mãe operou o olho direito de catarata e ficou boa',
+  }).detected).toBe(false);
+});
+
+test('[PSEUDO-10] veto de futuro é REGENTE — "aguarda YAG" não apaga a facectomia da mesma linha', () => {
+  const r = ctx._BRIDGE.parsePseudofaciaFromDados({
+    antecedentes_oftalmologicos: 'Facectomia AO em 2025; aguarda capsulotomia YAG',
+  });
+  expect(r.detected).toBe(true);
+  expect(r.lado).toBe('AO');
+});
+
+test('[PSEUDO-11] pseudofacia OD + cirurgia planejada do OE → detected SEM lado (não bilateraliza)', () => {
+  // Os dois olhos são citados na mesma linha, mas só um é pseudofácico: sem lado
+  // confiável a flag não é ligada e o placeholder do olho fácico sobrevive.
+  const r = ctx._BRIDGE.parsePseudofaciaFromDados({
+    antecedentes_oftalmologicos: 'Pseudofacia OD; indicada cirurgia de catarata no olho esquerdo',
+  });
+  expect(r.detected).toBe(true);
+  expect(r.lado).toBe(null);
+});
+
+test('[PSEUDO-7] paciente fácico com catarata → não detected', () => {
+  expect(ctx._BRIDGE.parsePseudofaciaFromDados({
+    diagnostico: 'H250 - Catarata senil incipiente AO',
+    biomicroscopia: 'AO: olho calmo, córnea transparente, cristalino transparente',
+  }).detected).toBe(false);
 });
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -1038,6 +1449,85 @@ test('[CAT-DX-6] diagnóstico nulo/vazio → NÃO detected (sem crash)', () => {
   expect(ctx._BRIDGE.parseCatarataFromDiagnostico('').detected).toBe(false);
 });
 
+test('[CAT-DX-7] regressão (2026-07-17): menção histórica "pós-cirurgia de catarata" → NÃO detected', () => {
+  // Caso real: paciente pseudofácica (facectomia por catarata traumática), gatilho de
+  // voz de LIO não disparou (STT quebrou "catarata" em "catara ta"). O Gemini gerou
+  // "Ambliopia OD (pós-cirurgia de catarata traumática)" e a derivação por diagnóstico
+  // marcava catarata ativa — biomicroscopia saía com "catarata" em olho já operado.
+  const dx = 'H010 - Blefarite bilateral\nH521 - Miopia AO\nH530 - Ambliopia OD (pós-cirurgia de catarata traumática)';
+  expect(ctx._BRIDGE.parseCatarataFromDiagnostico(dx).detected).toBe(false);
+  expect(ctx._BRIDGE.parseCatarataFromDiagnostico('Pseudofacia OD (operado de catarata)').detected).toBe(false);
+  expect(ctx._BRIDGE.parseCatarataFromDiagnostico('Facectomia prévia OE').detected).toBe(false);
+});
+
+test('[CAT-DX-8] catarata ativa + menção cirúrgica na mesma linha → ainda detected', () => {
+  // A remoção do contexto histórico não pode engolir um diagnóstico real de catarata:
+  // "indicada cirurgia de catarata" convive com a catarata ativa do olho fácico.
+  const r = ctx._BRIDGE.parseCatarataFromDiagnostico('H250 - Catarata senil AO — indicada cirurgia de catarata');
+  expect(r.detected).toBe(true);
+});
+
+// ──────────────────────────────────────────────────────────────────────────────
+// EXAME NORMAL vs DIAGNÓSTICO — temAchadoAnterior/PosteriorNoDiagnostico()
+// Log 2026-07-29: diagnóstico "H111 - Pterígio OD" com biomicroscopia null fez o
+// fallback de despedida injetar "AO: olho calmo" — prontuário contradizendo a si
+// mesmo. O predicado casa por TERMO e por FAIXA de CID (o modelo emitiu H111 para
+// pterígio, que na CID-10 é H11.0 — o termo não pode depender do código correto).
+// ──────────────────────────────────────────────────────────────────────────────
+
+test('[DX-EXAME-1] pterígio OD no diagnóstico → achado anterior detectado (caso real)', () => {
+  expect(ctx._BRIDGE.temAchadoAnteriorNoDiagnostico('H111 - Pterígio OD')).toBe(true);
+});
+
+test('[DX-EXAME-2] termo detecta mesmo com CID errado/ausente', () => {
+  expect(ctx._BRIDGE.temAchadoAnteriorNoDiagnostico('Pterígio nasal olho direito')).toBe(true);
+  expect(ctx._BRIDGE.temAchadoAnteriorNoDiagnostico('H160 - Úlcera de córnea OE')).toBe(true);
+});
+
+test('[DX-EXAME-3] diagnóstico só refrativo NÃO bloqueia exame normal', () => {
+  expect(ctx._BRIDGE.temAchadoAnteriorNoDiagnostico('H52.1 - Miopia\nH52.2 - Astigmatismo')).toBe(false);
+  expect(ctx._BRIDGE.temAchadoPosteriorNoDiagnostico('H52.1 - Miopia\nH52.2 - Astigmatismo')).toBe(false);
+});
+
+test('[DX-EXAME-4] catarata NÃO conta como achado anterior (lente dinâmica cobre)', () => {
+  expect(ctx._BRIDGE.temAchadoAnteriorNoDiagnostico('H250 - Catarata senil incipiente AO')).toBe(false);
+  expect(ctx._BRIDGE.temAchadoAnteriorNoDiagnostico('Z961 - Presença de lente intra-ocular')).toBe(false);
+});
+
+test('[DX-EXAME-5] achado marcado como resolvido NÃO bloqueia exame normal', () => {
+  expect(ctx._BRIDGE.temAchadoAnteriorNoDiagnostico('H109 - Conjuntivite NE (resolvida)')).toBe(false);
+});
+
+test('[DX-EXAME-5b] achado ATIVO descrito como cicatriz/prévio NÃO é filtrado', () => {
+  // Um leucoma É uma cicatriz — "cicatrizado" descreve o achado atual, não que ele
+  // passou. Filtrar essas linhas desarmaria o guard no caso que ele existe para pegar
+  // (mesmo modo de falha dos Casos 7/7c do contexto histórico da catarata).
+  expect(ctx._BRIDGE.temAchadoAnteriorNoDiagnostico('H170 - Leucoma aderente OE (cicatrizado)')).toBe(true);
+  expect(ctx._BRIDGE.temAchadoAnteriorNoDiagnostico('H111 - Pterígio OD (cirurgia prévia)')).toBe(true);
+});
+
+test('[DX-EXAME-6] resolvido + ativo na mesma lista → ativo prevalece', () => {
+  const dx = 'H109 - Conjuntivite NE (resolvida)\nH010 - Blefarite bilateral';
+  expect(ctx._BRIDGE.temAchadoAnteriorNoDiagnostico(dx)).toBe(true);
+});
+
+test('[DX-EXAME-7] achados posteriores detectados por termo e por CID', () => {
+  expect(ctx._BRIDGE.temAchadoPosteriorNoDiagnostico('H360 - Retinopatia diabética')).toBe(true);
+  expect(ctx._BRIDGE.temAchadoPosteriorNoDiagnostico('H400 - Suspeita de glaucoma')).toBe(true);
+  expect(ctx._BRIDGE.temAchadoPosteriorNoDiagnostico('Descolamento de retina OE')).toBe(true);
+});
+
+test('[DX-EXAME-8] anterior e posterior não se confundem', () => {
+  expect(ctx._BRIDGE.temAchadoPosteriorNoDiagnostico('H111 - Pterígio OD')).toBe(false);
+  expect(ctx._BRIDGE.temAchadoAnteriorNoDiagnostico('H360 - Retinopatia diabética')).toBe(false);
+});
+
+test('[DX-EXAME-9] diagnóstico vazio/null → não bloqueia', () => {
+  expect(ctx._BRIDGE.temAchadoAnteriorNoDiagnostico(null)).toBe(false);
+  expect(ctx._BRIDGE.temAchadoAnteriorNoDiagnostico('')).toBe(false);
+  expect(ctx._BRIDGE.temAchadoPosteriorNoDiagnostico(null)).toBe(false);
+});
+
 // ──────────────────────────────────────────────────────────────────────────────
 // CASO 8 (regressão): "cirurgiada de catarata" marcava catarata presente.
 // Causa: matching por substring sem fronteira de palavra — 'e catarata' casava
@@ -1049,6 +1539,26 @@ test('[CAT-DX-6] diagnóstico nulo/vazio → NÃO detected (sem crash)', () => {
 test('[CASO8-1] "cirurgiada de catarata" NÃO seta catarata e seta LIO', () => {
   speak('ela adotou desculpa ela e cirurgiada de catarata em quanto tempo');
   expect(ctx._BRIDGE.catarataDetectada).toBe(false);
+  expect(ctx._BRIDGE.lioDetectada).toBe(true);
+});
+
+test('[CASO8-10] "operou os olhos" de PTERÍGIO não seta LIO (caso real 2026-09-02)', () => {
+  // "operou/operei o olho" são formas genéricas da lista — não dizem de quê. A
+  // paciente tinha sido operada de pterígio nos dois olhos; a lente inferida daí
+  // escreveria pseudofacia em olho fácico e apagaria a presbiopia dela.
+  speak('a senhora ja operou os olhos foi de pterigio nos dois faz uns quinze anos');
+  expect(ctx._BRIDGE.lioDetectada).toBe(false);
+});
+
+test('[CASO8-12] "lente de contato" na mesma fala não cancela o veto do pterígio', () => {
+  // A palavra "lente" é ambígua (contato/óculos): se ela desfizesse o veto, o hook
+  // voltaria a escrever pseudofacia no paciente operado de pterígio.
+  speak('a senhora ja operou os olhos foi de pterigio nos dois e ja usou lente de contato alguma vez');
+  expect(ctx._BRIDGE.lioDetectada).toBe(false);
+});
+
+test('[CASO8-11] pterígio antigo + catarata operada: a evidência específica prevalece', () => {
+  speak('operei os dois olhos de pterigio e depois fiz a cirurgia de catarata tambem');
   expect(ctx._BRIDGE.lioDetectada).toBe(true);
 });
 
@@ -1082,6 +1592,51 @@ test('[CASO8-7] explicação de cirurgia FUTURA não seta LIO — catarata preva
   speak('o senhor tem catarata na cirurgia a gente tira a catarata e coloca a lente nova');
   expect(ctx._BRIDGE.catarataDetectada).toBe(true);
   expect(ctx._BRIDGE.lioDetectada).toBe(false);
+});
+
+test('[CASO8-8] Caso 7d: fala do PACIENTE em 1ª pessoa seta LIO (log 2026-08-03)', () => {
+  speak('to aqui nao vai fazer uma avaliacao no meu olho eu fiz a cirurgia de catarata que ela coma tem um ano');
+  expect(ctx._BRIDGE.lioDetectada).toBe(true);
+});
+
+test('[CASO8-9] "operei o olho" / "fui operada de catarata" também setam LIO', () => {
+  speak('doutor eu operei o olho direito ano passado');
+  expect(ctx._BRIDGE.lioDetectada).toBe(true);
+  ctx._BRIDGE.resetFlags();
+  speak('eu fui operada de catarata nos dois olhos');
+  expect(ctx._BRIDGE.lioDetectada).toBe(true);
+});
+
+// ──────────────────────────────────────────────────────────────────────────────
+// OPACIDADE DE CÁPSULA EM LINGUAGEM LEIGA (2026-08-05)
+// O médico fala "a lente tá embaçada" / "vai precisar de uma limpeza" — nunca
+// "opacidade de cápsula posterior" na frente do paciente. O passado do PACIENTE
+// ("já fiz a limpeza") continua sendo histórico e NÃO pode disparar (2026-06-18).
+// ──────────────────────────────────────────────────────────────────────────────
+
+test('[PCO-1] "a lente ta um pouquinho embacada" seta opacidade de cápsula', () => {
+  speak('deixa eu ver aqui a lente ta um pouquinho embacada mas ainda nao ta atrapalhando');
+  expect(ctx._BRIDGE.opacidadeCapsulaDetectada).toBe(true);
+});
+
+test('[PCO-2] "sujeirinha na lente" seta opacidade de cápsula', () => {
+  speak('tem uma sujeirinha na lente que da para tirar com laser');
+  expect(ctx._BRIDGE.opacidadeCapsulaDetectada).toBe(true);
+});
+
+test('[PCO-3] "vai precisar fazer uma limpeza" (futuro) seta opacidade de cápsula', () => {
+  speak('mais para frente vai precisar fazer uma limpeza com o laser');
+  expect(ctx._BRIDGE.opacidadeCapsulaDetectada).toBe(true);
+});
+
+test('[PCO-4] REGRESSÃO 2026-06-18: "ja fiz a limpeza da lente" (histórico) NÃO seta', () => {
+  speak('doutor eu ja fiz a limpeza da lente faz uns dois anos');
+  expect(ctx._BRIDGE.opacidadeCapsulaDetectada).toBe(false);
+});
+
+test('[PCO-5] queixa de VISÃO embaçada do paciente NÃO seta opacidade de cápsula', () => {
+  speak('doutor minha vista ta embacada para perto eu enxergo embacado');
+  expect(ctx._BRIDGE.opacidadeCapsulaDetectada).toBe(false);
 });
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -1270,11 +1825,14 @@ test('[GATE-17] frases reais do log 2026-07-06 são reconhecidas como CONDUTA', 
 });
 
 test('[GATE-18] REGRESSÃO log 2026-07-06: multifocal corrompido + lubrificante + despedida → stop agenda', () => {
-  // Resumo fiel da consulta real que ficou bloqueada
+  // Resumo da consulta real que ficou bloqueada. A despedida original era
+  // "alguma pergunta alguma duvida" — removida de STOP_COMMANDS em 2026-07-15
+  // (pergunta aberta, dispara no meio da explicação); trocada por despedida
+  // com destino físico, o fraseado atual do médico.
   speakSemCaptura(
     'vai chegar uma hora que nao vai dar o de perto so ele vai ter que ir para um tipo de fogao ' +
     'nao da para ficar de boa so se voce quiser trocar ne ' +
-    'e o lubrificante usa sem do o resto ta tudo em paz alguma pergunta alguma duvida'
+    'e o lubrificante usa sem do o resto ta tudo em paz pode passar no balcao'
   );
   expect(ctx._BRIDGE.stopCommandTimeout).not.toBe(null);
 });
@@ -1368,6 +1926,140 @@ test('[GATE-24] resetSession zera o contador da válvula (stopGateBlockCount)', 
   expect(ctx._BRIDGE.stopGateBlockCount).toBe(1);
   ctx._BRIDGE.StateManager.resetSession();
   expect(ctx._BRIDGE.stopGateBlockCount).toBe(0);
+});
+
+// Caso real 2026-07-15: consulta de refração PURA (correção de grau do óculos
+// multifocal + pedido de lente de prova) — tratamento legitimamente inexistente
+// (Gemini registrou tratamento: null). O gate bloqueou "alguma pergunta alguma
+// duvida" com "falta ditar TRATAMENTO" e o médico teve que forçar com
+// "encerrar consulta". Conduta refrativa agora satisfaz o requisito de
+// tratamento no gate.
+
+test('[GATE-25] frases reais do log 2026-07-15 são reconhecidas como CONDUTA REFRATIVA', () => {
+  const casos = [
+    'bom eu vou corrigir aqui o grau do oculos',
+    'ai eu vou pedir uma lente de prova',
+    'outra alternativa seria a gente ir para alem de multifocal',
+  ];
+  for (const frase of casos) {
+    if (!ctx.ClinicalTriggers.detectaCondutaRefrativaNaFala(frase)) {
+      throw new Error(`Conduta refrativa NÃO detectada em: "${frase}"`);
+    }
+  }
+});
+
+test('[GATE-26] conduta refrativa satisfaz o requisito de TRATAMENTO no gate', () => {
+  const r = ctx.ClinicalTriggers.checkCondutaTratamentoCaptados(
+    'eu vou corrigir aqui o grau do oculos e vou pedir uma lente de prova'
+  );
+  expect(r.conduta).toBe(true);
+  expect(r.tratamento).toBe(true);
+  expect(r.ok).toBe(true);
+});
+
+test('[GATE-27] REGRESSÃO log 2026-07-15: refração pura SEM tratamento + despedida → stop agenda', () => {
+  speakSemCaptura(
+    'de fato deu uma aumentadinha bem pouquinho eu vou corrigir aqui o grau do oculos ' +
+    'ai eu vou pedir uma lente de prova ai pelo menos ela tira essa duvida em relacao a lente ' +
+    'aqui ta a receita do oculos pode passar no balcao'
+  );
+  expect(ctx._BRIDGE.stopCommandTimeout).not.toBe(null);
+  flushTimeouts();
+  expect(ctx._BRIDGE.isRecording).toBe(false);
+});
+
+test('[GATE-28] conduta NÃO-refrativa sem tratamento continua bloqueada (gate preservado)', () => {
+  speakSemCaptura('vou te encaminhar para o especialista de retina pode ir na recepção');
+  expect(ctx._BRIDGE.stopCommandTimeout).toBe(null);
+  expect(ctx._BRIDGE.isRecording).toBe(true);
+});
+
+// ──────────────────────────────────────────────────────────────────────────────
+// 2026-08-05 — ESCOPO DA DECLARAÇÃO DE EXAMES NORMAIS
+// A palavra "fundo" não é o que decide se a fundoscopia entra: o que decide é o
+// ESCOPO da frase. Declaração global cobre o fundo; só frase restrita à
+// biomicroscopia o exclui. Como o hook marca `examesNormaisInjetados`, o
+// injectAll pula o bloco de exames depois — uma omissão aqui não é corrigida.
+// ──────────────────────────────────────────────────────────────────────────────
+
+test('[EXNORM-1] "exames estão todos normais" marca fundoscopiaDetectada (declaração global)', () => {
+  speakSemCaptura('seus exames estao todos normais');
+  expect(ctx._BRIDGE.HOOK_STATE.examesNormaisInjetados).toBe(true);
+  expect(ctx._BRIDGE.HOOK_STATE.fundoscopiaDetectada).toBe(true);
+});
+
+test('[EXNORM-2] "seus olhos estão normais" também é global', () => {
+  speakSemCaptura('seus olhos estao normais');
+  expect(ctx._BRIDGE.HOOK_STATE.fundoscopiaDetectada).toBe(true);
+});
+
+test('[EXNORM-3] "biomicroscopia sem alterações" NÃO marca fundoscopia (escopo anterior)', () => {
+  speakSemCaptura('a biomicroscopia sem alteracoes');
+  expect(ctx._BRIDGE.HOOK_STATE.examesNormaisInjetados).toBe(true);
+  expect(ctx._BRIDGE.HOOK_STATE.fundoscopiaDetectada).toBe(false);
+});
+
+test('[EXNORM-4] "biomicroscopia e fundoscopia normais" marca fundoscopia', () => {
+  speakSemCaptura('biomicroscopia e fundoscopia normais');
+  expect(ctx._BRIDGE.HOOK_STATE.fundoscopiaDetectada).toBe(true);
+});
+
+// 2026-11-08 — simulação H09: frase condicional é intenção, não resultado
+test('[EXNORM-COND-1] "vamos ver se os exames estão normais" NÃO injeta', () => {
+  speakSemCaptura('vamos ver se os exames estao normais primeiro');
+  expect(ctx._BRIDGE.HOOK_STATE.examesNormaisInjetados).toBe(false);
+});
+
+test('[EXNORM-COND-2] condicional seguida de resultado declarado → injeta', () => {
+  speakSemCaptura('vamos ver se os exames estao normais pronto seus exames estao normais');
+  expect(ctx._BRIDGE.HOOK_STATE.examesNormaisInjetados).toBe(true);
+});
+
+test('[EXNORM-COND-3] "será que o fundo de olho está normal" NÃO injeta', () => {
+  speakSemCaptura('sera que o fundo de olho esta normal');
+  expect(ctx._BRIDGE.HOOK_STATE.examesNormaisInjetados).toBe(false);
+});
+
+// 2026-09-29 — nervo óptico/H400 fabricado a partir de exemplo do prompt
+noiseTest('[NERVO-1] sem fala de nervo/glaucoma/pressão → H400 e fundoscopia de nervo removidos', () => {
+  const raw = { tipo_consulta: 'retorno', dados: {
+    diagnostico: 'H521 - Miopia\nH400 - Suspeita de glaucoma',
+    fundoscopia: '[CONFIRMAR OLHO AFETADO] Alteração no nervo óptico, sugestiva de glaucoma',
+    conduta: 'Prescrição de óculos' } };
+  const fala = 'o senhor e miope e tem um pouco de astigmatismo vai precisar do oculos para longe';
+  const d = DecisionEngine.buildDecision(raw, { transcribedText: fala }).clonedAIResponse.dados;
+  expect(d.diagnostico).toBe('H521 - Miopia');
+  expect(d.fundoscopia).toBe(null);
+});
+
+noiseTest('[NERVO-2] fala cita o nervo → diagnóstico e fundoscopia preservados', () => {
+  const raw = { tipo_consulta: 'retorno', dados: {
+    diagnostico: 'H400 - Suspeita de glaucoma',
+    fundoscopia: '[CONFIRMAR OLHO AFETADO] Alteração no nervo óptico' } };
+  const fala = 'o nervo do olho do senhor esta um pouco alterado';
+  const d = DecisionEngine.buildDecision(raw, { transcribedText: fala }).clonedAIResponse.dados;
+  expect(d.diagnostico).toBe('H400 - Suspeita de glaucoma');
+  expect(/nervo/.test(d.fundoscopia)).toBe(true);
+});
+
+// 2026-11-08 — simulação D29: o guard apagava a fundoscopia NORMAL (texto padrão
+// tem "escavação simétrica e fisiológica") em consulta sem fala de nervo.
+noiseTest('[NERVO-3] fundoscopia normal sem fala de nervo → preservada', () => {
+  const fundo = 'FUNDOSCOPIA INDIRETA: AO retina aplicada, mácula em bom aspecto, sem alteração do padrão vascular, escavação simétrica e fisiológica';
+  const raw = { tipo_consulta: 'retorno', dados: {
+    diagnostico: 'H110 - Pterígio', fundoscopia: fundo } };
+  const fala = 'essa carninha no olho direito e um pterigio vamos acompanhar e usar colirio lubrificante';
+  const d = DecisionEngine.buildDecision(raw, { transcribedText: fala }).clonedAIResponse.dados;
+  expect(d.fundoscopia).toBe(fundo);
+  expect(d.diagnostico).toBe('H110 - Pterígio');
+});
+
+noiseTest('[NERVO-4] linha mista: retina fica, trecho de nervo alterado sai', () => {
+  const raw = { tipo_consulta: 'retorno', dados: {
+    fundoscopia: 'FUNDOSCOPIA INDIRETA: AO retina aplicada, mácula em bom aspecto, escavação aumentada 0,7 AO' } };
+  const fala = 'o senhor e miope e tem um pouco de astigmatismo vai precisar do oculos para longe';
+  const d = DecisionEngine.buildDecision(raw, { transcribedText: fala }).clonedAIResponse.dados;
+  expect(d.fundoscopia).toBe('FUNDOSCOPIA INDIRETA: AO retina aplicada, mácula em bom aspecto');
 });
 
 // ──────────────────────────────────────────────────────────────────────────────

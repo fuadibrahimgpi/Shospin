@@ -101,12 +101,14 @@ function _medFbLinhaItem(item) {
   const extra = [];
   if (item.ocorrencias > 1) extra.push(`${item.ocorrencias}x`);
   if (item.genericoNoTratamento) extra.push('ficou como genérico');
+  if (item.parecidoCom) extra.push(`parece ${item.parecidoCom}`);
   if (extra.length) titulo.appendChild(_medFbEl('span', ` (${extra.join(', ')})`, 'color:#6b7280;'));
   linha.appendChild(titulo);
   if (item.trecho) linha.appendChild(_medFbEl('div', `“…${item.trecho}…”`, 'font-size:11px;color:#6b7280;margin:2px 0 4px;'));
 
   const acoes = _medFbEl('div', null, 'display:flex;flex-wrap:wrap;gap:4px;align-items:center;');
   const sel = _medFbSelectAlvo();
+  if (item.parecidoComId) sel.value = item.parecidoComId;
   const btnVar = _medFbEl('button', 'Variante', _MED_FB_BTN);
   btnVar.onclick = () => {
     if (!sel.value) { _medFbAviso('Escolha de qual remédio é variante.'); return; }
@@ -144,8 +146,36 @@ async function renderMedFeedback() {
 
   const exp = document.getElementById('medFeedbackExportar');
   const lim = document.getElementById('medFeedbackLimpar');
+  const limFila = document.getElementById('medFeedbackLimparFila');
   if (exp) exp.disabled = !aprovados.length;
   if (lim) lim.disabled = !aprovados.length;
+  if (limFila) limFila.disabled = !fila.length;
+}
+
+// Descarta de uma vez as palavras pendentes (equivale a marcar todas como ruído).
+// As aprovações já feitas não são tocadas.
+async function limparFilaMedFeedback() {
+  const fila = await _medFbLer(MED_FB_KEY_FILA);
+  if (!fila.length) return;
+  if (!confirm(`Descartar as ${fila.length} palavra(s) pendentes como ruído?`)) return;
+  await _medFbGravar(MED_FB_KEY_FILA, []);
+  renderMedFeedback();
+}
+
+// A fila guardada pode ter sido montada por um detector mais frouxo: ao abrir o
+// painel, passa os itens automáticos pelo detector atual (refiltrarFila).
+async function refiltrarFilaMedFeedback() {
+  try {
+    if (typeof MedicamentosFeedback === 'undefined' || !MedicamentosFeedback.refiltrarFila) return;
+    const fila = await _medFbLer(MED_FB_KEY_FILA);
+    if (!fila.length) return;
+    const nova = MedicamentosFeedback.refiltrarFila(fila);
+    if (JSON.stringify(nova) === JSON.stringify(fila)) return;
+    await _medFbGravar(MED_FB_KEY_FILA, nova);
+    console.log(`[MedFeedback] fila refiltrada: ${fila.length} → ${nova.length} item(ns)`);
+  } catch (e) {
+    console.warn('[MedFeedback] falha ao refiltrar a fila (não-fatal):', e?.message);
+  }
 }
 
 async function exportarMedFeedback() {
@@ -182,10 +212,11 @@ async function registrarManualMedFeedback() {
   document.getElementById('medFeedbackExportar')?.addEventListener('click', exportarMedFeedback);
   document.getElementById('medFeedbackLimpar')?.addEventListener('click', limparAprovadosMedFeedback);
   document.getElementById('medFeedbackAdicionar')?.addEventListener('click', registrarManualMedFeedback);
+  document.getElementById('medFeedbackLimparFila')?.addEventListener('click', limparFilaMedFeedback);
   try {
     chrome.storage.onChanged.addListener((mudancas, area) => {
       if (area === 'local' && (mudancas[MED_FB_KEY_FILA] || mudancas[MED_FB_KEY_APROVADOS])) renderMedFeedback();
     });
   } catch (_e) { /* fora da extensão (testes) */ }
-  renderMedFeedback();
+  refiltrarFilaMedFeedback().then(renderMedFeedback);
 })();

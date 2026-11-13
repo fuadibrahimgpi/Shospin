@@ -97,6 +97,44 @@ t('FEEDBACK-11', rR.aprovado === null && rR.fila.length === 0);
 const exp = Fb.montarExportacao([rV.aprovado, rN.aprovado]);
 t('FEEDBACK-12', exp.variantes.length === 1 && exp.novos.length === 1 && exp.novos[0].marca === 'Zirgan' && exp.versao === 1, JSON.stringify(exp));
 
+// 1ª revisão da fila (2026-11-13): 52 entradas, nenhuma era remédio. Fala comum que
+// caía nos gatilhos não pode mais virar suspeita.
+const RUIDO_FILA = [
+  'toda vez que eu tomar banho lavar o rosto',
+  'um lubrificante você pode pingar direto sem dó',
+  'tanto faz qual pingar primeiro, só não pode pingar junto',
+  'espera 15 minutos para pingar o próximo senão eles não funcionam',
+  'tem que usar o tempo todo ou usar para trabalhar',
+  'quando for usar o computador outra coisa que faz muita diferença',
+  'a senhora continua usando colírio do jeito que a senhora usa',
+  'tem vários jeitos: remédio, cirurgia, laser',
+  'tem usado algum remédio de canto? diabetes não tem',
+  'eu vou te passar um negócio para você fazer à noite',
+  'a noite pode usar o vidro inteiro',
+  'a compressa é só manter a limpeza',
+  'isso aí não precisa trocar geralmente depois que faz a cirurgia',
+  'no restaurante tem os recomendados Michelin',
+  'quem mexe com leilão usa cheque como título',
+  'se a pressão manter assim está excelente',
+];
+const ruidoAchado = RUIDO_FILA.map(f => [f, sus(f, null)]).filter(([, s]) => s);
+t('FEEDBACK-13', ruidoAchado.length === 0, 'fala comum virou suspeita: ' + JSON.stringify(ruidoAchado));
+const sMato = Fb.encontrarSuspeitas('é só um colírio havia matoprosta, ele é só à noite', null);
+t('FEEDBACK-14', sMato.length === 1 && sMato[0].termo === 'matoprosta' && sMato[0].parecidoComId === 'bimatoprosta',
+  'nome do léxico deformado pela voz vira suspeita, com o remédio parecido: ' + JSON.stringify(sMato));
+t('FEEDBACK-15', sus('Pode usar o colírio Lacrifresh à noite', null) === 'lacrifresh' && sus('usa o Lacrifresh', null) === '',
+  'verbo sem fala de remédio por perto não basta; "colírio X" basta');
+t('FEEDBACK-16', sus('tem usado algum remédio chamado Zirgan?', null) === 'zirgan' && sus('usou algum remédio Zirgan', null) === '',
+  '"remédio" só vale como gatilho com "chamado"');
+const filaVelha = [
+  { id: 'a', termo: 'banho', trecho: 'toda vez que eu tomar banho lavar o rosto', ocorrencias: 7, origem: 'auto', ts: 1 },
+  { id: 'b', termo: 'havia', trecho: 'que um colirio havia matoprosta ele e so a', ocorrencias: 1, origem: 'auto', ts: 2 },
+  { id: 'c', termo: 'lacrimaxx', trecho: '', ocorrencias: 1, origem: 'manual', ts: 3 },
+];
+const refilt = Fb.refiltrarFila(filaVelha);
+t('FEEDBACK-17', refilt.length === 2 && refilt[0].termo === 'matoprosta' && refilt[0].parecidoCom === 'Bimatoprosta' && refilt[1].origem === 'manual',
+  'refiltrar tira o ruído, troca "havia" pela suspeita real e preserva o manual: ' + JSON.stringify(refilt));
+
 // Recheck da injeção — fidelidade enviado × prontuário (camada 1)
 const Recheck = require('../src/agents/recheck-agent.js');
 const enviadoAten = Recheck.montarEnviado({ audio: {

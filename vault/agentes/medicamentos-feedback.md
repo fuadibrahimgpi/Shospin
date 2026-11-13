@@ -14,7 +14,8 @@ Problema que resolve: o [Léxico de medicamentos](../modulos/medicamentos-lexico
 
 O ciclo:
 
-1. `encontrarSuspeitas`: depois de cada análise, acha na fala palavras que parecem remédio e que o léxico não reconhece.
+1. `encontrarSuspeitas`: depois de cada análise, acha na fala palavras que parecem remédio e que o léxico não reconhece. Três portas: nome do léxico deformado pela voz (até 2 letras de diferença, ex.: "havia matoprosta" → parece bimatoprosta); "colírio/pomada/gotas [de] X"; "usar/passar/receitar X" só com fala de remédio por perto (colírio, pingar, posologia). Palavra comum do português é descartada por lista e por terminação. Desde 2026-11-13: a 1ª revisão da fila tinha 52 entradas e nenhuma era remédio ("tomar banho", "pingar direto", "usar o computador").
+   - `refiltrarFila`: ao abrir o painel, a fila guardada passa pelo detector atual; o ruído sai, item manual fica. O botão "Descartar pendentes" esvazia a fila de uma vez.
 2. `adicionarNaFila`: fila de revisão sem repetição e com tamanho limitado.
 3. `resolver`: o médico decide, na caixa "Medicações a revisar" do painel, se a palavra é variante de um remédio existente, remédio novo ou ruído.
 4. `montarExportacao`: gera o JSON das decisões aprovadas.

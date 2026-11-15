@@ -91,7 +91,7 @@ const VOICE_HOOKS = [
       else if (/inicial/.test(t)) s.catarataGrau = 'inicial';
       else if (/moderada/.test(t)) s.catarataGrau = 'moderada';
       else if (/avan[çc]ad[ao]|madura/.test(t)) s.catarataGrau = 'avançada';
-      console.log('[Hook] Flag: catarata detectada', s.catarataGrau || '(grau não especificado)');
+      dbg('[Hook] Flag: catarata detectada', s.catarataGrau || '(grau não especificado)');
       return {
         statusMessage: `Catarata detectada!${s.catarataGrau ? ' (' + s.catarataGrau + ')' : ''}`,
         statusColor: '#eab308',
@@ -107,7 +107,7 @@ const VOICE_HOOKS = [
     guard: (s) => s.lioDetectada,
     onMatch: (text, s) => {
       s.lioDetectada = true;
-      console.log('[Hook] Flag: LIO detectada');
+      dbg('[Hook] Flag: LIO detectada');
       return { statusMessage: 'LIO detectada!', statusColor: '#eab308' };
     },
   },
@@ -121,7 +121,7 @@ const VOICE_HOOKS = [
     guard: (s) => s.opacidadeCapsulaDetectada || s.lenteLimpaDetectada,
     onMatch: (text, s) => {
       s.opacidadeCapsulaDetectada = true;
-      console.log('[Hook] Flag: opacidade de cápsula detectada');
+      dbg('[Hook] Flag: opacidade de cápsula detectada');
       return { statusMessage: 'Opacidade de cápsula detectada!', statusColor: '#eab308' };
     },
   },
@@ -136,7 +136,7 @@ const VOICE_HOOKS = [
       s.lenteLimpaDetectada = true;
       s.lioDetectada = true;
       s.opacidadeCapsulaDetectada = false;
-      console.log('[Hook] Flag: lente limpa — opacidade de cápsula descartada');
+      dbg('[Hook] Flag: lente limpa — opacidade de cápsula descartada');
       return { statusMessage: 'Lente limpa! Sem opacidade de cápsula.', statusColor: '#16a34a' };
     },
   },
@@ -218,7 +218,7 @@ const VOICE_HOOKS = [
     multiSource: true,
     onMatch: (text, s) => {
       s.dilatacaoDetectada = true;
-      console.log('[Hook] DILATAÇÃO detectada — stop agendado (pausa, não fim de consulta)');
+      dbg('[Hook] DILATAÇÃO detectada — stop agendado (pausa, não fim de consulta)');
       return {
         statusMessage: 'Dilatação! Pausando — aguardando retorno do paciente...',
         statusColor: '#3b82f6',
@@ -242,7 +242,7 @@ const VOICE_HOOKS = [
     guard: (s) => s.consultaEncerradaDetectada,
     onMatch: (text, s) => {
       s.consultaEncerradaDetectada = true;
-      console.log('[Hook] STOP forçado por comando explícito — gate de captura ignorado');
+      dbg('[Hook] STOP forçado por comando explícito — gate de captura ignorado');
       return { statusMessage: 'Encerramento por comando! Parando...', statusColor: '#16a34a' };
     },
   },
@@ -262,7 +262,7 @@ const VOICE_HOOKS = [
     guard: (s) => s.consultaEncerradaDetectada,
     onMatch: (text, s) => {
       s.consultaEncerradaDetectada = true;
-      console.log('[Hook] STOP detectado');
+      dbg('[Hook] STOP detectado');
       return { statusMessage: 'Comando detectado! Parando...', statusColor: '#16a34a' };
     },
   },
@@ -283,7 +283,7 @@ const VOICE_HOOKS = [
     guard: (s) => s.consultaEncerradaDetectada,
     onMatch: (text, s) => {
       s.consultaEncerradaDetectada = true;
-      console.log('[Hook] STOP curto detectado (aguardando confirmação por silêncio)');
+      dbg('[Hook] STOP curto detectado (aguardando confirmação por silêncio)');
       return { statusMessage: 'Despedida detectada! Parando em 2s — fale para cancelar', statusColor: '#16a34a' };
     },
     onCancel: (s) => {
@@ -319,7 +319,7 @@ const VOICE_HOOKS = [
     guard: (s) => s.consultaEncerradaDetectada,
     onMatch: (text, s) => {
       s.consultaEncerradaDetectada = true;
-      console.log('[Hook] STOP saudação-despedida detectado (aguardando confirmação por silêncio)');
+      dbg('[Hook] STOP saudação-despedida detectado (aguardando confirmação por silêncio)');
       return { statusMessage: 'Despedida detectada! Parando em 2s — fale para cancelar', statusColor: '#16a34a' };
     },
     onCancel: (s) => {

@@ -118,7 +118,7 @@ function _deduplicateCidField(field) {
     return true;
   });
   if (unique.length < terms.length) {
-    console.log(`[CID] Deduplicados ${terms.length - unique.length} termo(s) duplicado(s):`, terms.filter(t => !unique.includes(t)));
+    dbg(`[CID] Deduplicados ${terms.length - unique.length} termo(s) duplicado(s):`, terms.filter(t => !unique.includes(t)));
     field.value = unique.join('\n');
   }
 }
@@ -150,7 +150,7 @@ async function handleSearchCid(field) {
 
   const rawTerm = terms[0];
   // Log diagnóstico: captura o estado do campo a cada passo da cadeia
-  console.log(`[CID] Processando "${rawTerm}" | campo completo: ${JSON.stringify(field.value)}`);
+  dbg(`[CID] Processando "${rawTerm}" | campo completo: ${JSON.stringify(field.value)}`);
 
   // Extrair só o código CID quando o formato for "H010 - Descrição"
   const codeMatch = rawTerm.match(CID_CODE_PATTERN);
@@ -163,7 +163,7 @@ async function handleSearchCid(field) {
 
   // Feedback visual imediato
   successMessage.classList.remove('hidden');
-  successMessage.innerHTML = `<span>🔍 Buscando CID: ${rawTerm}...</span>`;
+  setFeedbackMessage(successMessage, `🔍 Buscando CID: ${rawTerm}...`);
   successMessage.style.background = '#eff6ff';
   successMessage.style.color = '#1e40af';
 
@@ -180,9 +180,9 @@ async function handleSearchCid(field) {
     // CID na ficha errada quando há 2+ abas SHOSP.
     const cidTab = await selectShospTab(tabs, { retries: 1, reinject: false }) || tabs[0];
 
-    console.log(`[SearchCid] termo="${termToSearch}" → tab=${cidTab.id}`);
+    dbg(`[SearchCid] termo="${termToSearch}" → tab=${cidTab.id}`);
     const resp = await sendToTab(cidTab.id, { action: 'searchCid', term: termToSearch });
-    console.log(`[SearchCid] resp=`, resp);
+    dbg(`[SearchCid] resp=`, resp);
 
     // Fix C6: contexto inválido → abortar cadeia imediatamente (evita loop infinito)
     if (resp === 'CONTEXT_INVALIDATED') {
@@ -206,7 +206,7 @@ async function handleSearchCid(field) {
       field.value = terms.slice(1).join('\n');
       // Feedback de sucesso
       successMessage.classList.remove('hidden');
-      successMessage.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg><span>C.I.D. lançado: ${termToSearch}</span>`;
+      setFeedbackMessage(successMessage, `C.I.D. lançado: ${termToSearch}`, true);
       successMessage.style.background = '#dcfce7';
       successMessage.style.color = '#166534';
       setTimeout(() => successMessage.classList.add('hidden'), 3000);
@@ -332,7 +332,7 @@ async function selectShospTab(tabs, { retries = 0, reinject = false } = {}) {
   // Nenhuma aba com prontuário aberto respondeu. Re-injetar content.js em todas
   // as candidatas (recupera contexto órfão pós-recarga) e re-verificar uma vez.
   if (reinject) {
-    console.log('[selectShospTab] Nenhuma aba com prontuário aberto — re-injetando content script nas candidatas...');
+    dbg('[selectShospTab] Nenhuma aba com prontuário aberto — re-injetando content script nas candidatas...');
     for (const t of tabs) {
       try {
         await chrome.scripting.executeScript({ target: { tabId: t.id }, files: ['src/content.js'] });
@@ -399,7 +399,7 @@ async function injectAll(force = false) {
       if (shosp.length) tabs = shosp;
     }
 
-    console.log(`[InjectAll] Abas SHOSP encontradas: ${tabs.length}`, tabs.map(t => t.url?.slice(0, 60)));
+    dbg(`[InjectAll] Abas SHOSP encontradas: ${tabs.length}`, tabs.map(t => t.url?.slice(0, 60)));
   } catch (e) {
     _setRunningState(false);
     showError('Erro ao buscar aba do SHOSP');
@@ -416,7 +416,7 @@ async function injectAll(force = false) {
   const temAudio = audioData && !audioDataInjected && !skipAudioDueToError;
   const temCamera = cameraData && !cameraDataInjected;
 
-  console.log('[InjectAll] check:', { audioData: !!audioData, audioDataInjected, skipAudioDueToError, cameraData: !!cameraData, cameraDataInjected, temAudio, temCamera });
+  dbg('[InjectAll] check:', { audioData: !!audioData, audioDataInjected, skipAudioDueToError, cameraData: !!cameraData, cameraDataInjected, temAudio, temCamera });
 
   if (!temAudio && !temCamera) {
     _setRunningState(false);
@@ -448,7 +448,7 @@ async function injectAll(force = false) {
     showError('Abra o prontuário do paciente no SHOSP e tente novamente.');
     throw new Error('Nenhuma aba com prontuário aberto');
   }
-  console.log('[InjectAll] Aba de injeção selecionada:', tab.id, tab.url?.slice(0, 60));
+  dbg('[InjectAll] Aba de injeção selecionada:', tab.id, tab.url?.slice(0, 60));
 
   // Carregar dados persistidos da fase 1 de dilatação (se existirem e não expiraram em 6h)
   let _phase1Data = null;
@@ -485,7 +485,7 @@ async function injectAll(force = false) {
     if (_cat.detected) {
       catarataDetectada = true;
       if (!catarataGrau && _cat.grau) catarataGrau = _cat.grau;
-      console.log('[Catarata] Flag derivada do diagnóstico (gatilho de voz não disparou):', catarataGrau || '(grau não especificado)');
+      dbg('[Catarata] Flag derivada do diagnóstico (gatilho de voz não disparou):', catarataGrau || '(grau não especificado)');
     }
   }
 
@@ -573,7 +573,7 @@ async function injectAll(force = false) {
       // durante a dilatação, o SHOSP pode ter descartado os campos não salvos).
       // Os campos do sidepanel atual têm prioridade; os da fase 1 preenchem o que está vazio.
       const _ph1 = _phase1Data?.audio || null;
-      if (_ph1) console.log('[InjectAll] Mesclando dados da fase 1 de dilatação na injeção da fase 2.');
+      if (_ph1) dbg('[InjectAll] Mesclando dados da fase 1 de dilatação na injeção da fase 2.');
       combinedData.audio = {
         tipo: 'primeira_consulta',
         hda: hdaField.value || _ph1?.hda || null,
@@ -663,7 +663,7 @@ async function injectAll(force = false) {
         ts: Date.now(),
         motivo: 'dilatacao',
       } });
-      console.log('[InjectAll] Dados da fase 1 (dilatação) salvos para re-injeção pós-dilatação.');
+      dbg('[InjectAll] Dados da fase 1 (dilatação) salvos para re-injeção pós-dilatação.');
     } else {
       chrome.storage.local.remove('_shospDilatacaoPhase1');
     }
@@ -677,7 +677,7 @@ async function injectAll(force = false) {
             ? diagnosticoField
             : diagnosticoRetornoField?.value?.trim() ? diagnosticoRetornoField : null)
         : null;
-      console.log('[AutoCID] campo:', cidField ? (cidField === diagnosticoField ? 'diagnosticoField' : 'diagnosticoRetornoField') : 'nenhum', '| valor:', cidField?.value?.slice(0, 80));
+      dbg('[AutoCID] campo:', cidField ? (cidField === diagnosticoField ? 'diagnosticoField' : 'diagnosticoRetornoField') : 'nenhum', '| valor:', cidField?.value?.slice(0, 80));
 
       // Capturar CIDs de refração do OCR antes do clearAll (cameraData será apagado)
       const ocrCids = (combinedData.exames && cameraData?.cid_refracao?.length)
@@ -706,7 +706,7 @@ async function injectAll(force = false) {
         });
         if (novosCids.length) {
           cidTarget.value = [cidTarget.value, ...novosCids].filter(Boolean).join('\n');
-          console.log('[AutoCID-OCR] CIDs de refração adicionados:', novosCids);
+          dbg('[AutoCID-OCR] CIDs de refração adicionados:', novosCids);
         }
       }
 
@@ -716,7 +716,7 @@ async function injectAll(force = false) {
         const reconciled = _dropUnspecifiedRefraction(cidTarget.value);
         if (reconciled !== cidTarget.value) {
           cidTarget.value = reconciled;
-          console.log('[AutoCID] H52.9 removido — CID refrativo específico presente no diagnóstico');
+          dbg('[AutoCID] H52.9 removido — CID refrativo específico presente no diagnóstico');
         }
       }
 
@@ -901,7 +901,7 @@ function clearAll(options = { clearAudio: true, clearCamera: true }) {
       chrome.storage.local.remove('_shospDilatacaoPhase1');
     }
 
-    console.log('[ClearAll] Limpeza concluída', options);
+    dbg('[ClearAll] Limpeza concluída', options);
 
   } catch (error) {
     console.error('[ClearAll] Erro:', error);
@@ -914,16 +914,33 @@ function clearAll(options = { clearAudio: true, clearCamera: true }) {
 
 function showSuccess() {
   successMessage.classList.remove('hidden');
-  successMessage.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg><span>Dados injetados com sucesso!</span>';
+  setFeedbackMessage(successMessage, 'Dados injetados com sucesso!', true);
   successMessage.style.background = '#dcfce7';
   successMessage.style.color = '#166534';
   setTimeout(() => successMessage.classList.add('hidden'), 3000);
   // Nota: chrome.notifications não funciona em sidepanels, apenas feedback visual acima
 }
 
+/**
+ * Define a mensagem de feedback sem interpretar HTML (texto pode vir de fala/IA).
+ * O ícone SVG é uma constante interna, nunca derivada de entrada externa.
+ */
+const SUCCESS_ICON_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>';
+function setFeedbackMessage(el, text, withIcon = false) {
+  el.textContent = '';
+  if (withIcon) {
+    const tpl = document.createElement('template');
+    tpl.innerHTML = SUCCESS_ICON_SVG;
+    el.appendChild(tpl.content);
+  }
+  const span = document.createElement('span');
+  span.textContent = text;
+  el.appendChild(span);
+}
+
 function showError(message) {
   successMessage.classList.remove('hidden');
-  successMessage.innerHTML = '<span>' + message + '</span>';
+  setFeedbackMessage(successMessage, message);
   successMessage.style.background = '#fee2e2';
   successMessage.style.color = '#991b1b';
   setTimeout(() => successMessage.classList.add('hidden'), 3000);

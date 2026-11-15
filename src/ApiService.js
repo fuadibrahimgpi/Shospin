@@ -167,8 +167,17 @@ class ApiService {
 
   async loadApiKey() {
     try {
-      const result = await chrome.storage.sync.get(['geminiApiKey']);
-      this.apiKey = result.geminiApiKey || null;
+      let { geminiApiKey } = await chrome.storage.local.get(['geminiApiKey']);
+      if (!geminiApiKey) {
+        // Migração: versões antigas guardavam a chave em storage.sync (replica para a conta Google).
+        const legacy = await chrome.storage.sync.get(['geminiApiKey']);
+        if (legacy.geminiApiKey) {
+          geminiApiKey = legacy.geminiApiKey;
+          await chrome.storage.local.set({ geminiApiKey });
+          await chrome.storage.sync.remove('geminiApiKey');
+        }
+      }
+      this.apiKey = geminiApiKey || null;
       return this.apiKey;
     } catch (err) {
       this.logger.error('Erro ao carregar API key', err);
@@ -179,7 +188,8 @@ class ApiService {
 
   async saveApiKey(apiKey) {
     try {
-      await chrome.storage.sync.set({ geminiApiKey: apiKey });
+      await chrome.storage.local.set({ geminiApiKey: apiKey });
+      await chrome.storage.sync.remove('geminiApiKey');
       this.apiKey = apiKey;
       this.logger.success('API key salva com sucesso');
       return true;
@@ -243,7 +253,7 @@ class ApiService {
     }
 
     const baseEndpoint = thinkingBudget !== undefined ? GEMINI_API_ENDPOINT_BETA : GEMINI_API_ENDPOINT;
-    const endpoint = `${baseEndpoint}?key=${this.apiKey}`;
+    const endpoint = baseEndpoint;
 
     let lastError = null;
 
@@ -288,7 +298,7 @@ class ApiService {
     try {
       const response = await fetch(endpoint, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'x-goog-api-key': this.apiKey },
         body: JSON.stringify({ contents: [{ parts }], generationConfig }),
         signal: controller.signal
       });

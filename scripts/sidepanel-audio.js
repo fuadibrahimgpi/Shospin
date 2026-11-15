@@ -35,7 +35,7 @@ async function checkMicrophonePermission() {
       }
     };
   } catch (e) {
-    console.log('[Mic] Não foi possível verificar permissão:', e);
+    dbg('[Mic] Não foi possível verificar permissão:', e);
   }
 }
 
@@ -54,7 +54,7 @@ let sessionStartTime = 0;
 async function toggleRecording() {
   const now = Date.now();
   if (now - _lastToggleTime < TOGGLE_DEBOUNCE_MS) {
-    console.log('[Audio] toggleRecording ignorado — debounce ativo');
+    dbg('[Audio] toggleRecording ignorado — debounce ativo');
     return;
   }
   _lastToggleTime = now;
@@ -85,7 +85,7 @@ async function startRecording() {
     if (stopCommandTimeout) {
       clearTimeout(stopCommandTimeout);
       stopCommandTimeout = null;
-      console.log('[Audio] stopCommandTimeout residual cancelado ao iniciar nova sessão');
+      dbg('[Audio] stopCommandTimeout residual cancelado ao iniciar nova sessão');
     }
     stopPendingInfo = null;
     stopGateOffset = 0;
@@ -103,7 +103,7 @@ async function startRecording() {
       );
       if (_store && Date.now() - (_store.ts || 0) <= 6 * 60 * 60 * 1000 && _store.motivo !== 'exame') {
         StateManager.setHookFlag('fase2DilatacaoAtiva', true);
-        console.log('[Audio] Fase 2 de dilatação — gatilho de dilatação por voz suprimido nesta sessão.');
+        dbg('[Audio] Fase 2 de dilatação — gatilho de dilatação por voz suprimido nesta sessão.');
       }
     } catch (_e) { /* storage indisponível — segue sem supressão */ }
 
@@ -149,7 +149,7 @@ async function startRecording() {
       // ── Solicitar parada imediata do Speech para forçar a finalização do buffer ──
       if (speechRecognition) {
         try {
-          console.log('[Audio] Parando Speech Recognition no onstop para forçar flush de interim results...');
+          dbg('[Audio] Parando Speech Recognition no onstop para forçar flush de interim results...');
           speechRecognition.stop();
         } catch (e) {
           console.warn('[Audio] Erro ao parar Speech Recognition no onstop:', e);
@@ -169,12 +169,12 @@ async function startRecording() {
           await new Promise(r => setTimeout(r, POLL_INTERVAL));
           waitedMs += POLL_INTERVAL;
           if (recognizedText !== textBefore) {
-            console.log(`[Audio] Speech finalizado após ${waitedMs}ms.`);
+            dbg(`[Audio] Speech finalizado após ${waitedMs}ms.`);
             break;
           }
         }
       } else {
-        console.log('[Audio] Nenhum som/fala detectado na sessão, pulando espera.');
+        dbg('[Audio] Nenhum som/fala detectado na sessão, pulando espera.');
       }
 
       // Parar de vez e limpar
@@ -183,7 +183,7 @@ async function startRecording() {
       const capturedText = recognizedText;
       if (capturedText && capturedText.trim().length > 0) {
         const words = capturedText.trim().split(/\s+/).length;
-        console.log(`[Audio] Texto capturado para processamento (${words} palavras):`, capturedText.substring(0, 120) + (capturedText.length > 120 ? '…' : ''));
+        dbg(`[Audio] Texto capturado para processamento (${words} palavras):`, capturedText.substring(0, 120) + (capturedText.length > 120 ? '…' : ''));
       } else {
         console.warn('[Audio] ⚠️ recognizedText está VAZIO ao parar — Speech API não produziu resultados finais nesta sessão.');
       }
@@ -201,7 +201,7 @@ async function startRecording() {
         const _dilScan = fase2DilatacaoAtiva ? _textToScan.slice(-300) : _textToScan;
         if (ClinicalTriggers.detectaDilatacaoNaFala(_dilScan)) {
           StateManager.setHookFlag('dilatacaoDetectada', true);
-          console.log('[Audio] Dilatação detectada no fallback onstop');
+          dbg('[Audio] Dilatação detectada no fallback onstop');
         }
       }
 
@@ -212,7 +212,7 @@ async function startRecording() {
           !StateManager.getHookFlag('dilatacaoDetectada')) {
         if (ClinicalTriggers.detectaEncerramentoNaFala(_textToScan)) {
           StateManager.setHookFlag('consultaEncerradaDetectada', true);
-          console.log('[Audio] Encerramento de consulta detectado no fallback onstop');
+          dbg('[Audio] Encerramento de consulta detectado no fallback onstop');
         }
       }
 
@@ -359,7 +359,7 @@ async function processAudioInBackground(audioBlob, capturedText) {
         statusText.textContent = 'Áudio incompleto — revise os dados';
         statusText.style.color = '#eab308';
       } else {
-        console.log('[Audio] Nenhum texto capturado — sessão encerrada sem dados.');
+        dbg('[Audio] Nenhum texto capturado — sessão encerrada sem dados.');
         processingStatus.textContent = '';
         statusText.textContent = '⚠️ Nenhuma fala detectada — sessão descartada';
         statusText.style.color = '#eab308';
@@ -401,7 +401,7 @@ async function processAudioInBackground(audioBlob, capturedText) {
     let analysisText = textToProcess;
     if (_phase1Store?.transcript) {
       analysisText = _phase1Store.transcript + '\n\n[RETORNO DA DILATACAO]\n\n' + textToProcess;
-      console.log('[Audio] Transcrição da fase pré-dilatação anexada como contexto da análise.');
+      dbg('[Audio] Transcrição da fase pré-dilatação anexada como contexto da análise.');
     }
 
     // Guard pré-Gemini: exame/refração em andamento — não analisar como consulta final.
@@ -424,13 +424,13 @@ async function processAudioInBackground(audioBlob, capturedText) {
             motivo: _phase1Store?.motivo || 'exame',
           },
         });
-        console.log('[Audio] Exame em andamento — transcrição persistida; será anexada à próxima gravação.');
+        dbg('[Audio] Exame em andamento — transcrição persistida; será anexada à próxima gravação.');
       } catch (_e) { /* storage indisponível — não-fatal */ }
       statusText.textContent = 'Exame em andamento, aguardando encerramento';
       statusText.style.color = '#eab308';
       statusText.style.fontWeight = 'normal';
       processingStatus.textContent = 'Exame em andamento — aguardando gatilho de fim ou pausa';
-      console.log('[Audio] Exame em andamento detectado — análise com Gemini adiada.');
+      dbg('[Audio] Exame em andamento detectado — análise com Gemini adiada.');
       return;
     }
 
@@ -447,7 +447,7 @@ async function processAudioInBackground(audioBlob, capturedText) {
       // Salvar raciocínio para auditoria
       if (data._raciocinio) {
         console.group('RACIOCÍNIO DA IA');
-        console.log(data._raciocinio);
+        dbg(data._raciocinio);
         console.groupEnd();
         chrome.storage.local.set({
           lastGeminiReasoning: data._raciocinio,
@@ -485,9 +485,9 @@ async function processAudioInBackground(audioBlob, capturedText) {
             tipoConsulta: data.tipo_consulta,
           });
           if (decision.guardsApplied.length > 0) {
-            console.log('[DecisionEngine] Guards aplicados:', decision.guardsApplied);
+            dbg('[DecisionEngine] Guards aplicados:', decision.guardsApplied);
           }
-          console.log('[DecisionEngine] Flags reconciliadas:', decision.injectFlags,
+          dbg('[DecisionEngine] Flags reconciliadas:', decision.injectFlags,
             '| requestId:', decision.metadata.requestId);
 
           // Usar resposta tratada pelo DE como fonte autoritativa
@@ -521,7 +521,7 @@ async function processAudioInBackground(audioBlob, capturedText) {
               motivo: 'dilatacao',
             },
           });
-          console.log('[Audio] Transcrição da fase 1 (pré-dilatação) persistida para a fase 2.');
+          dbg('[Audio] Transcrição da fase 1 (pré-dilatação) persistida para a fase 2.');
         } catch (_e) { /* storage indisponível — não-fatal */ }
 
         // Comando puro de dilatação: nenhum dado clínico coletado — registrar pausa sem injetar.
@@ -530,7 +530,7 @@ async function processAudioInBackground(audioBlob, capturedText) {
           statusText.textContent = 'Pausa para dilatação — sem dados novos de entrevista';
           statusText.style.color = '#eab308';
           statusText.style.fontWeight = 'normal';
-          console.log('[Audio] Dilatação sem dados clínicos novos — injeção adiada; transcrição preservada para a fase 2.');
+          dbg('[Audio] Dilatação sem dados clínicos novos — injeção adiada; transcrição preservada para a fase 2.');
           return;
         }
 
@@ -672,7 +672,7 @@ async function cancelarDilatacao() {
           tipoConsulta: data.tipo_consulta,
         });
         if (decision.guardsApplied.length > 0) {
-          console.log('[Dilatacao] Reprocessamento — guards:', decision.guardsApplied);
+          dbg('[Dilatacao] Reprocessamento — guards:', decision.guardsApplied);
         }
         workingData = decision.clonedAIResponse;
         workingData.injectExamesNormais = decision.injectFlags.injectExamesNormais;
@@ -733,14 +733,14 @@ function _checkSilence() {
   const silenceMs = Date.now() - lastSpeechTime;
   if (silenceMs < SILENCE_THRESHOLD_MS) return;
 
-  console.log(`[Silence] ${Math.round(silenceMs / 1000)}s sem fala (${wordCount} palavras) — agendando encerramento`);
+  dbg(`[Silence] ${Math.round(silenceMs / 1000)}s sem fala (${wordCount} palavras) — agendando encerramento`);
   statusText.textContent = 'Silêncio prolongado — encerrando em 5s (fale para cancelar)';
   statusText.style.color = '#16a34a';
 
   silencePendingStop = setTimeout(() => {
     silencePendingStop = null;
     if (isRecording && !stopCommandTimeout) {
-      console.log('[Silence] Auto-stop por silêncio — encerrando consulta');
+      dbg('[Silence] Auto-stop por silêncio — encerrando consulta');
       consultaEncerradaDetectada = true;
       stopRecording();
     }
@@ -771,7 +771,7 @@ function startSpeechRecognition() {
 
     speechRecognition.onstart = () => {
       isSpeechActive = true;
-      console.log('[Speech] Reconhecimento de voz iniciado.');
+      dbg('[Speech] Reconhecimento de voz iniciado.');
     };
 
     speechRecognition.onresult = (event) => {
@@ -814,7 +814,7 @@ function startSpeechRecognition() {
       // O runner itera por prioridade: flags → injects → stops.
       // Hooks 'inject' e 'stop' interrompem o loop após disparar.
       if (finalTranscript) {
-        console.log('[Speech] Final:', normalizedFinal.slice(-120));
+        dbg('[Speech] Final:', normalizedFinal.slice(-120));
       }
       runHooks(normalizedFinal, normalizedCurrent, recentTextBuffer);
 
@@ -832,13 +832,13 @@ function startSpeechRecognition() {
         noSpeechCount++;
         // Suprimir log após o 1º erro para não poluir o console
         if (noSpeechCount <= 1) {
-          console.log('[Speech] Nenhuma fala detectada. Aguardando...');
+          dbg('[Speech] Nenhuma fala detectada. Aguardando...');
         }
         // Backoff: após 5 erros consecutivos sem fala, pausar o reconhecimento.
         // Reinicia explicitamente após 3 s para não perder frases ditas durante a pausa
         // (sem o restart, o Speech fica parado até o próximo onend — que nunca chega).
         if (noSpeechCount >= 5) {
-          console.log(`[Speech] ${noSpeechCount} erros no-speech consecutivos — pausando reconhecimento por 3s.`);
+          dbg(`[Speech] ${noSpeechCount} erros no-speech consecutivos — pausando reconhecimento por 3s.`);
           isSpeechBackingOff = true; // Ativar trava de backoff
           try { speechRecognition.stop(); } catch (e) { /* ignorar */ }
           setTimeout(() => {
@@ -892,7 +892,7 @@ function startSpeechRecognition() {
 
     speechRecognition.onend = () => {
       isSpeechActive = false;
-      console.log('[Speech] Reconhecimento de voz encerrado.');
+      dbg('[Speech] Reconhecimento de voz encerrado.');
       
       // Não reiniciar o speech se um comando de parada já foi agendado, se está pausado pela câmera ou em backoff.
       if (isRecording && speechRecognition && !stopCommandTimeout && !isSpeechPausedByCamera && !isSpeechBackingOff) {
@@ -932,7 +932,7 @@ function pauseSpeechRecognition() {
   // há conflito de microfone. Parar o reconhecimento durante a câmera causava
   // perda do texto da consulta e rejeição por "áudio muito curto" ao retomar.
   isSpeechPausedByCamera = true;
-  console.log('[Speech] Câmera ativa — reconhecimento de voz continua (câmera é vídeo-only).');
+  dbg('[Speech] Câmera ativa — reconhecimento de voz continua (câmera é vídeo-only).');
 }
 
 function resumeSpeechRecognition() {
@@ -941,7 +941,7 @@ function resumeSpeechRecognition() {
     return;
   }
   isSpeechPausedByCamera = false;
-  console.log('[Speech] Reconhecimento retomado após fechar câmera.');
+  dbg('[Speech] Reconhecimento retomado após fechar câmera.');
 
   if (speechRecognition && !isSpeechActive && !stopCommandTimeout) {
     try {

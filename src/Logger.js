@@ -20,6 +20,14 @@ const LOG_ICONS = {
 
 const VALID_LEVELS = Object.keys(LOG_COLORS);
 
+/**
+ * Log de depuração: silencioso por padrão para não expor dados de paciente
+ * (transcrição, exames) no console. Ative com Logger.enableDebug(true).
+ */
+function dbg(...args) {
+  if (typeof Logger !== 'undefined' && Logger.isDebugEnabled) console.log(...args);
+}
+
 class Logger {
   static isDebugEnabled = false;
   static history = [];

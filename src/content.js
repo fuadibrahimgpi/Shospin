@@ -24,12 +24,15 @@
 // LOGGER
 // ============================================================================
 
+// Logs informativos desligados por padrão (evitam expor dados de paciente no console da página).
+const CONTENT_DEBUG = false;
+
 const contentLogger = {
-  info: (msg, data) => console.log(`[Content] ℹ️ ${msg}`, data ?? ''),
+  info: (msg, data) => CONTENT_DEBUG && console.log(`[Content] ℹ️ ${msg}`, data ?? ''),
   warn: (msg, data) => console.warn(`[Content] ⚠️ ${msg}`, data ?? ''),
   error: (msg, data) => console.error(`[Content] ❌ ${msg}`, data ?? ''),
-  success: (msg, data) => console.log(`[Content] ✅ ${msg}`, data ?? ''),
-  debug: (msg, data) => console.log(`[Content] 🔍 ${msg}`, data ?? '')
+  success: (msg, data) => CONTENT_DEBUG && console.log(`[Content] ✅ ${msg}`, data ?? ''),
+  debug: (msg, data) => CONTENT_DEBUG && console.log(`[Content] 🔍 ${msg}`, data ?? '')
 };
 
 // ============================================================================

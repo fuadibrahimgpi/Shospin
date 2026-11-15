@@ -28,7 +28,7 @@ if (manualCaptureBtn) {
 }
 
 injectAllBtn.addEventListener('click', async () => {
-  try { await injectAll(); } catch (e) { console.log('[UI] Erro na injeção manual:', e.message); }
+  try { await injectAll(); } catch (e) { dbg('[UI] Erro na injeção manual:', e.message); }
 });
 
 // Limpeza manual descarta também a fase 1 de dilatação persistida (novo paciente)
@@ -101,7 +101,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     case 'injectAllFromKeyboard':
       injectAll()
         .then(() => sendResponse({ ok: true }))
-        .catch(e => { console.log('[Keyboard] Erro na injeção:', e.message); sendResponse({ ok: false }); });
+        .catch(e => { dbg('[Keyboard] Erro na injeção:', e.message); sendResponse({ ok: false }); });
       return true; // canal assíncrono — não fechar antes da Promise resolver
   }
 });

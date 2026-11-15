@@ -1,6 +1,6 @@
 ---
 name: conduta-tratamento-oftalmologia
-description: "Extrai, normaliza e valida o campo conduta em consultas oftalmológicas. Use quando o usuário apresentar transcrição de consulta, resumo clínico ou saída estruturada e precisar separar conduta de tratamento, registrar retornos, encaminhamentos, prescrição de óculos, solicitação de exames, orientações verbais, suspensão de medicação e descartar logística operacional. Também use para evitar expressões proibidas como atualização de grau e para marcar revisão manual quando a conduta estiver ambígua."
+description: "Extrai, normaliza e valida o campo conduta em consultas oftalmológicas. Use quando o usuário apresentar transcrição de consulta, resumo clínico ou saída estruturada e precisar separar conduta de tratamento, registrar retornos, encaminhamentos, prescrição de óculos, solicitação de exames, orientações verbais, suspensão de medicação e descartar logística operacional. Também use para evitar expressões proibidas como atualização de grau e para marcar revisão manual quando a conduta estiver ambígua. Use também quando o campo tratamento saiu com remédio ou colírio que o médico não prescreveu (tratamento fabricado), antes de suspeitar dos gatilhos de injeção, e sempre que esta própria skill tiver errado e precisar ser corrigida."
 metadata:
   author: fuad-ibrahim
   version: "1.0"
@@ -8,6 +8,28 @@ metadata:
 ---
 
 # Conduta Oftalmológica
+
+## Onde isso REALMENTE roda (autoridade)
+
+> ⚠️ **A cópia que executa em produção é o prompt do Gemini em
+> `src/gemini-interview-agent.js` (`_buildConsultationPrompt`, blocos `- conduta:` e
+> `- tratamento:` dentro de `CAMPOS:`, mais a base de marcas, gerada do léxico por
+> `montarBaseDoPrompt()`).** No mesmo arquivo,
+> `_sanitizeCondutaTratamento` e `_garantirExamesPedidosNaConduta` corrigem a saída;
+> depois vêm os guards de `src/DecisionEngine.js` (lista completa e ordem em
+> `vault/agentes/decision-engine.md`) e o léxico `config/medicamentos-lexico.js`.
+> Editar esta skill NÃO muda a extensão. Regra geral: `skills/user/README.md`.
+
+## Como esta skill está dividida
+
+| Arquivo | Conteúdo |
+|---|---|
+| `SKILL.md` (este) | campo `conduta`: óculos, retornos, exames, encaminhamentos, orientações, logística descartada |
+| `TRATAMENTO.md` | campo `tratamento` e nomes de remédio: hierarquia de nomeação, antibiótico × corticoide, lubrificante, blefarite, medicação de outra pessoa, tratamento vazio |
+| `HISTORICO.md` | registro datado dos erros e das decisões do médico (não é regra vigente) |
+
+Havendo qualquer colírio, pomada, lubrificante, compressa, higiene palpebral ou ômega 3 na
+consulta, leia `TRATAMENTO.md` antes de responder.
 
 ## Quando usar esta skill
 
@@ -19,7 +41,7 @@ Use esta skill quando precisar preencher, revisar ou corrigir o campo `conduta` 
 - Revisões de casos em que houve confusão entre `conduta` e `tratamento`.
 - Casos com prescrição de óculos, retorno, encaminhamento, solicitação de exames, orientações verbais, suspensão de colírio ou logística pós-consulta.
 
-Esta skill é focada apenas em `conduta`. Ela pode ser usada junto de uma skill maior de transcrição de consulta oftalmológica, mas deve funcionar de forma autônoma.
+Pode ser usada junto de uma skill maior de transcrição de consulta oftalmológica, mas funciona de forma autônoma.
 
 ## Objetivo
 
@@ -50,10 +72,11 @@ Inclua em `conduta`:
 - Encaminhamento: `Encaminhamento: Dermatologista`, `Encaminhamento: Retina`.
 - Prescrição de óculos: `Prescrição de óculos`, `Prescrição de óculos multifocais`.
 - Solicitação de exames: `Solicitar campo visual`, `Solicitar OCT de mácula`.
-- Orientações e explicações dadas ao paciente: `Orientado higiene palpebral`, `Orientado compressa morna`, `Explicado diagnóstico e sinais de alerta`.
+- Orientações e explicações dadas ao paciente: `Orientado: evitar coçar os olhos`, `Explicado diagnóstico e sinais de alerta`. Compressa morna e higiene palpebral **não** entram aqui: são `tratamento`.
 - Suspensão ou alteração de conduta medicamentosa: `Suspender Xalatan`.
 - Observação clínica planejada: `Acompanhar evolução`, apenas se houver contexto específico ou prazo.
 - Procedimentos ou programação clínica: `Programar capsulotomia YAG`, `Indicar facoemulsificação`, se verbalizado pelo médico.
+- Plano de investigação condicional: `Orientado prosseguir investigação de outras causas se não houver melhora com a correção óptica`.
 
 ## O que não entra em conduta
 
@@ -66,6 +89,7 @@ Não inclua em `conduta`:
 - Retornos condicionais vagos quando já existe retorno com prazo.
 - Frases genéricas sem decisão clínica: `acompanhar`, `observar`, `orientado`, sem objeto ou prazo.
 - Valores isolados de exame sem decisão médica explícita.
+- Afirmações de normalidade ou tranquilização: `Explicado exames normais`, `pressão boa`, `fundo de olho normal`, `sem alterações`, `tranquilizado quanto à normalidade dos exames`. O resultado normal já é documentado na biomicroscopia/fundoscopia (ou pelo template de exames normais) — repeti-lo na conduta é ruído. Vale para **um exame isolado** também, não só para "todos os exames": `Explicado que a pressão ocular está normal`, `Explicado PIO normal`, `Explicado que o campo visual veio normal` — cada um desses tem campo próprio no prontuário (a PIO vem da tonometria), então reescrevê-los como "explicação" é duplicar o dado. Isso vale também **dentro de uma linha agrupada**: em `Explicado blefarite, olho seco e exames normais`, descarte só a cláusula de normalidade → `Explicado blefarite e olho seco`. Se a normalidade era a única explicação, não emita linha nenhuma. Exceção: quando o normal faz parte de uma explicação de achado ou prognóstico real (`Explicado que a pressão está alta e o campo visual ainda está normal`), a linha fica.
 - Detalhes técnicos sobre o óculos prescrito: tipo de revestimento (antirreflexo), filtro de luz azul, tamanho/campo da lente, qualidade da lente, marca ou material. Esses detalhes são padrão da ótica e nunca entram em `conduta`, mesmo que o médico os tenha comentado com o paciente.
 
 ## Separação entre conduta e tratamento
@@ -76,7 +100,6 @@ Use para decisões e orientações não farmacológicas:
 
 - `Retorno anual`
 - `Prescrição de óculos multifocais`
-- `Orientado compressa morna 2 min, 2x/dia`
 - `Encaminhamento: Dermatologista`
 - `Solicitar campimetria computadorizada`
 - `Suspender colírio em uso`, se o médico mandar suspender
@@ -90,64 +113,21 @@ Não registre em conduta. Envie para `tratamento`:
 - Medicamentos orais.
 - Lubrificantes oculares.
 - Ômega 3 e suplementos.
+- Compressa morna e higiene palpebral (ações físicas do paciente).
 
-### Hierarquia de nomeação da medicação prescrita
+Como nomear o remédio, o que fazer na blefarite, o lubrificante, a medicação de outra pessoa e o
+campo sem medicamento (`Nega uso de tratamentos`) estão em `TRATAMENTO.md`. Resumo do que mais
+pesa na separação:
 
-Ao registrar um medicamento que o médico **prescreve**, use o nível mais específico possível — nesta ordem, descendo apenas quando o nível acima não for possível:
-
-1. **Princípio ativo** — quando o médico **nomeou** o remédio: princípio ativo dito, ou marca mapeável pela base de conhecimento. Ex.: "Vigadexa" → `Moxifloxacino + dexametasona`; "dorzolamida" → `Dorzolamida`.
-   - ⚠️ Nunca infira o princípio ativo a partir do diagnóstico ou do contexto — só quando o nome (marca ou princípio) foi efetivamente pronunciado. Princípio ativo errado num prontuário é pior que um genérico.
-2. **Grupo / classe** — quando o remédio não foi nomeado, mas a classe é identificável pela fala (finalidade dita ou tratamento inequívoco). Ex.: "colírio para pressão" → `Colírio hipotensor ocular`; antibiótico + corticoide indicados na blefarite → `Associação (ATB + corticoide ocular)`; "colírio de alergia" → `Colírio antialérgico`.
-3. **Genérico** — quando nem o nome nem a classe podem ser identificados, mas houve prescrição. Ex.: "usa o colírio, uma gota 3x/dia" → `Medicação ocular prescrita`.
-
-⚠️ **Nunca omita uma prescrição** porque o nome não foi dito — desça para o nível 2 ou 3, mas registre. A posologia (gota, frequência, olho, duração) é preservada em qualquer nível quando mencionada.
-
-Registrar a classe (`colírio hipotensor`) ou o genérico (`Medicação ocular prescrita`) **não** viola a regra anti-invenção de nomes: essas formas descrevem sem afirmar um princípio ativo que não foi dito.
-
-### Regra anti-associação medicamentosa
-
-Nunca crie associação de medicamentos, colírios ou princípios ativos se a associação não foi explicitamente prescrita pelo médico.
-
-Se o médico prescrever medicamentos separados, registre-os como itens separados no `tratamento_sugerido`. Não combine os nomes em uma fórmula composta, associação fixa ou apresentação comercial.
-
-Exemplos:
-
-```text
-Médico: "Use dorzolamida e timolol."
-
-Correto:
-tratamento_sugerido: "Dorzolamida\nTimolol"
-
-Errado:
-tratamento_sugerido: "Dorzolamida + Timolol"
-```
-
-```text
-Médico: "Mantém o colírio da pressão e começa lubrificante."
-
-Correto:
-tratamento_sugerido: "Colírio para pressão\nLubrificante ocular"
-
-Errado:
-tratamento_sugerido: "Associação de colírio hipotensor com lubrificante"
-```
-
-Só registre associação quando a fala indicar claramente associação, combinação, fórmula composta ou nome comercial correspondente.
-
-Exemplo:
-
-```text
-Médico: "Faz compressa morna duas vezes ao dia e usa lubrificante de seis em seis horas."
-
-conduta: "Orientado compressa morna 2x/dia"
-tratamento: "Lubrificante ocular 1 gota AO 6/6h"
-```
+- Um tratamento só existe se o médico o prescreveu na fala. Diagnóstico não gera tratamento.
+- Suspender um remédio é `conduta`; o remédio novo, com posologia, é `tratamento`.
+- Nenhum medicamento mencionado → `tratamento_sugerido: null` (o painel escreve o texto padrão).
 
 ## Orientações e explicações verbais do médico
 
 Orientações verbais sobre mudança comportamental, proteção ocular, sinais de alerta, natureza do diagnóstico, prognóstico, necessidade de acompanhamento ou justificativa de exames devem entrar em `conduta`, mesmo quando ditas de forma coloquial.
 
-> ⚠️ **Exceção crítica:** compressa morna, higiene palpebral, shampoo, lubrificante ocular e ômega 3 são **ações físicas executadas pelo paciente** — pertencem sempre ao campo `tratamento`, mesmo que o médico as tenha orientado verbalmente.
+> ⚠️ **Exceção crítica:** compressa morna, higiene palpebral, xampu, lubrificante ocular e ômega 3 são **ações físicas executadas pelo paciente** — pertencem sempre ao campo `tratamento`, mesmo que o médico as tenha orientado verbalmente.
 
 Todas as explicações e orientações verbais do médico ao paciente devem ser fundidas em **uma única linha de texto corrido**, separadas por ponto e vírgula, iniciando com o prefixo `Orientado:`.
 
@@ -175,10 +155,8 @@ conduta: "Orientado: glaucoma assintomático com PO normal requer acompanhamento
 ⚠️ Nota: orientações sobre adaptação a multifocal/escolha de lente NÃO entram nessa linha — ver seção "Exceção: orientações sobre uso dos óculos" abaixo.
 
 "Pega um algodão com água morna e deixa dois minutinhos." (compressa)
-tratamento: "Compressa morna 2 min — 2x/dia"   ← vai em TRATAMENTO, não conduta
-
-"Faz uma espuma com shampoo infantil e lava os cílios." (higiene)
-tratamento: "Higiene palpebral com shampoo infantil"   ← vai em TRATAMENTO, não conduta
+"Faz uma espuma com xampu infantil e lava os cílios." (higiene)
+→ as duas vão em TRATAMENTO, não em conduta (texto de cada linha: `TRATAMENTO.md`, seção 7)
 ```
 
 ### Exceção: orientações sobre uso dos óculos
@@ -222,7 +200,7 @@ O tipo (multifocal ou não) continua sendo a informação clínica central — o
 
 Nunca escreva `Atualização de grau`, `Mudança de grau`, `Novo grau` ou `Ajuste de grau`.
 
-Use sempre a estrutura `Prescrição de óculos`, especificando o tipo quando possível:
+Use sempre a estrutura `Prescrição de óculos`, especificando o tipo quando possível. A conduta registra apenas **se** a lente é multifocal ou não; revestimento antirreflexo, filtro de luz azul, tamanho de lente, qualidade e marca são descartados, tenham sido recomendados ou desaconselhados pelo médico.
 
 | Situação | Conduta correta |
 |---|---|
@@ -246,16 +224,11 @@ Sinais: "não precisa de óculos", "grau não justifica óculos", "sem indicaç�
 ❌ ERRO CRÍTICO: "não precisa trocar o grau" ≠ "Sem prescrição de óculos".
 "Não precisa trocar o grau" = paciente já usa óculos e vai CONTINUAR com os mesmos → `Manutenção do óculos atual`.
 
+O guard `_guardManutencaoOculos` do `DecisionEngine` aplica a mesma leitura por código: além de "não precisa trocar o grau", reconhece "os óculos estão servindo/bons" e "não precisa trocar de óculos / os óculos" como manutenção (2026-11-10). O guard de presbiopia lê também "óculos para perto/leitura" dito na conduta.
+
 Quando forem prescritos óculos multifocais, progressivos ou bifocais, isso deve ficar explicitamente documentado na conduta como `Prescrição de óculos multifocais`, salvo se o médico usar outro tipo específico que deva ser preservado.
 
 Se o tipo de óculos estiver ambíguo, use `Prescrição de óculos` e não invente o tipo.
-
-⚠️ **Regra de simplicidade — sem detalhes técnicos do óculos:** a conduta registra apenas SE a lente é multifocal ou não, nunca como ela é feita. Não inclua revestimento antirreflexo, filtro de luz azul, tamanho/campo de lente, qualidade ou marca — isso é padrão de ótica e não é decisão clínica.
-
-- Se o médico não especificar multifocal/progressivo/bifocal → `Prescrição de óculos`.
-- Se o médico especificar multifocal/progressivo/bifocal → `Prescrição de óculos multifocais` (ou o tipo dito).
-- Comentários do médico sobre antirreflexo, filtro azul, qualidade de lente, tamanho de campo, etc. são descartados, independentemente de serem recomendados ou desaconselhados pelo médico.
-
 ⚠️ **Regra estrita para "multifocais" — só com palavra explícita:**
 
 `Prescrição de óculos multifocais` exige que o médico tenha usado **explicitamente** uma das palavras: *multifocal*, *progressivo*, *lente progressiva*, *bifocal* — ou descrito claramente longe + perto na mesma armação.
@@ -269,8 +242,26 @@ Se o tipo de óculos estiver ambíguo, use `Prescrição de óculos` e não inve
 | Médico diz "vai pra ótica fazer óculos" (tipo não dito) | `Prescrição de óculos` |
 | Médico diz "precisa de óculos para longe" | `Prescrição de óculos para longe` |
 | Médico diz "vou passar óculos para perto" | `Prescrição de óculos para perto` |
+| Paciente reclama que o óculos **antigo** é ruim de perto | `Prescrição de óculos` |
+| Trecho com "perto"/"longe" cercado de negativa ou pergunta sem resposta | `Prescrição de óculos` |
 
 ADD no ticket é uma medida da prescrição, não indica que o óculos prescrito é multifocal. O médico pode ter ADD na refração e prescrever apenas óculos para perto (monofocal) ou nada.
+
+O critério "longe + perto na mesma armação" só vale quando a referência de perto é **afirmativa**, dita pelo médico e **sobre o óculos que está sendo prescrito agora**. Queixa sobre o óculos velho, pergunta sem resposta clara e trecho com negativa não contam — na dúvida, `Prescrição de óculos` sem qualificador.
+
+**Rede determinística — parâmetros exatos:** `_guardMultifocalSemEvidencia` (`src/DecisionEngine.js`) rebaixa a linha para `Prescrição de óculos` (sufixo de orientações preservado) **a menos que** a transcrição satisfaça uma das duas portas abaixo. Como o guard de presbiopia lê a conduta, ele roda antes — senão o H52.4 sobreviveria à conduta corrigida.
+
+| Porta | O que a transcrição precisa ter | Exemplo que passa |
+|---|---|---|
+| **1 — palavra explícita** | `multifocal`/`multifocais`, `bifocal`/`bifocais`, `progressivo(a/s)` em qualquer posição da fala | "vou passar um multifocal" |
+| **2 — longe + perto na mesma armação** | o par **colado** (`longe (e) (de/para/pra) perto` ou `perto (e) (de/para/pra) longe`) **e**, na janela de ~10 palavras de cada lado, uma âncora de **prescrição**: `receita`, `prescrev…`, `armação`, `vou fazer/passar/deixar/dar/receitar`, `vai fazer/usar/levar`, `fazer um(ns)/o(s) óculos` | "tem grau de longe perto junto, aí eu vou fazer a receita" |
+
+Três consequências desses parâmetros, todas deliberadas:
+
+- **Adjacência é o filtro anti-ASR.** Qualquer palavra entre *longe* e *perto* derruba a porta 2 — é o que descarta o trecho embaralhado de 2026-08-05 ("não é para perto, sim para longe, não") sem precisar de um parser de negativas.
+- **A âncora aqui é mais estreita que a do guard de presbiopia.** Lá basta `óculos`/`grau` na janela, porque a pergunta é *"é présbita?"*. Aqui a pergunta é *"prescreveu multifocal agora?"*, e sem verbo de prescrição "os óculos estão bons, enxerga de longe e de perto" viraria multifocal.
+- **O que a porta 2 deliberadamente NÃO cobre.** Ela implementa o critério "longe + perto na mesma armação" **apenas** quando o par é dito ao lado do ato de prescrever. Ficam de fora, e são rebaixadas para `Prescrição de óculos`: (a) o par sem verbo de prescrição na janela ("óculos que serve para perto e longe" — ✅ no prompt, rebaixado pelo guard); (b) o 3º critério do prompt, com longe e perto **espalhados** por frases diferentes ("para perto aí nem se fala… para longe o óculos também faz falta"). Alargar a âncora para cobri-los é exatamente o que reabre o falso positivo de 2026-08-05 (ver `[MULTI-6]`). Vale a regra do próprio prompt: errar para menos é barato — o médico completa o tipo; multifocal afirmado sem prescrição, não. Limite pinado em `[MULTI-8]`.
+- **Fraseado fora da forma canônica passa intacto.** O rebaixamento é ancorado em `^Prescrição de óculos <tipo>`; "Uso de lente progressiva" não é reescrito — buraco aceito, porque o prompt já proíbe esse fraseado e reescrever linha livre arriscaria mutilar conduta legítima.
 
 ### Inferência de prescrição de óculos
 
@@ -309,6 +300,20 @@ Se não houver retorno com prazo, mantenha apenas um retorno condicional, escolh
 conduta: "Retorno se piora dos sintomas"
 ```
 
+### Plano de investigação condicional — NÃO é retorno condicional vago
+
+Quando o médico atribui a queixa a uma causa provável e declara que, **se aquilo não resolver, é preciso investigar outras causas**, isso é decisão clínica e entra **sempre** em `conduta`, numa única linha com o prefixo `Orientado `.
+
+Discriminador: o retorno condicional vago manda o paciente **voltar para rever a mesma coisa**; o plano de investigação abre uma **linha diagnóstica nova** (outra causa, outra hipótese).
+
+| Fala do médico | Conduta |
+|---|---|
+| "vou passar o óculos; se resolver a dor de cabeça, perfeito — se não resolver, tem que investigar outras causas" | `Orientado prosseguir investigação de outras causas se não houver melhora com a correção óptica` |
+| "se o colírio não melhorar a vermelhidão, a gente vai ter que procurar outra origem" | `Orientado prosseguir investigação de outras causas se não houver melhora com o tratamento` |
+| "se não adaptar, volta aqui" / "qualquer coisa me procura" | descartado (retorno condicional vago) |
+
+Esta linha **não substitui** o `Retorno X meses` quando há prazo definido — as duas coexistem.
+
 ## Encaminhamentos
 
 Use o padrão:
@@ -335,25 +340,69 @@ motivo_revisao_manual: "Destino do encaminhamento não especificado na transcri�
 
 Registre exames solicitados pelo médico com verbo no infinitivo:
 
+**Catálogo** (fonte única: `EXAMES_CATALOGO` em `config/clinical-triggers.js`):
+
+- `Solicitar OCT` (com região só se dita: `Solicitar OCT de mácula`, `Solicitar OCT de nervo óptico`)
 - `Solicitar campo visual`
-- `Solicitar OCT de mácula`
 - `Solicitar retinografia`
 - `Solicitar paquimetria`
 - `Solicitar topografia corneana`
+- `Solicitar curva de tensão`
+- `Solicitar biometria`
+- `Solicitar angiografia`
+- `Solicitar ecografia ocular`
+- `Solicitar mapeamento de retina`
+
+"Tomografia" / "tomografia do nervo" = OCT. "Campimetria" / "exame de campo" = campo visual.
+`Fundo com dilatação` não é exame pedido: é a dilatação.
+
+### Critérios de injeção (2026-10-22 — o OCT vinha sumindo da conduta)
+
+**Emitir a linha** quando as duas condições valem:
+
+1. o exame foi **nomeado** na fala (a sigla OCT chega restaurada do ASR: "o c t", "ocete", "ó cê tê");
+2. a fala o coloca no **futuro** ou como **decisão do médico**: "vou pedir um OCT", "vamos fazer o OCT",
+   "precisa de campo visual", "vamos repetir a retinografia".
+
+- Exame que o paciente fará **na própria clínica hoje** ("vai fazer o OCT ali com a moça") **é pedido**.
+- **Vários exames** → uma linha `Solicitar` para cada; nenhum se perde.
+- Pedido de exame e retorno são **linhas separadas**; o retorno nunca engole o exame.
+- Exame anunciado **sem nome** → `Solicitar exame complementar (não especificado na consulta)`; se o mesmo
+  exame for nomeado em outro ponto da fala, usa-se o nome e a linha genérica não é emitida.
+
+**Não emitir** quando o exame aparece só como passado/resultado ("fiz OCT ano passado", "o OCT veio normal",
+"trouxe o campo visual"), quando é dispensado ("não precisa de OCT agora") ou quando só o diagnóstico/achado o
+sugeriria. Exceção: "vamos **repetir** o OCT" é pedido.
+
+**Rede de código:** `GeminiInterviewAgent._garantirExamesPedidosNaConduta` relê a fala com
+`ClinicalTriggers.detectaExamesPedidosNaFala` e acrescenta a linha que o modelo omitiu. Ela só acrescenta
+(e troca a linha genérica pelo nome); nunca remove pedido do modelo e nunca lê o diagnóstico.
+
+> ⛔ **O nome do exame só pode vir da fala do médico** (regra endurecida em 2026-08-17).
+> Nunca deduza o nome do diagnóstico, do achado do exame ou dos exemplos acima: "nervo fora
+> do padrão"/`H400` **não** autoriza `Solicitar OCT`; retina alterada **não** autoriza
+> `Solicitar retinografia`.
+> - Médico anunciou exame **sem nomear** ("vamos fazer um outro exame ali para medir") →
+>   `Solicitar exame complementar (não especificado na consulta)` — mesma forma do colírio
+>   que o paciente afirma usar mas não nomeia.
+> - Médico **não anunciou exame algum** → nenhuma linha de exame. O achado não pede exame
+>   sozinho.
+>
+> Caso real (2026-08-17): a conduta saiu com `Solicitar OCT de nervo óptico` numa consulta em
+> que a palavra "OCT" nunca foi dita — o nome foi copiado do par `H400`↔OCT dos exemplos
+> canônicos. Ver `[COND-EXAM-1..3]` em `utils/integration-test.js`.
 
 Não registre exames apenas mencionados como já realizados, salvo se o médico pedir repetição ou novo controle.
 
 ## Suspensão e mudança de medicação
 
-Suspensão, troca ou interrupção de medicamento pode entrar em `conduta` quando representa uma decisão clínica, mas a nova medicação com posologia pertence a `tratamento`.
-
-Exemplo:
+Suspensão, troca ou interrupção de medicamento entra em `conduta` quando é decisão clínica; a nova medicação, com posologia, pertence a `tratamento`.
 
 ```text
-Médico: "Suspende o Xalatan e começa Timoptol uma gota de manhã e à noite."
+Médico: "Suspende o Xalatan e começa Timoptol de manhã e à noite."
 
 conduta: "Suspender Xalatan"
-tratamento: "Timoptol 1 gota 12/12h"
+tratamento: "Timolol (Timoptol) de manhã e à noite"
 ```
 
 Se a fala sobre suspensão estiver ambígua, marque revisão manual.
@@ -422,15 +471,15 @@ Preencha `motivo_revisao_manual` de forma curta e objetiva.
 
 ```text
 Entrada:
-Médico orienta compressa morna, higiene palpebral com shampoo infantil, lubrificante ocular, ômega 3, dermatologista e retorno em seis meses.
+Médico diagnostica blefarite, orienta compressa morna, higiene da pálpebra com xampu infantil, o colírio depois da limpeza, lubrificante e ômega 3, encaminha ao dermatologista e marca retorno em seis meses.
 
 Saída:
 conduta: "Encaminhamento: Dermatologista\nRetorno 6 meses"
-tratamento_sugerido: "Compressa morna\nHigiene palpebral com shampoo infantil\nLubrificante ocular\nÔmega 3"
+tratamento_sugerido: "Compressa morna por 2 min antes da higiene palpebral — 2x/dia\nHigiene palpebral com xampu infantil — 3x/dia\nTobramicina + dexametasona 3x/dia após higiene palpebral\nCarmelose sódica ou hialuronato de sódio em cada olho ao longo do dia\nÔmega 3 (EPA+DHA) 1000 mg — 1 comprimido no almoço e 1 no jantar por 30 dias"
 descartado: null
-
-⚠️ Nota: compressa morna e higiene palpebral são ações físicas do paciente → TRATAMENTO, não conduta.
 ```
+
+Compressa e higiene são ações do paciente: `tratamento`, não `conduta`. O colírio não foi nomeado, mas veio junto do cuidado palpebral: é o protocolo da blefarite. Se o médico não tivesse mencionado colírio nenhum, a linha não existiria. Regras, textos e frequências padrão (estas ainda a confirmar com o médico): `TRATAMENTO.md`, seção 7.
 
 ### Óculos
 
@@ -473,8 +522,8 @@ descartado: null
 Antes de finalizar a conduta, confirme:
 
 - A conduta veio do médico, não de inferência.
-- Medicamentos com posologia foram separados para `tratamento`.
-- Associações medicamentosas não foram criadas se o médico não as prescreveu explicitamente.
+- Medicamentos, compressa morna e higiene palpebral foram separados para `tratamento`.
+- Havendo medicação, compressa, higiene ou ômega 3: a "Checagem do tratamento" de `TRATAMENTO.md` foi feita inteira.
 - Logística operacional foi descartada.
 - Óculos foram registrados como `Prescrição de óculos`, nunca como `Atualização de grau`.
 - Óculos multifocais, progressivos ou bifocais prescritos foram explicitamente documentados.
@@ -482,89 +531,15 @@ Antes de finalizar a conduta, confirme:
 - Explicações clínicas relevantes dadas ao paciente foram incluídas.
 - Orientações meramente adaptativas ou operacionais sobre uso dos óculos foram descartadas.
 - Retorno condicional vago foi descartado se havia retorno com prazo.
+- Plano de investigação condicional ditado pelo médico ("se não resolver, investigar outras causas") foi registrado — não confundido com retorno condicional vago.
 - Retorno não contém complemento diagnóstico (`Retorno anual`, nunca `Retorno anual para acompanhamento de X`).
 - Todas as orientações e explicações verbais foram fundidas em uma única linha `Orientado:` com fragmentos separados por ponto e vírgula.
 - Ambiguidades relevantes geraram `revisao_manual: true`.
 
-## Histórico de erros cobertos
+---
 
-### 2026-05-05 — Orientações e explicações ao paciente
+## Antes do passo final — revisão obrigatória
 
-- **Erro observado**: orientações e explicações dadas pelo médico ao paciente não estavam sendo injetadas em `conduta`.
-- **Correção aplicada**: expandida a regra de orientações verbais para incluir explicações clínicas, sinais de alerta, prognóstico, necessidade de acompanhamento e justificativa de exames.
-- **Exceção adicionada**: orientações meramente operacionais ou adaptativas sobre uso dos óculos devem ser descartadas.
+**Passo final desta skill:** entregar os campos `conduta` e `tratamento` prontos (a "Lista de checagem final" deste arquivo e a "Checagem do tratamento" de `TRATAMENTO.md` entram inteiras na revisão).
 
-### 2026-05-05 — Óculos multifocais
-
-- **Erro observado**: prescrições de óculos multifocais nem sempre ficavam explicitamente documentadas em `conduta`.
-- **Correção aplicada**: adicionada regra obrigando `Prescrição de óculos multifocais` quando multifocal, progressivo ou bifocal for verbalizado.
-
-### 2026-05-05 — Associação medicamentosa inventada
-
-- **Erro observado**: o campo de tratamento frequentemente criava associações medicamentosas sem prescrição explícita.
-- **Correção aplicada**: adicionada regra anti-associação para impedir combinação de colírios, princípios ativos ou medicamentos quando o médico prescreveu itens separados ou mencionou termos genéricos.
-
-### 2026-05-11 — Atualização de grau listada como opção válida
-
-- **Erro observado**: a tabela de prescrição de óculos continha a linha `Atualização de grau` como opção de registro, em contradição direta com a regra que proibio este termo.
-- **Correção aplicada**: removida esta entrada da tabela; adicionada regra de inferência de prescrição de óculos para capturar casos em que o médico não verbaliza mas o contexto é inequívoco.
-
-### 2026-05-11 — Prescrição de óculos não capturada quando não verbalizada
-
-- **Erro observado**: quando o médico realizou refração e orientou ótica sem dizer explicitamente "prescrevo óculos", o campo conduta ficava sem prescrição.
-- **Correção aplicada**: adicionada regra de inferência condicional (3 condições obrigatórias) para capturar esses casos.
-
-### 2026-05-18 — Explicações ao paciente não eram injetadas na conduta
-
-- **Erro observado**: quando o médico explica algo ao paciente (diagnóstico, cefaleia, prognóstico, sinais de alerta), essas explicações não apareciam no campo conduta.
-- **Causa raiz**: o prompt do Gemini em geminiService.js tinha apenas uma linha vaga sem exemplos ou formato para esse tipo de entrada. O modelo não sabia gerar "Explicado..." ou "Orientado...".
-- **Correção aplicada**: expandida a instrução de explicações ao paciente no prompt do Gemini com prefixos (`Orientado/Explicado/Esclarecido`), exemplos concretos incluindo cefaleia, e entradas nos exemplos do teste obrigatório.
-- **Inconsistência corrigida**: o SKILL.md mostrava "Orientado compressa morna" como conduta, contradizendo o código (DecisionEngine._guardCondutaContaminada move compressa/higiene para tratamento). Corrigido para alinhar SKILL.md com comportamento real.
-
-### 2026-05-11 — `injectExamesNormais` marcado incorretamente
-
-- **Erro observado**: a frase "tudo em paz com o olho" estava sendo usada como gatilho único para marcar `injectExamesNormais: true`, mesmo quando o médico prescrevia lubrificante ou encaminhava.
-- **Correção aplicada**: adicionada condição extra: a flag só pode ser verdadeira se não houver tratamento ou encaminhamento ativo.
-
-### 2026-06-16 — Detalhes técnicos de lente injetados na conduta
-
-- **Erro observado**: médico comentou que antirreflexo e filtro de luz azul seriam "jogar dinheiro fora" (desaconselhando o item), mas a conduta injetada ficou "Orientado sobre escolha de lentes multifocais (qualidade, antirreflexo, filtro azul)", como se fosse uma orientação positiva — perdendo a polaridade da fala e incluindo detalhe técnico que não deveria estar em conduta.
-- **Causa raiz**: a regra de fusão de orientações verbais (`Orientado:`) não excluía explicitamente comentários sobre revestimento/filtro/qualidade de lente, então o modelo registrava esses detalhes como se fossem decisão clínica.
-- **Correção aplicada**: adicionada regra explícita — conduta de óculos registra apenas se é multifocal ou não; detalhes técnicos de lente (antirreflexo, filtro azul, tamanho de campo, qualidade, marca) nunca entram em conduta, independente de terem sido recomendados ou desaconselhados pelo médico. Mesma regra adicionada em `src/geminiService.js`.
-
-### 2026-06-17 — Óculos convencional classificado incorretamente como multifocal
-
-- **Erro observado**: óculos convencionais (sem o médico dizer multifocal/progressivo) sendo registrados como `Prescrição de óculos multifocais`, possivelmente por ADD presente no ticket de refração ou menção isolada a "grau de perto".
-- **Causa raiz**: a regra de inferência listava "ADD" e "perto/longe" como gatilhos para tipo específico, sem distinguir que ADD é medida e não tipo de lente. O modelo extrapolava para "multifocais" qualquer óculos com componente de perto.
-- **Correção aplicada**: adicionada regra crítica explícita em `geminiService.js` e `SKILL.md` — "Prescrição de óculos multifocais" só quando o médico usar explicitamente a palavra multifocal/progressivo/bifocal, ou descrever longe+perto na mesma armação. ADD sozinho, "grau de perto" isolado, ou tipo não verbalizado → `Prescrição de óculos` (sem qualificador).
-
-### 2026-06-17 — Orientações de uso, adaptação e escolha de óculos injetadas na conduta
-
-- **Erro observado**: médico orientou sobre uso do multifocal conforme necessidade, adaptação (não olhar para baixo ao andar) e escolha de armação (evitar extremos de preço, tamanho e curvatura). Essas três orientações apareceram como linhas `Orientado` na conduta.
-- **Causa raiz**: a regra de exceção listava apenas casos operacionais genéricos (usar para perto, testar adaptação) mas não cobria explicitamente orientações sobre modo de uso, técnica de adaptação e critérios de escolha de armação.
-- **Correção aplicada**: expandida a regra "Exceção: orientações sobre uso dos óculos" para cobrir todos os três tipos. Adicionado exemplo concreto mostrando que essas linhas vão para `descartado`. A mesma regra foi adicionada explicitamente em `src/geminiService.js`.
-
-### 2026-05-27 — "Manutenção do óculos atual" classificada erroneamente como "Sem prescrição de óculos"
-
-- **Erro observado**: médico disse "não precisa trocar o grau não" em consulta de retorno com paciente que já usa óculos. O modelo classificou como "Sem prescrição de óculos" em vez de "Manutenção do óculos atual".
-- **Causa raiz**: a tabela de óculos não continha a linha "Manutenção do óculos atual" e não havia distinção explícita entre as duas situações. O modelo inferiu "Sem prescrição" porque viu "não precisa" sem o contexto de que se tratava de não precisar TROCAR.
-- **Correção aplicada**: adicionada linha "Manutenção do óculos atual" na tabela e bloco de distinção crítica com exemplos de sinais discriminativos. A mesma distinção foi adicionada em `src/geminiService.js` no `_buildConsultationPrompt`.
-
-### 2026-07-02 — Orientações de uso do óculos: de "descartar tudo" para "sufixo genérico"
-
-- **Pedido do usuário**: para prescrição de óculos, a única informação clínica necessária é se é multifocal ou não. Orientações sobre adaptação/uso podem ser mencionadas de forma genérica, sem detalhar o conteúdo — nunca omitidas por completo quando existirem.
-- **Comportamento anterior**: quando o médico dava qualquer orientação sobre uso, adaptação ou escolha de óculos, a regra mandava descartar completamente essa informação, registrando apenas `Prescrição de óculos [tipo]` — sem nenhum sinal de que orientação foi dada.
-- **Correção aplicada**: a regra "Exceção: orientações sobre uso dos óculos" foi reformulada — quando houver qualquer orientação de uso/adaptação/escolha, acrescentar o sufixo genérico `" com orientações sobre o uso"` à própria linha de prescrição (ex.: `Prescrição de óculos multifocais com orientações sobre o uso`), sem detalhar o conteúdo. Sem orientação → prescrição pura, sem sufixo. Detalhes técnicos de lente (antirreflexo, filtro azul, tamanho, qualidade, marca) continuam sendo descartados por completo, sem sufixo — essa categoria não mudou. Mesma regra atualizada em `src/geminiService.js`.
-
-### 2026-07-07 — Orientação de orçamento em mais de uma ótica injetada na conduta
-
-- **Pedido do usuário**: quando o médico orienta o paciente a fazer orçamento/pesquisa de preço em mais de uma ótica, essa informação não deve ir para a conduta.
-- **Causa raiz**: a lista de descarte cobria logística de retirada de óculos (`retirar na ótica`, `conferir óculos após prontos`), mas não cobria explicitamente a orientação comercial de cotação/comparação de preços. Sem exemplo, o modelo podia registrar `Orientado a fazer orçamento em mais de uma ótica` como linha de conduta.
-- **Correção aplicada**: adicionada categoria "Orientação comercial/orçamento de óculos" na lista de descarte e na seção "Descarte de logística operacional" — orientar o paciente a orçar/cotar/comparar preços em óticas é orientação de compra, não decisão médica, e nunca entra em `conduta`. Mesma regra adicionada como filtro de descarte em `src/gemini-interview-agent.js`.
-
-### 2026-07-08 — Hierarquia de nomeação da medicação prescrita (princípio ativo → grupo → genérico)
-
-- **Pedido do usuário**: sempre que possível identificar o princípio ativo, registrá-lo; não sendo possível, registrar ao menos o grupo/classe da medicação; não sendo possível o grupo, registrar que foi prescrita alguma medicação. Nunca omitir a prescrição.
-- **Comportamento anterior**: a "Associação (ATB + corticoide ocular)" era forçada de forma incondicional na blefarite pelo prompt, e o guard `_guardAssociacaoATB` no DecisionEngine **apagava** a linha por completo quando a transcrição não mencionava antibiótico/corticoide — perdendo o registro de que houve prescrição. Um colírio prescrito sem nome ("uma gota 3x/dia") não tinha nível de fallback definido.
-- **Correção aplicada**: adicionada a seção "Hierarquia de nomeação da medicação prescrita" (3 níveis) na skill e no prompt (`_buildConsultationPrompt`). O nível 1 (princípio ativo) é estritamente condicionado ao nome ter sido pronunciado — nunca inferido do diagnóstico. A regra da blefarite passou a nomear o colírio pelos 3 níveis em vez de forçar sempre a classe ATB+corticoide. O guard `_guardAssociacaoATB` foi alterado de **apagar** para **rebaixar** a linha ao genérico (`Medicação ocular prescrita`), preservando a posologia. Testes `[DE-3]` (rebaixamento) e `[DE-3b]` (preservação quando a classe é mencionada) em `utils/integration-test.js`.
-- **Limitação conhecida (não corrigida)**: o `hasMention` do guard é um OR sobre `antibiótico|corticoide`, então a linha da classe sobrevive mesmo se o médico citou só um dos dois — a expressão "ATB + corticoide" pode sobre-afirmar o corticoide. Fora do escopo deste pedido.
+Antes de executá-lo, rodar a skill `revisao-final` sobre o resultado pronto: ela relê os parâmetros desta skill (regras críticas, checagem final, formato de saída e o histórico de erros em `HISTORICO.md`) e as regras do médico na memória, confere item por item e só então libera o passo final. Com algum item violado, corrige e revisa de novo (no máximo 3 rodadas); se ainda falhar, o passo final não é executado e o problema vai para o Fuad.

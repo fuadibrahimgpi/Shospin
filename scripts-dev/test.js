@@ -11,6 +11,9 @@ const ROOT = path.resolve(__dirname, '..');
 const SUITES = [
   ['integration', path.join(ROOT, 'utils', 'integration-test.js')],
   ['hooks',       path.join(ROOT, 'utils', 'hooks-test.js')],
+  ['agents',      path.join(ROOT, 'utils', 'agents-test.js')],
+  ['readback',    path.join(ROOT, 'utils', 'readback-e2e-test.js')],
+  ['oct',         path.join(ROOT, 'utils', 'oct-test.js')],
 ];
 
 let failed = 0;

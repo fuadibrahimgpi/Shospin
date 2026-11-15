@@ -47,6 +47,34 @@ const FALLBACK_IDS = {
   'refracao.oe.esf': 'prontuario_resp_78074_259526',
   'refracao.oe.cil': 'prontuario_resp_78074_259527',
   'refracao.oe.eixo': 'prontuario_resp_78074_259528',
+  // ── Refração ESTÁTICA (pós-dilatação) — mesma aba tdCadastro-78074 ──
+  // IDs LIDOS DA PÁGINA em 2026-07-30 (inspeção direta do DOM com o prontuário
+  // aberto na aba Refração), não inferidos. Ordem no documento dentro de
+  // #divCategoriaProntuarioAtendimento-78074:
+  //   REFRACAO ESTATICA → OD [ESF 259536 | CIL 259542 | EIXO 259540 | AV 259533]
+  //                     → OE [ESF 259544 | CIL 259543 | EIXO 259534 | AV 259535]
+  // Os números NÃO são sequenciais e não seguem a ordem visual — extrapolar a
+  // partir da dinâmica (259522-528) teria acertado os campos de AV. Os 6 abaixo
+  // foram conferidos um a um: existem, são input[type=text], visíveis, e o texto
+  // imediatamente anterior a cada um é ESF/CIL/EIXO do olho correspondente.
+  // Os campos AV ficam de fora de propósito: fillRefractionFields só escreve
+  // esf/cil/eixo.
+  //
+  // SE A CLÍNICA RECRIAR O FORMULÁRIO e estes IDs mudarem: os cabeçalhos de bloco
+  // são inputs OCULTOS cujo `value` é o próprio rótulo — 259538="REFRACAO ESTATICA",
+  // 259539="OD", 259541="OE". Achar o input oculto de valor "REFRACAO ESTATICA" e
+  // pegar os inputs seguintes em ordem de documento (ESF, CIL, EIXO, AV por olho)
+  // recupera o mapeamento. Não é heurística de rótulo: é a estrutura declarada pelo
+  // próprio SHOSP. Os rótulos VISÍVEIS são nós de texto soltos em <div>, o que é o
+  // motivo de _refractionBlockOf (que busca legend/caption/th/h3…) nunca ter tido
+  // chance, e de _detectDynamicFields não classificar nada aqui: o container destes
+  // inputs não tem texto nenhum.
+  'refracaoEstatica.od.esf':  'prontuario_resp_78074_259536',
+  'refracaoEstatica.od.cil':  'prontuario_resp_78074_259542',
+  'refracaoEstatica.od.eixo': 'prontuario_resp_78074_259540',
+  'refracaoEstatica.oe.esf':  'prontuario_resp_78074_259544',
+  'refracaoEstatica.oe.cil':  'prontuario_resp_78074_259543',
+  'refracaoEstatica.oe.eixo': 'prontuario_resp_78074_259534',
   'receitaOculos.od.esf': 'od_esferico',
   'receitaOculos.od.cil': 'od_cilindrico',
   'receitaOculos.od.eixo': 'od_eixo',
@@ -54,6 +82,28 @@ const FALLBACK_IDS = {
   'receitaOculos.oe.cil': 'oe_cilindrico',
   'receitaOculos.oe.eixo': 'oe_eixo'
 };
+
+// IDs conhecidos da refração DINÂMICA (alvo do OCR normal). Guarda de segurança:
+// a detecção da estática NUNCA pode reclassificar um destes como estática — se a
+// heurística de rótulo falhar, o pior caso deve ser "não injeta" (seguro), nunca
+// gravar o grau dilatado no campo dinâmico errado. Ver _detectDynamicFields.
+const DYNAMIC_REFRACTION_IDS = new Set([
+  FALLBACK_IDS['refracao.od.esf'], FALLBACK_IDS['refracao.od.cil'], FALLBACK_IDS['refracao.od.eixo'],
+  FALLBACK_IDS['refracao.oe.esf'], FALLBACK_IDS['refracao.oe.cil'], FALLBACK_IDS['refracao.oe.eixo'],
+].filter(Boolean));
+
+// Guarda simétrica. No DOM real (verificado 2026-07-30) o bloco ESTÁTICA vem
+// DEPOIS do dinâmico, e _detectDynamicFields faz cache.set em ordem de documento:
+// se um campo da estática fosse classificado como 'refracao', ele sobrescreveria
+// o mapeamento dinâmico e o OCR normal (pré-dilatação) passaria a gravar no bloco
+// estática. Hoje isso não acontece porque o container desses inputs não tem texto
+// algum (o gate `text.includes('esf')` nunca passa), mas essa é uma propriedade da
+// marcação do SHOSP, não uma decisão nossa — se ela mudar, a falha seria silenciosa
+// e clinicamente grave. O ID conhecido manda em qualquer heurística.
+const STATIC_REFRACTION_IDS = new Set([
+  FALLBACK_IDS['refracaoEstatica.od.esf'], FALLBACK_IDS['refracaoEstatica.od.cil'], FALLBACK_IDS['refracaoEstatica.od.eixo'],
+  FALLBACK_IDS['refracaoEstatica.oe.esf'], FALLBACK_IDS['refracaoEstatica.oe.cil'], FALLBACK_IDS['refracaoEstatica.oe.eixo'],
+].filter(Boolean));
 
 const TAB_IDS = {
   biomicroscopia: 'tdCadastro-78728',
@@ -83,6 +133,12 @@ const FIELD_INDICES = {
 };
 
 const TAB_LOAD_DELAY = 800;
+
+// Prazo do 1º clique de recuperação da seção C.I.D. (ver o bloco de recuperação
+// em `searchCid`). Separado de TAB_LOAD_DELAY porque não é a montagem de uma aba
+// de prontuário: é o AJAX do menu da ficha, medido em 2026-08-04 como mais lento
+// que 1,6s pelo menos uma vez em cada duas cadeias de CID.
+const CID_SECTION_WAIT_MS = 5000;
 
 // Helper robust para extrair número da aba (ID do serviço do banco de dados do SHOSP)
 function extractTabNumber(tabId) {
@@ -213,12 +269,174 @@ class ShospFieldDetector {
           
           if (fieldType) {
             const isReceita = text.includes('receita') || text.includes('prescrição') || text.includes('prescricao') || id.includes('esferico') || id.includes('cilindrico') || id.includes('eixo') && (id.startsWith('od') || id.startsWith('oe'));
-            const prefix = isReceita ? 'receitaOculos' : 'refracao';
+            // Fora da receita, o campo pode pertencer ao bloco Refração DINÂMICA
+            // (padrão, alvo do OCR normal) ou ao bloco Refração ESTÁTICA
+            // (pós-dilatação). _refractionBlockOf decide pelo rótulo do bloco.
+            let prefix = isReceita ? 'receitaOculos' : this._refractionBlockOf(input);
+            // Guarda de segurança: um ID sabidamente dinâmico jamais vira estática
+            // (evita gravar o grau dilatado no campo dinâmico se o rótulo enganar).
+            if (prefix === 'refracaoEstatica' && DYNAMIC_REFRACTION_IDS.has(id)) {
+              prefix = 'refracao';
+            }
+            // Simétrica: ID sabidamente da estática jamais é remapeado como dinâmica
+            // (senão o OCR pré-dilatação escreveria no bloco pós-dilatação).
+            if (prefix === 'refracao' && STATIC_REFRACTION_IDS.has(id)) {
+              prefix = 'refracaoEstatica';
+            }
             this.cache.set(`${prefix}.${eye}.${fieldType}`, id);
           }
         }
       }
     }
+  }
+
+  /**
+   * Decide a qual bloco de refração um campo esf/cil/eixo pertence, subindo a
+   * árvore até achar o rótulo de bloco mais próximo. "estát*" → estática
+   * (pós-dilatação); "dinâm*" ou nenhum → dinâmica (padrão, alvo do OCR normal,
+   * preservando o comportamento anterior). Só considera rótulos curtos para não
+   * casar com blobs de texto de containers grandes (que englobam os dois blocos).
+   * @param {Element} input
+   * @returns {'refracao'|'refracaoEstatica'}
+   */
+  _refractionBlockOf(input) {
+    let node = input;
+    for (let i = 0; i < 7 && node; i++, node = node.parentElement) {
+      // 1) cabeçalho estrutural dentro do container atual
+      const heads = node.querySelectorAll
+        ? node.querySelectorAll('legend, caption, th, h3, h4, h5, .titulo, .title, [class*="titulo" i]')
+        : [];
+      for (const h of heads) {
+        const t = (h.textContent || '').trim();
+        if (!t || t.length > 60) continue; // ignora blocos de texto longos
+        if (/est[aá]t/i.test(t)) return 'refracaoEstatica';
+        if (/din[aâ]m/i.test(t)) return 'refracao';
+      }
+      // 2) rótulo solto imediatamente antes deste container
+      let sib = node.previousElementSibling;
+      for (let j = 0; j < 3 && sib; j++, sib = sib.previousElementSibling) {
+        const t = (sib.textContent || '').trim();
+        if (!t || t.length > 60) continue;
+        if (/est[aá]t/i.test(t)) return 'refracaoEstatica';
+        if (/din[aâ]m/i.test(t)) return 'refracao';
+      }
+    }
+    return 'refracao'; // padrão seguro: dinâmica
+  }
+
+  /**
+   * Dump ESTRUTURAL dos campos de refração no DOM: id, o bloco que
+   * _refractionBlockOf atribui a cada um, e o contexto estrutural de cada campo
+   * (rótulos ancestrais, linha/coluna da tabela, texto do container).
+   * NUNCA lê o que está digitado no campo — nenhum dado de paciente sai da página.
+   *
+   * Existe porque `refracaoEstatica.*` é o único grupo sem IDs em FALLBACK_IDS e
+   * depende inteiramente da heurística de rótulo contra um DOM nunca inspecionado.
+   *
+   * O painel imprime UMA LINHA POR CAMPO. O formato anterior era um único
+   * JSON.stringify(..., null, 1) de ~20 campos × 28 linhas: o console do Chrome
+   * cortou a string e o log de 2026-07-30 chegou truncado em `"id": "prontuario_res`,
+   * justamente antes dos IDs do bloco ESTÁTICA — o dump existia e mesmo assim não
+   * entregou o que precisava entregar.
+   *
+   * Os três campos que decidem o diagnóstico:
+   *  - `ctx`: texto do MESMO container que _detectDynamicFields inspeciona
+   *    (`closest('.form-group, td, tr')`). Se vier vazio, o teste
+   *    `text.includes('esf'|'cil'|'eixo')` nunca passa, o campo jamais entra no
+   *    cache e a heurística de rótulo sequer chega a ser consultada — a causa
+   *    seria a porta de entrada, não a classificação do bloco.
+   *  - `narrow`: primeiro rótulo visível ao seletor ESTREITO de
+   *    _refractionBlockOf. `null` com `labs` preenchido = o rótulo do bloco existe
+   *    mas está num elemento que o seletor não alcança (b/strong/label).
+   *  - `vis`: campo renderizado. Se os campos da estática não estiverem visíveis,
+   *    não há ID a fixar — a seção nem está montada no DOM.
+   * @returns {Array<{i:number,id:string,bloco:string,vis:boolean,ctx:string|null,linha:string|null,col:number|null,head:string|null,narrow:string|null,labs:string[]}>}
+   */
+  dumpRefractionCandidates() {
+    // NARROW = exatamente o seletor de _refractionBlockOf (o que a detecção vê).
+    // WIDE = superconjunto (o que existe na página).
+    const NARROW = 'legend, caption, th, h3, h4, h5, .titulo, .title, [class*="titulo" i]';
+    const WIDE = NARROW + ', label, b, strong';
+    // Rótulo de bloco é curto; texto acima de 60 chars é blob de container e é
+    // ignorado — mesmo critério de _refractionBlockOf, para o dump reproduzir
+    // fielmente o que a heurística enxerga.
+    const rotulo = (el, max) => {
+      const t = String(el.textContent || '').replace(/\s+/g, ' ').trim();
+      return !t || t.length > 60 ? '' : t.slice(0, max);
+    };
+    const tagOf = (el) => {
+      const cls = typeof el.className === 'string' && el.className.trim()
+        ? '.' + el.className.trim().split(/\s+/)[0]
+        : '';
+      return el.tagName + cls;
+    };
+
+    const inputs = document.querySelectorAll('input[id*="prontuario_resp" i], input[id*="esferico" i], input[id*="cilindrico" i], input[id*="eixo" i]');
+    return Array.from(inputs).map((input, i) => {
+      // Rótulos mais próximos, subindo a árvore. Sem dedupe global e sem o corte
+      // em 8 da versão anterior: era esse corte que impedia saber se rótulos de
+      // coluna ("Esférico") existiam na ancestralidade dos campos prontuario_resp.
+      const labs = [];
+      let narrow = null;
+      let node = input;
+      for (let lvl = 0; lvl < 7 && node; lvl++, node = node.parentElement) {
+        if (!node.querySelectorAll) continue;
+        if (labs.length < 4) {
+          for (const el of node.querySelectorAll(WIDE)) {
+            const t = rotulo(el, 40);
+            if (!t) continue;
+            const entry = tagOf(el) + ':' + t;
+            if (!labs.includes(entry)) labs.push(entry);
+            if (labs.length >= 4) break;
+          }
+        }
+        if (!narrow) {
+          for (const el of node.querySelectorAll(NARROW)) {
+            const t = rotulo(el, 40);
+            if (!t) continue;
+            narrow = tagOf(el) + ':' + t;
+            break;
+          }
+        }
+        if (labs.length >= 4 && narrow) break;
+      }
+
+      // Posição na tabela: linha (rótulo O.D./O.E.) e coluna (esf/cil/eixo).
+      // É o que permite atribuir os 6 IDs do bloco estática sem adivinhar ordem.
+      const cell = input.closest('td, th');
+      const row = input.closest('tr');
+      let linha = null, col = null, head = null;
+      if (row && row.cells && cell) {
+        const idx = Array.prototype.indexOf.call(row.cells, cell);
+        col = idx >= 0 ? idx : null;
+        for (const c of row.cells) {
+          const t = String(c.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 30);
+          if (t) { linha = t; break; }
+        }
+        // Cabeçalho da coluna: primeira linha ACIMA com texto na mesma coluna.
+        let prev = col !== null ? row.previousElementSibling : null;
+        for (let k = 0; k < 6 && prev && !head; k++, prev = prev.previousElementSibling) {
+          const hc = prev.cells && prev.cells[col];
+          const t = hc ? String(hc.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 30) : '';
+          if (t) head = t;
+        }
+      }
+
+      const container = input.closest('.form-group, td, tr') || input.parentElement;
+
+      return {
+        i,
+        id: input.id,
+        bloco: this._refractionBlockOf(input),
+        vis: input.offsetParent !== null,
+        ctx: container ? String(container.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 40) : null,
+        linha,
+        col,
+        head,
+        narrow,
+        labs
+      };
+    });
   }
 
   getTabId(tabName) {
@@ -347,6 +565,76 @@ function _syncFroalaSourceTextarea(frElement) {
   ta.dispatchEvent(new Event('change', { bubbles: true }));
   contentLogger.debug(`[Froala] textarea fonte preenchido: ${ta.id || ta.name} (${html.length} chars)`);
   return true;
+}
+
+// ============================================================================
+// CAMPO OCT DA ABA GLAUCOMA (laudo de OCT, 2026-11-09)
+// ============================================================================
+// O ID do campo OCT nunca foi lido do DOM real. Em vez de inventar um ID (o erro
+// do `#tdCadastro-cid`), o campo é achado pelo RÓTULO, dentro do container da
+// aba Glaucoma, e precisa ser ÚNICO: 0 ou 2+ candidatos → não injeta. Nada de
+// fallback por índice/posição — `findEditorByLabel` casaria o `td` que embrulha
+// a aba inteira e cairia no índice global, escrevendo o laudo em outro campo.
+
+// Escolhe o campo OCT entre os candidatos {rotulo, ...}. Pura (testada em
+// utils/oct-test.js). Sem chaves em regex: o extrator dos testes conta chaves.
+function _escolherCampoOct(candidatos) {
+  const ROTULO_OCT = /(^|[^a-z0-9à-ÿ])o\.?\s?c\.?\s?t\.?($|[^a-z0-9à-ÿ])|tomografia/i;
+  const lista = Array.isArray(candidatos) ? candidatos : [];
+  const casam = lista.filter(c => {
+    const r = String((c && c.rotulo) || '').trim();
+    return r && r.length <= 60 && ROTULO_OCT.test(r);
+  });
+  if (casam.length === 1) return { campo: casam[0], motivo: null, casam };
+  return { campo: null, motivo: casam.length === 0 ? 'nenhum' : 'ambiguo', casam };
+}
+
+// O SHOSP monta o Froala depois de abrir a aba: até lá o campo é só o
+// <textarea class="editorFroala"> cru. Escrever nele com setInputValue e deixar
+// o Froala subir por cima perde as quebras de linha ou o texto inteiro. Pronto =
+// editor Froala montado, ou campo que nunca vai virar Froala. Pura (testada).
+function _campoOctPronto(campo) {
+  if (!campo) return false;
+  if (campo.tipo === 'froala') return true;
+  return !campo.froalaPendente;
+}
+
+// Texto de rótulo de um campo, sem nunca ler conteúdo digitado: ignora qualquer
+// elemento que contenha campo editável (um editor vizinho pode ter texto do
+// paciente curto o bastante para parecer rótulo).
+function _rotuloDoCampoShosp(el) {
+  const temCampo = (n) => n.matches?.('input, textarea, select, .fr-box, [contenteditable]') ||
+    !!n.querySelector?.('input, textarea, select, .fr-box, [contenteditable]');
+  const curto = (n) => {
+    if (!n || temCampo(n)) return '';
+    const t = String(n.textContent || '').replace(/\s+/g, ' ').trim();
+    return t.length > 0 && t.length <= 60 ? t : '';
+  };
+  // 1) <label for=id> — do próprio campo ou do textarea fonte do Froala
+  const alvoId = el.id || (el.classList?.contains('fr-box') ? (_findFroalaSourceTextarea(el.querySelector('.fr-element') || el)?.id || '') : '');
+  if (alvoId) {
+    const lab = document.querySelector(`label[for="${CSS.escape(alvoId)}"]`);
+    const t = lab ? String(lab.textContent || '').replace(/\s+/g, ' ').trim() : '';
+    if (t && t.length <= 60) return t;
+  }
+  // 2) <label> do wrapper SHOSP (<div.botaoTextoPadrao> <label> <div.fr-box>…)
+  const wrap = el.closest('.botaoTextoPadrao');
+  if (wrap) {
+    for (const lab of wrap.querySelectorAll('label')) {
+      const t = curto(lab);
+      if (t) return t;
+    }
+  }
+  // 3) irmão anterior curto, subindo até 3 níveis
+  let node = el;
+  for (let i = 0; i < 3 && node; i++, node = node.parentElement) {
+    let sib = node.previousElementSibling;
+    for (let j = 0; j < 2 && sib; j++, sib = sib.previousElementSibling) {
+      const t = curto(sib);
+      if (t) return t;
+    }
+  }
+  return '';
 }
 
 function setFroalaValue(element, value) {
@@ -717,8 +1005,11 @@ class ShospInjector {
   async injectExamesNormais(data) {
     let success = false;
 
-    // Biomicroscopia
-    const bioTabId = this.detector.getTabId('biomicroscopia');
+    // Biomicroscopia — só injeta se o dado for fornecido.
+    // Pode vir null quando o diagnóstico afirma achado de segmento anterior e não há
+    // texto descrito: nesse caso o campo fica VAZIO para o médico redigir, em vez de
+    // receber o template normal que contradiria o diagnóstico (log 2026-07-29).
+    const bioTabId = data.biomicroscopia ? this.detector.getTabId('biomicroscopia') : null;
     if (bioTabId && (await this.clickTab(bioTabId))) {
       const tabNumber = extractTabNumber(bioTabId);
       // Polling: aguarda editores Froala inicializarem após o container aparecer
@@ -766,6 +1057,108 @@ class ShospInjector {
     }
 
     return success;
+  }
+
+  /**
+   * Campos de texto da aba Glaucoma, com rótulo e tipo. `el` é o alvo da escrita
+   * (o .fr-element para Froala). Não lê valores — só `temConteudo` (booleano).
+   */
+  _camposDaAbaGlaucoma(container) {
+    const out = [];
+    const fontes = new Set();
+    for (const box of container.querySelectorAll('.fr-box')) {
+      const el = box.querySelector('.fr-element');
+      if (!el) continue;
+      const ta = _findFroalaSourceTextarea(el);
+      if (ta) fontes.add(ta);
+      out.push({
+        tipo: 'froala', id: ta?.id || '', rotulo: _rotuloDoCampoShosp(box), el,
+        vis: !!box.offsetParent, temConteudo: !!String(el.textContent || '').trim(),
+      });
+    }
+    for (const f of container.querySelectorAll('textarea, input[type="text"], input:not([type])')) {
+      if (fontes.has(f)) continue;
+      out.push({
+        tipo: f.tagName === 'TEXTAREA' ? 'textarea' : 'input', id: f.id || '', rotulo: _rotuloDoCampoShosp(f), el: f,
+        vis: !!f.offsetParent, temConteudo: !!String(f.value || '').trim(),
+        froalaPendente: f.tagName === 'TEXTAREA' && f.classList.contains('editorFroala'),
+      });
+    }
+    return out;
+  }
+
+  async _abrirAbaGlaucoma() {
+    const tabId = this.detector.getTabId('glaucoma') || TAB_IDS.glaucoma;
+    if (!(await this.clickTab(tabId))) return { container: null, campos: [] };
+    const num = extractTabNumber(tabId);
+    let container = null, campos = [];
+    for (let w = 0; w < 3000; w += 150) {
+      container = document.querySelector(`[id*="divTextoProntuarioServico${num}"]`);
+      if (container) {
+        campos = this._camposDaAbaGlaucoma(container);
+        // Não basta haver rótulo (tonometria aparece antes): espera o campo OCT
+        // único e com o editor já montado.
+        if (_campoOctPronto(_escolherCampoOct(campos).campo)) break;
+      }
+      await new Promise(r => setTimeout(r, 150));
+    }
+    return { container, campos };
+  }
+
+  /** Dump estrutural (sem valores) dos campos da aba Glaucoma. */
+  async dumpCamposGlaucoma() {
+    const { container, campos } = await this._abrirAbaGlaucoma();
+    return {
+      container: container ? container.id : null,
+      campos: campos.map((c, i) => ({ i, tipo: c.tipo, id: c.id, rotulo: c.rotulo, vis: c.vis, temConteudo: c.temConteudo })),
+    };
+  }
+
+  /**
+   * Escreve o laudo de OCT no campo OCT da aba Glaucoma.
+   * Não sobrescreve campo com conteúdo sem `substituir: true`.
+   */
+  async injectOctLaudo({ laudo, substituir } = {}) {
+    const texto = String(laudo || '').trim();
+    if (!texto) return { success: false, error: 'Laudo vazio' };
+
+    const { container, campos } = await this._abrirAbaGlaucoma();
+    if (!container) return { success: false, error: 'Aba Glaucoma não abriu — a ficha do paciente está aberta?' };
+
+    const { campo, motivo, casam } = _escolherCampoOct(campos);
+    const resumoCampos = campos.map(c => `${c.tipo}:${c.rotulo || '(sem rótulo)'}`);
+    if (!campo) {
+      const erro = motivo === 'ambiguo'
+        ? `Mais de um campo com rótulo de OCT na aba Glaucoma (${casam.map(c => c.rotulo).join(' | ')}) — nada injetado`
+        : 'Campo OCT não encontrado na aba Glaucoma — nada injetado';
+      contentLogger.warn(`[OCT] ${erro}. Campos vistos: ${resumoCampos.join(' ; ')}`);
+      return { success: false, error: erro, campos: resumoCampos };
+    }
+
+    if (!_campoOctPronto(campo)) {
+      return { success: false, error: 'O editor do campo OCT ainda não carregou — tente de novo em instantes', campos: resumoCampos };
+    }
+
+    const info = { id: campo.id, rotulo: campo.rotulo, tipo: campo.tipo };
+    if (campo.temConteudo && !substituir) {
+      return { success: false, ocupado: true, campo: info, error: `O campo "${campo.rotulo}" já tem texto` };
+    }
+
+    if (campo.tipo === 'froala') {
+      // Escapa antes de virar HTML: "E/D < 0,5" seria comido pelo sanitizador de tags.
+      const html = texto.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br>');
+      await setFroalaValueSynced(campo.el, html);
+    } else {
+      setInputValue(campo.el, texto);
+    }
+    highlightElement(campo.el);
+
+    // Readback: o que o SHOSP vai salvar (textarea fonte), depois do re-sync de 150ms.
+    await new Promise(r => setTimeout(r, 400));
+    const fonte = campo.tipo === 'froala' ? _findFroalaSourceTextarea(campo.el) : campo.el;
+    const salvo = fonte ? String(fonte.value || '') : '';
+    contentLogger.success(`[OCT] laudo injetado em "${campo.rotulo}" (${campo.id || 'sem id'}); fonte com ${salvo.length} chars`);
+    return { success: true, campo: info, readback: { fonte: !!fonte, chars: salvo.length } };
   }
 
   /**
@@ -1135,6 +1528,9 @@ class ShospInjector {
       if (data.examesNormais.fundoscopia) verifyTargets.push({ label: 'Fundoscopia', num: '78727' });
     }
 
+    // Readback por rótulo: o que ficou na fonte de save, para o recheck da
+    // sidepanel comparar com o que foi enviado (recheck-agent.js).
+    const readback = {};
     for (const t of verifyTargets) {
       const container = document.querySelector(`[id*="divTextoProntuarioServico${t.num}"]`);
       if (!container) {
@@ -1152,6 +1548,7 @@ class ShospInjector {
         saveText = Array.from(container.querySelectorAll('.fr-element'))
           .map(fr => (fr.innerText || '').trim()).join('');
       }
+      readback[t.label] = saveText;
       if (!saveText) {
         warnings.push(`Campo "${t.label}" pode não ter sido salvo: a fonte do salvamento ficou vazia após a injeção`);
         contentLogger.error(`[Verify] ${t.label}: FONTE DE SAVE VAZIA (${mechanism}) — conteúdo provavelmente não persistirá`);
@@ -1161,7 +1558,7 @@ class ShospInjector {
     }
 
     contentLogger.success(`Injeção concluída: ${fieldsInjected} campos`);
-    return { success: fieldsInjected > 0, fieldsInjected, warnings };
+    return { success: fieldsInjected > 0, fieldsInjected, warnings, readback };
   }
 }
 
@@ -1187,10 +1584,229 @@ window.__shospSeenRequestIds = _seenRequestIds;
 
 // Deduplicação de CIDs por paciente: evita injetar o mesmo código duas vezes
 // na mesma aba (ex: áudio "Miopia" + OCR "H52.1 - Miopia" chegando separados).
-// Resetado pela navegação SPA (nova URL = novo paciente).
+//
+// ⚠️ A URL NÃO É FRONTEIRA DE PACIENTE. O SHOSP abre todas as fichas na mesma
+// URL (`https://sistema.shosp.com.br/`, sem path nem hash — ver nota "SHOSP não
+// tem id de paciente em URL/DOM"), então o reset por location.href abaixo nunca
+// dispara na prática e este Set acumularia do 1º paciente do dia em diante.
+// Consequência real (log 2026-07-31, 4 fichas na mesma aba): do 2º paciente em
+// diante, H520/H522 repetidos eram descartados como "já injetado neste paciente"
+// e o painel ainda dizia "C.I.D. lançado" — CID sumindo da ficha em silêncio.
+//
+// A autoridade sobre a fronteira de paciente é o PAINEL (`_cidsLancadosNaSessao`,
+// que zera em StateManager.resetSession() a cada gravação nova e é semeado com a
+// fase 1 quando há retomada de dilatação armada). Ele espelha o set aqui via
+// `setInjectedCids` no início de cada cadeia. O reset por URL fica só como rede
+// para o caso de o SHOSP passar a rotear por ficha.
 if (!window.__shospInjectedCids || window.__shospInjectedCidsUrl !== location.href) {
   window.__shospInjectedCids = new Set();
   window.__shospInjectedCidsUrl = location.href;
+}
+
+/** Normaliza um código de CID para a chave do Set (maiúsculo, sem ponto). */
+function _normalizeCidCode(code) {
+  return String(code || '').toUpperCase().replace(/\./g, '').trim();
+}
+
+// Retificação cross-injeção de H52.9: o transtorno de refração NÃO especificado
+// é redundante quando um CID refrativo específico (H52.0–H52.4) já foi injetado
+// neste paciente. `_dropUnspecifiedRefraction` (sidepanel) só enxerga um campo
+// por vez; quando os específicos vêm do OCR numa rodada e o H52.9 vem do áudio
+// noutra, ele não os vê. O Set `__shospInjectedCids` é a única visão cumulativa
+// cross-round (per-URL, sobrevive à re-injeção). Cobre a ordem OCR→áudio.
+// Autocontida (só args + literal) para ser exercitada por _extractFn nos testes.
+function _isRedundantUnspecifiedRefraction(normCode, injectedSet) {
+  // H527 é o "não especificado" real (H529 não existe na CID-10 nem no SHOSP —
+  // busca verificada em 2026-07-30 retorna zero linhas). H529 segue aceito aqui
+  // porque saída antiga da IA ainda pode trazê-lo, e nesse caso ele é igualmente
+  // redundante: descartar é sempre a decisão certa.
+  if ((normCode !== 'H527' && normCode !== 'H529') || !injectedSet) return false;
+  return ['H520', 'H521', 'H522', 'H523', 'H524'].some(c => injectedSet.has(c));
+}
+
+// Seleção da linha de resultado do CID — ESTRITA por decisão clínica.
+//
+// O dropdown do SHOSP mistura, no mesmo painel, os resultados da busca e a seção
+// "Últimos CIDs selecionados" (documentado no passo 4 da skill cid-oftalmologia).
+// A versão anterior aceitava, em 4 caminhos distintos, uma linha com código
+// DIFERENTE do pedido: (1) prefixo no onclick, (2) prefixo no texto, (3) qualquer
+// linha da mesma categoria de 3 chars, (4) `rows.length === 1`. Com o histórico na
+// tela isso lançava o CID ERRADO e respondia success — buscar H52.0 (Hipermetropia)
+// clicava em H52.4 Presbiopia, que estava no histórico (log 2026-07-30).
+//
+// Regra: só casa código IGUAL ao pedido. Sem match ⇒ falha explícita, que o
+// sidepanel acumula em `_surfaceFailedCids()` para entrada manual. Num prontuário,
+// CID errado silencioso é pior que CID faltando.
+//
+// Única exceção: quando o PRÓPRIO pedido é uma categoria de 3 chars (H46 Neurite
+// óptica, H55 Nistagmo — códigos que só existem nessa forma), aceita a subcategoria
+// correspondente (o SHOSP pode gravá-los como "H460"). Não é o caso de "H52.0",
+// cujo pedido tem 4 chars e portanto nunca cai aqui.
+//
+// Onde o código aparece FORA dos painéis de busca — evidência de que o clique
+// aterrissou na ficha. `success` do searchCid sempre significou "cliquei na
+// linha", nunca "o SHOSP aceitou o registro"; sem saber qual contêiner lista os
+// CIDs lançados, esta varredura acha as folhas (tr/li/td) que contêm o código e
+// registra o id do contêiner — é ele que permite escrever a verificação real.
+// Limitada a 8 ocorrências para não pesar. Recebe `doc` por injeção (testes).
+function _findCidOutsideSearchPanels(normCode, doc) {
+  const d = doc || document;
+  const panels = Array.from(d.querySelectorAll('[id*="ResultadoBuscaCid"], [id*="resultadoCid"], #divResultadoBuscaPadraoCid'));
+  const hits = [];
+  for (const el of d.querySelectorAll('tr, li, td')) {
+    if (hits.length >= 8) break;
+    if (panels.some(p => p.contains(el))) continue;
+    if (el.querySelector('tr, li, td')) continue; // só folhas
+    const txt = (el.textContent || '').toUpperCase().replace(/\./g, '');
+    if (!txt.includes(normCode)) continue;
+    hits.push({
+      tag: el.tagName,
+      id: el.id || (el.closest && el.closest('[id]') ? el.closest('[id]').id : ''),
+      texto: (el.textContent || '').trim().slice(0, 60),
+    });
+  }
+  return hits;
+}
+
+// Autocontida (só args) para ser exercitada por _extractFn nos testes.
+function _pickCidRow(rows, requestedTerm) {
+  if (!rows || !rows.length) return null;
+  const norm = (s) => String(s || '').toUpperCase().replace(/\./g, '');
+  const want = norm(requestedTerm).trim();
+  if (!want) return null;
+  // onclick + texto: o SHOSP grava o código no onclick (selecionaCid('H520',...))
+  // e a descrição no texto da linha.
+  const haystack = (r) => norm(((r.getAttribute && r.getAttribute('onclick')) || '') + ' ' + (r.textContent || ''));
+  // Bordas não-alfanuméricas: evita que H400 case em H4000 (H40.00).
+  const bounded = (pat) => new RegExp(`(?<![A-Z0-9])${pat}(?![A-Z0-9])`, 'i');
+
+  if (/^[A-Z]\d{2,4}$/.test(want)) {
+    const exact = rows.find(r => bounded(want).test(haystack(r)));
+    if (exact) return exact;
+    if (/^[A-Z]\d{2}$/.test(want)) {
+      // `find` ⇒ PRIMEIRA subcategoria em ordem de documento. Escolha arbitrária
+      // mas deliberada: os únicos pedidos que chegam aqui são H46 e H55, que na
+      // CID-10 não têm subcategoria — se o SHOSP devolver várias, qualquer uma
+      // é um chute. Se um dia um código de 3 chars COM subcategorias reais entrar
+      // na tabela, este ramo precisa falhar em vez de escolher.
+      const sub = rows.find(r => bounded(want + '\\d').test(haystack(r)));
+      if (sub) return sub;
+    }
+    return null;
+  }
+
+  // Termo sem código (a IA emitiu texto livre): casa pela descrição, exigindo
+  // TODAS as palavras significativas — "corpo estranho" não pode casar "corpo ciliar".
+  const words = want.split(/\s+/).filter(w => w.length > 3);
+  if (!words.length) return null;
+  return rows.find(r => { const h = haystack(r); return words.every(w => h.includes(w)); }) || null;
+}
+
+// Classifica a falha do searchCid a partir das variantes tentadas. Autocontida
+// (só args) para ser exercitada por _extractFn nos testes.
+//
+// `attempts`: [{ variant, exato, linhas, descartadas }] na ordem em que rodaram.
+// `exato` marca as variantes que SÃO o código pedido ("H250", "H25.0"); as demais
+// (categoria "H25", palavras da descrição) apenas AMPLIAM a consulta.
+//
+// Por que a distinção importa: a versão anterior usava um único `sawAnyRows`,
+// marcado por QUALQUER variante. Como a categoria de um código ausente devolve os
+// IRMÃOS dele (pedir H250 → o SHOSP responde H251, H259...), toda ausência do
+// subset era reportada como "SHOSP retornou resultados mas nenhum correspondeu —
+// verifique matching", que é exatamente o OUTRO diagnóstico. O discriminador que
+// a correção de 2026-07-30 pretendia criar existia só no nome: mandava procurar
+// bug de matching em cima do caso em que não há nada a corrigir no código.
+//
+// Regra: só é suspeita de matching quando uma variante de CÓDIGO EXATO trouxe
+// linhas — aí o SHOSP consultou o código pedido e devolveu algo que não casou
+// (histórico na tela ou bug de casamento). Se apenas os ampliadores trouxeram
+// linhas, a consulta ampla rodou e o código não estava nela ⇒ ausência do subset,
+// que se resolve com entrada manual e NÃO justifica mexer no prompt.
+function _classifyCidFailure(term, attempts) {
+  const tentadas = (attempts || []).map(a => a.variant).join(', ');
+  const comLinhas = (attempts || []).filter(a => a.linhas > 0);
+  const exatasComLinhas = comLinhas.filter(a => a.exato);
+
+  if (exatasComLinhas.length) {
+    const descartadas = exatasComLinhas.map(a => a.descartadas).join(' | ');
+    return {
+      motivo: 'matching',
+      error: `CID ${term}: SHOSP retornou resultados para o próprio código mas nenhum correspondeu — verifique matching. Descartadas: ${descartadas}`,
+    };
+  }
+  if (comLinhas.length) {
+    const a = comLinhas[0];
+    return {
+      motivo: 'ausente-no-subset',
+      error: `CID ${term} ausente do subset SHOSP: a busca do código não retornou nada e a variante ampla "${a.variant}" devolveu só outros códigos (${a.descartadas}). Lançar manualmente.`,
+    };
+  }
+  return {
+    motivo: 'sem-resultado',
+    error: `Nenhum resultado no SHOSP para o CID: ${term} (variantes tentadas: ${tentadas})`,
+  };
+}
+
+// prontuarioOpen: a ficha está aberta quando um marcador ESTRUTURAL da ficha
+// existe no DOM. Antes checava só `td[id^="tdCadastro-"]` — seletor que exige um
+// elemento <td> com esse prefixo; quando o SHOSP troca a tag/id, ele falha e a
+// ficha ABERTA é lida como fechada (8/8 injeções caíram no fallback: ~5s de
+// latência morta por retries+reinjeção e escolha cega de aba, log 2026-07-21).
+// Os dois primeiros marcadores são os ALVOS REAIS da injeção (campos-fonte e
+// containers de aba): "presente" ⇒ "injeção é possível", exatamente a semântica
+// deste flag. O terceiro alinha com _detectDynamicTabs. É um SUPERSET do seletor
+// antigo → não pode criar falso-negativo; o único risco é falso-positivo (aba
+// não-prontuário casando), relevante só com 2+ abas SHOSP. `tdCadastro` é o
+// marcador a vigiar: se vazar na agenda, removê-lo e manter os dois primeiros.
+// Recebe `doc` por injeção para ser exercitada nos testes (via _extractFn).
+function _isProntuarioOpen(doc) {
+  if (!doc) return false;
+  const markers = [
+    '[id*="prontuario_resp"]',           // campos-fonte input/textarea (alvo da injeção)
+    '[id*="divTextoProntuarioServico"]', // containers de conteúdo por aba
+    '[id*="tdCadastro"]'                 // headers/abas da ficha (idem _detectDynamicTabs)
+  ];
+  return markers.some(sel => doc.querySelector(sel) !== null);
+}
+
+// Candidatos a "aba C.I.D." do menu lateral da ficha, em ordem de preferência.
+//
+// A busca de CID do SHOSP só roda com a seção VISÍVEL (medido em 2026-07-30), e
+// o caminho de recuperação escrito naquele dia clicava em `#tdCadastro-cid` — um
+// ID INVENTADO: todas as abas reais da ficha são `tdCadastro-<número>`
+// (TAB_IDS: 78073, 78074, 78726...). Com o elemento inexistente, o `if` inteiro
+// era no-op e a busca falhava direto na checagem seguinte. Foi o que aconteceu
+// com o H527 no log de 2026-07-31: a 1ª rodada de CIDs passou (seção ainda
+// visível), o injectAll navegou para outras abas e a 2ª rodada não conseguiu
+// voltar.
+//
+// Como o ID verdadeiro não é conhecido, a âncora aqui é o RÓTULO: o menu mostra
+// "C.I.D.". A comparação é por IGUALDADE do rótulo normalizado ("c.i.d." → "cid")
+// — nunca `includes`, senão "CIDADE" (presente em todo cadastro de paciente)
+// casaria e o clique navegaria a ficha para longe no meio da injeção.
+// Autocontida (só args + literais) para ser exercitada por _extractFn nos testes.
+function _findCidTabCandidates(doc) {
+  const d = doc || document;
+  // Só letras: "C.I.D." → "cid"; pontos, espaços e nbsp somem, e "CIDADE" segue
+  // sendo "cidade" (≠ "cid"), que é a comparação que importa.
+  const norm = (s) => String(s || '').toLowerCase().replace(/[^a-z]/g, '');
+  const out = [];
+  const push = (el) => { if (el && out.indexOf(el) === -1 && out.length < 5) out.push(el); };
+
+  // 1) O ID historicamente tentado — mantido como primeiro palpite, caso exista.
+  push(d.querySelector('#tdCadastro-cid'));
+  // 2) Itens do menu lateral da ficha (mesma família das demais abas).
+  // 3) Qualquer outro clicável rotulado exatamente "C.I.D.".
+  for (const sel of ['[id*="tdCadastro"]', 'a, li, td, th, span, button']) {
+    for (const el of d.querySelectorAll(sel)) {
+      const texto = (el.textContent || '').trim();
+      if (!texto || texto.length > 12) continue; // rótulo de aba é curto
+      if (norm(texto) !== 'cid') continue;
+      push(el);
+    }
+    if (out.length >= 5) break;
+  }
+  return out;
 }
 
 window.__shospMessageListener = (message, _sender, sendResponse) => {
@@ -1199,11 +1815,10 @@ window.__shospMessageListener = (message, _sender, sendResponse) => {
   switch (message.action) {
     case 'checkPage': {
       // prontuarioOpen: discrimina a aba do prontuário (onde a injeção é possível)
-      // de outras páginas do SHOSP (agenda, login, mensagens). A presença de
-      // td[id^="tdCadastro-"] é o mesmo sinal usado por _detectDynamicTabs para
-      // saber se o prontuário está aberto. Sem isto, com 2+ abas SHOSP, a seleção
-      // de aba escolhe cega tabs[0] e a injeção pode mirar a aba errada.
-      const prontuarioOpen = document.querySelectorAll('td[id^="tdCadastro-"]').length > 0;
+      // de outras páginas do SHOSP (agenda, login, mensagens). Sem isto, com 2+
+      // abas SHOSP a seleção escolhe cega tabs[0]; e mesmo com 1 aba, o flag falso
+      // custa retries+reinjeção. Ver _isProntuarioOpen para os marcadores.
+      const prontuarioOpen = _isProntuarioOpen(document);
       contentLogger.info(`checkPage recebido — content script ativo (prontuarioOpen=${prontuarioOpen}):`, window.location.href.slice(0, 60));
       sendResponse({ isShospPage: true, prontuarioOpen });
       return false;
@@ -1245,6 +1860,78 @@ window.__shospMessageListener = (message, _sender, sendResponse) => {
     case 'injectExamesNormais':
       injector.injectExamesNormais(message.data)
         .then(success => sendResponse({ success }))
+        .catch(err => sendResponse({ success: false, error: err.message }));
+      return true;
+
+    case 'injectRefracaoEstatica': {
+      // Captura pós-dilatação: escreve SOMENTE o bloco Refração ESTÁTICA.
+      // Reusa fillRefractionFields (mesma aba Refração), trocando só o fieldType
+      // para o mapeamento estática — nenhum outro campo é tocado.
+      const refr = message.data && message.data.refracao;
+      if (!refr) { sendResponse({ success: false, error: 'Sem dados de refração' }); return false; }
+      (async () => {
+        try {
+          // A estática não tem fallback de IDs: depende da detecção dinâmica.
+          // Clicar na aba Refração garante que os campos estejam no DOM antes de
+          // redetectar (senão o bloco estática pode não ser mapeado).
+          const tabId = injector.detector.getTabId('refracao');
+          // Guardar o resultado do clique: fillRefractionFields retorna false tanto
+          // por aba não clicada quanto por campo não mapeado. Sem distinguir, uma
+          // falha de aba viraria "confira o mapeamento" + dump da aba errada.
+          const tabClicked = tabId ? await injector.clickTab(tabId) : null;
+          await injector.detector.refresh();
+
+          const paths = ['od.esf', 'od.cil', 'od.eixo', 'oe.esf', 'oe.cil', 'oe.eixo'];
+          const resolvidos = {};
+          for (const p of paths) {
+            resolvidos[p] = injector.detector.getFieldId(`refracaoEstatica.${p}`) || null;
+          }
+
+          const filled = await injector.fillRefractionFields('refracao', 'refracaoEstatica', refr);
+
+          // Quando não preenche, a causa é sempre mapeamento ausente (a estática não
+          // tem FALLBACK_IDS). Anexar o dump estrutural faz a própria falha entregar
+          // os IDs necessários para fixá-la: sem isso o painel só diz "confira os
+          // campos" e a sessão seguinte recomeça do zero — foi o que aconteceu nas
+          // três capturas estáticas do log 2026-07-29.
+          const diag = filled
+            ? { resolvidos, tabClicked }
+            : { resolvidos, tabClicked, candidatos: injector.detector.dumpRefractionCandidates() };
+          sendResponse({ success: filled, diag });
+        } catch (err) {
+          sendResponse({ success: false, error: err.message });
+        }
+      })();
+      return true;
+    }
+
+    // Dump estrutural dos campos de refração sob demanda (sem injetar nada).
+    // Escape hatch para fixar os IDs do bloco ESTÁTICA sem precisar refazer uma
+    // captura: chamar dumpRefracaoBlocks() no console do painel.
+    case 'dumpRefracaoBlocks': {
+      (async () => {
+        try {
+          const tabId = injector.detector.getTabId('refracao');
+          if (tabId) await injector.clickTab(tabId);
+          await injector.detector.refresh();
+          sendResponse({ success: true, candidatos: injector.detector.dumpRefractionCandidates() });
+        } catch (err) {
+          sendResponse({ success: false, error: err.message });
+        }
+      })();
+      return true;
+    }
+
+    // Laudo de OCT (painel → modo OCT): escreve SÓ o campo OCT da aba Glaucoma.
+    case 'injectOctLaudo':
+      injector.injectOctLaudo(message.data || {})
+        .then(r => sendResponse(r))
+        .catch(err => sendResponse({ success: false, error: err.message }));
+      return true;
+
+    case 'dumpCamposGlaucoma':
+      injector.dumpCamposGlaucoma()
+        .then(r => sendResponse({ success: true, ...r }))
         .catch(err => sendResponse({ success: false, error: err.message }));
       return true;
 
@@ -1323,149 +2010,232 @@ window.__shospMessageListener = (message, _sender, sendResponse) => {
             return true;
           };
 
-          // ── Helper: aguardar linhas em qualquer contêiner de resultados visível ──
-          const waitForRows = async (timeoutMs = 5000) => {
-            const deadline = Date.now() + timeoutMs;
+          // ── Helper: coletar linhas de TODOS os contêineres de resultado ──
+          // Antes retornava as linhas do PRIMEIRO contêiner não-vazio: com o
+          // histórico ("Últimos CIDs selecionados") e os resultados em painéis
+          // distintos, era sorteio qual dos dois era lido.
+          const collectRows = () => {
+            const divs = document.querySelectorAll('[id*="ResultadoBuscaCid"], [id*="resultadoCid"], #divResultadoBuscaPadraoCid');
+            const rows = [];
+            for (const div of divs) rows.push(...div.querySelectorAll('tr[onclick]'));
+            return rows;
+          };
+
+          // ── Helper: dump do DOM dos painéis de CID (diagnóstico) ──
+          // Mesmo padrão do auto-dump da refração estática: sem acesso à página
+          // real, é o dump que torna a estrutura "resultados vs histórico"
+          // CONHECÍVEL na próxima sessão em vez de adivinhada.
+          const dumpCidPanels = (label) => {
+            const divs = document.querySelectorAll('[id*="ResultadoBuscaCid"], [id*="resultadoCid"], #divResultadoBuscaPadraoCid');
+            const dump = Array.from(divs).map(d => ({
+              id: d.id || '(sem id)',
+              visivel: d.offsetParent !== null,
+              linhas: Array.from(d.querySelectorAll('tr[onclick]')).map(r => (r.textContent || '').trim().slice(0, 50)),
+            }));
+            contentLogger.info(`[searchCid] DUMP ${label}:`, JSON.stringify(dump));
+            return dump;
+          };
+
+          // ── Helper: aguardar a linha do CID PEDIDO aparecer ──
+          // O painel pode conter os "Últimos CIDs selecionados" enquanto o AJAX da
+          // busca ainda está em voo: aceitar o primeiro render não-vazio lia o
+          // histórico como se fosse resultado. Aqui seguimos aguardando até que a
+          // linha do código pedido apareça.
+          //
+          // Saída antecipada por ESTABILIDADE: se o conteúdo não muda por
+          // `stableRounds` ciclos e já passou `minWaitMs`, o painel é a resposta
+          // final do SHOSP — sair sem queimar o timeout inteiro. Sem isso, cada
+          // código ausente do subset (ex: H04.1) custaria timeout × nº de variantes.
+          //
+          // `minWaitMs` é o que segura a saída quando o SHOSP re-renderiza o
+          // histórico logo após a limpeza: nesse caso `stableRounds` fecha em
+          // ~600ms e só o piso impede ler o painel errado. NÃO é um número medido
+          // — as linhas [SearchCid] do log não têm timestamp, então não dá para
+          // extrair a latência real do AJAX. Escolhido conservador: com piso de 2s
+          // e teto de 4s, um código ausente custa ~2,4s por variante (~7s nas 3),
+          // que é o mesmo custo já observado no log 2026-07-30 para o H04.1 — ou
+          // seja, margem comprada sem tornar a falha mais lenta do que já era.
+          // Se algum dia as linhas ganharem timestamp, medir e apertar o piso.
+          const waitForCidRow = async (requestedTerm, { timeoutMs = 4000, minWaitMs = 2000, stableRounds = 3 } = {}) => {
+            const started = Date.now();
+            const deadline = started + timeoutMs;
+            let lastSig = null, sameCount = 0, lastRows = [];
             while (Date.now() < deadline) {
-              const divs = document.querySelectorAll('[id*="ResultadoBuscaCid"], [id*="resultadoCid"], #divResultadoBuscaPadraoCid');
-              for (const div of divs) {
-                const rows = div.querySelectorAll('tr[onclick]');
-                if (rows.length > 0) return Array.from(rows);
+              const rows = collectRows();
+              if (rows.length) {
+                lastRows = rows;
+                const picked = _pickCidRow(rows, requestedTerm);
+                if (picked) return { picked, rows };
+                const sig = rows.map(r => (r.textContent || '').trim()).join('|');
+                if (sig === lastSig) sameCount++;
+                else { lastSig = sig; sameCount = 1; }
+                if (sameCount >= stableRounds && Date.now() - started >= minWaitMs) break;
               }
               await new Promise(r => setTimeout(r, 300));
             }
-            return [];
+            return { picked: null, rows: lastRows };
           };
 
           const categoryMatch = term.match(/^([A-Z]\d{2})/i);
           const category = categoryMatch ? categoryMatch[1].toUpperCase() : null;
 
-          // ── Helper: selecionar melhor linha ──
-          const pickRow = (rows, searchTerm) => {
-            const up = searchTerm.toUpperCase();
-            // Versão normalizada sem ponto: "H11.1" → "H111"
-            // SHOSP armazena códigos sem ponto nos atributos onclick (ex: 'H111')
-            const upNorm = up.replace(/\./g, '');
-            // Exact match: código não precedido nem seguido por outro dígito/letra
-            // Evita que H400 (H40.0) faça prefix-match em H4000 (H40.00)
-            const isExact = (s) => {
-              const regex = new RegExp(`(?<![A-Z0-9])${upNorm}(?![A-Z0-9])`, 'i');
-              return regex.test(s);
-            };
-            // 1. Match exato no onclick
-            let row = rows.find(r => isExact((r.getAttribute('onclick') || '').toUpperCase().replace(/\./g, '')));
-            // 2. Match exato no texto da linha
-            if (!row) row = rows.find(r => isExact((r.textContent || '').toUpperCase().replace(/\./g, '')));
-            // 3. Fallback prefix — onclick (comportamento anterior, para códigos sem subcategorias)
-            if (!row) row = rows.find(r => (r.getAttribute('onclick') || '').toUpperCase().replace(/\./g, '').includes(upNorm));
-            // 4. Fallback prefix — texto
-            if (!row) row = rows.find(r => (r.textContent || '').toUpperCase().replace(/\./g, '').includes(upNorm));
-            
-            // Se encontramos correspondência pelo código do CID, retornamos
-            if (row) return row;
-
-            // Se for busca genérica de categoria (como "H25"), retorna a primeira linha pertencente a essa categoria
-            if (category) {
-              const catRow = rows.find(r => {
-                const onClickText = (r.getAttribute('onclick') || '').toUpperCase().replace(/\./g, '');
-                const text = (r.textContent || '').toUpperCase().replace(/\./g, '');
-                return onClickText.includes(category) || text.includes(category);
-              });
-              if (catRow) return catRow;
-            }
-
-            // 5. único resultado disponível
-            if (rows.length === 1) return rows[0];
-            return null;
-          };
-
-          // ── 1. Campo disponível? ──
-          const input = document.querySelector('#formCadProntuario #nomeCid')
+          // ── 1. Campo disponível E VISÍVEL? ──
+          // MEDIDO na plataforma em 2026-07-30: `buscaCidProntuario()` só executa a
+          // consulta quando a seção C.I.D. está VISÍVEL. Com ela oculta, a chamada
+          // retorna sem buscar e o painel `divResultadoBuscaPadraoCid` continua
+          // exibindo "Últimos CIDs selecionados" — que era lido como se fosse o
+          // resultado da busca. Consequência: só entravam os códigos que já estavam
+          // no histórico recente; qualquer outro falhava com "SHOSP retornou
+          // resultados mas nenhum correspondeu" listando as mesmas 6 linhas.
+          // Foi o que aconteceu com H52.9 e com o H16.2 do log 2026-07-21 — e
+          // H162 (CERATOCONJUNTIVITE) EXISTE no subset, confirmado na página.
+          // "Montada no DOM" não é o mesmo que "visível": a premissa anterior
+          // ("quando este handler roda, a seção C.I.D. já está montada") era
+          // verdadeira e ainda assim insuficiente.
+          const getCidInput = () => document.querySelector('#formCadProntuario #nomeCid')
             || document.getElementById('nomeCid');
+          let input = getCidInput();
+          // Oculta OU nem montada: nos dois casos o caminho é o mesmo — clicar no
+          // item "C.I.D." do menu da ficha. A 2ª rodada de CIDs de uma consulta
+          // chega SEMPRE aqui, porque o injectAll navegou para outras abas entre
+          // as rodadas (log 2026-07-31: H520/H522 entraram, H527 não).
+          if (!input || input.offsetParent === null) {
+            const candidatos = _findCidTabCandidates(document);
+            contentLogger.info(`[searchCid] Seção C.I.D. oculta — ativando a aba antes de buscar (${candidatos.length} candidato(s))`);
+            for (let i = 0; i < candidatos.length; i++) {
+              const cand = candidatos[i];
+              cand.click();
+              // Espera ATIVA pela visibilidade: o menu monta a seção por AJAX e o
+              // delay fixo anterior era um chute. Teto generoso porque só se paga
+              // quando a seção está mesmo fechada.
+              //
+              // 2026-08-04: TAB_LOAD_DELAY*2 (1,6s) era CURTO DEMAIS para o 1º
+              // clique. Prova no log do dia: numa cadeia de dois CIDs, o H010
+              // falhou aqui com "não ficou visível" e o H524 — buscado 1,8s depois,
+              // na MESMA página, sem nenhum clique novo — passou. Ou seja: o clique
+              // funcionou e a seção só terminou de montar depois do prazo. O 1º
+              // candidato (o palpite bom) ganha um prazo maior; os seguintes ficam
+              // no prazo curto para não empilhar espera quando o rótulo casado não
+              // é a aba certa.
+              const espera = i === 0 ? CID_SECTION_WAIT_MS : TAB_LOAD_DELAY * 2;
+              const deadline = Date.now() + espera;
+              while (Date.now() < deadline) {
+                input = getCidInput();
+                if (input && input.offsetParent !== null) break;
+                await new Promise(r => setTimeout(r, 100));
+              }
+              if (input && input.offsetParent !== null) {
+                contentLogger.success(`[searchCid] Seção C.I.D. ativada via ${cand.tagName}#${cand.id || '(sem id)'} (${Date.now() - (deadline - espera)}ms)`);
+                break;
+              }
+            }
+          }
           if (!input) {
             contentLogger.error('[searchCid] Campo #nomeCid não encontrado');
             sendResponse({ success: false, error: 'Campo #nomeCid não encontrado na página' });
             return;
           }
+          if (input.offsetParent === null) {
+            // Sem visibilidade a busca não roda: falhar explicitamente é melhor que
+            // ler o histórico e lançar o CID errado (ou reportar sucesso falso).
+            contentLogger.error('[searchCid] Seção C.I.D. permanece oculta — busca não roda');
+            // DUMP do menu da ficha, UMA LINHA POR ITEM. Sem acesso ao DOM real,
+            // é ele que torna o ID/rótulo verdadeiro da aba C.I.D. conhecível na
+            // próxima sessão — em vez de adivinhado, como foi `#tdCadastro-cid`.
+            // Uma linha por item porque um JSON.stringify único é truncado pelo
+            // console do Chrome (ver a nota do dump da refração estática).
+            const linha = (el, origem) => {
+              const t = (el.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 40);
+              contentLogger.info(`[searchCid] DUMP menu: ${origem} | id=${el.id || '(sem id)'} | ${el.tagName} | "${t}" | visivel=${el.offsetParent !== null}`);
+            };
+            for (const el of Array.from(document.querySelectorAll('[id*="tdCadastro"]')).slice(0, 20)) {
+              linha(el, 'aba');
+            }
+            // 2ª passada: qualquer rótulo curto que MENCIONE "cid" — cobre o caso
+            // de a seção não ser um `tdCadastro` (é a hipótese que sobra se a 1ª
+            // passada não mostrar nenhum item "C.I.D.").
+            let n = 0;
+            for (const el of document.querySelectorAll('a, li, td, th, span, button')) {
+              if (n >= 15) break;
+              const t = (el.textContent || '').trim();
+              if (!t || t.length > 40) continue;
+              if (!/cid/i.test(t) || (el.id && el.id.includes('tdCadastro'))) continue;
+              linha(el, 'rotulo');
+              n++;
+            }
+            // `code` é o contrato com o painel: a falha é AMBIENTAL (a seção não
+            // terminou de montar), não "o SHOSP não tem esse código". O painel
+            // reagenda o termo uma vez no fim da cadeia em cima deste código —
+            // casar a prosa em português entre os dois arquivos apodreceria.
+            sendResponse({
+              success: false,
+              code: 'CID_SECTION_HIDDEN',
+              error: `CID ${term}: seção C.I.D. não ficou visível — a busca do SHOSP não executa oculta`
+            });
+            return;
+          }
 
           // ── 2. Construir variantes de busca resilientes ──
+          // ⚠️ O formato da plataforma é SEM PONTO — confirmado pelo médico e visível
+          // nas linhas de resultado ("H522ASTIGMATISMO."). A variante sem ponto vem
+          // SEMPRE primeiro; a com ponto é só rede de segurança e roda apenas depois
+          // que a sem ponto não retornou nada. Nunca reordenar isso.
+          // Cada variante carrega se ela É o código pedido (`exato`) ou se apenas
+          // AMPLIA a consulta (categoria, palavra-chave). Essa marca é o que
+          // permite, na falha, separar "o SHOSP não tem o código" de "o painel
+          // devolveu linhas erradas" — ver _classifyCidFailure.
           const searchVariants = [];
+          const addVariant = (v, exato) => {
+            if (v && !searchVariants.some(x => x.v === v)) searchVariants.push({ v, exato });
+          };
           // Se o termo tem ponto (ex: "H25.0"), tenta primeiro sem ponto ("H250")
           // pois o SHOSP armazena códigos majoritariamente sem ponto no banco
           if (term.includes('.')) {
-            searchVariants.push(term.replace(/\./g, ''));
-            searchVariants.push(term);
+            addVariant(term.replace(/\./g, ''), true);
+            addVariant(term, true);
           } else {
-            searchVariants.push(term);
+            addVariant(term, true);
             if (/^[A-Z]\d{3}$/.test(term)) {
               // Se tem 4 caracteres sem ponto (ex: "H250"), tenta com ponto ("H25.0")
-              searchVariants.push(term.slice(0, 3) + '.' + term.slice(3));
+              addVariant(term.slice(0, 3) + '.' + term.slice(3), true);
             }
           }
-          // Fallback de categoria de 3 caracteres (ex: "H25" para Catarata)
-          if (category && !searchVariants.includes(category)) {
-            searchVariants.push(category);
-          }
+          // Fallback de categoria de 3 caracteres (ex: "H25" para Catarata).
+          // Só é ampliador quando o pedido tem 4 chars; se o PRÓPRIO pedido é a
+          // categoria (H46, H55) esta chamada já é no-op — a variante entrou acima
+          // marcada como exata. O segundo argumento é redundante nesse caso e está
+          // aqui para a regra não depender da ordem das inserções.
+          if (category) addVariant(category, category === term.replace(/\./g, ''));
           // Fallback por palavras-chave (se o termo tem descrição longa)
           const words = term.split(/\s+/).filter(w => w.length > 3 && !/^[A-Z]\d{2,3}$/i.test(w))
             .sort((a, b) => b.length - a.length);
-          for (const word of words) {
-            if (!searchVariants.includes(word)) {
-              searchVariants.push(word);
-            }
-          }
+          for (const word of words) addVariant(word, false);
+          const variantNames = searchVariants.map(x => x.v);
 
           // ── Busca + seleção integradas ──
-          // Se uma variante retorna resultados mas nenhuma linha corresponde ao
-          // CID desejado (ex: resultados residuais de busca anterior), continua
-          // tentando as variantes restantes em vez de falhar prematuramente.
+          // As variantes servem para AMPLIAR a consulta (o SHOSP indexa o código
+          // ora com ponto, ora sem, e às vezes só a categoria retorna linhas). O
+          // que elas NÃO fazem é afrouxar o casamento: qualquer que seja a variante
+          // buscada, só é aceita a linha cujo código é o `term` pedido.
           let rows = [];
           let usedVariant = '';
           let targetRow = null;
+          // Uma entrada por variante tentada, com quantas linhas ela devolveu e o
+          // texto das descartadas. `rows` só é preenchido quando há match (segue
+          // com break), então não serve para diagnosticar o ramo de falha.
+          const attempts = [];
 
-          const matchCandidates = [term];
-          if (term.includes('.')) matchCandidates.push(term.replace(/\./g, ''));
-          if (category) matchCandidates.push(category);
-          for (const word of words) {
-            matchCandidates.push(word);
-          }
-
-          // Helper: tenta selecionar uma linha compatível nos resultados
-          const tryPickFromRows = (currentRows, variant) => {
-            // 1. Tentar match por cada candidato (termo original, sem ponto, categoria, palavras)
-            for (const candidate of matchCandidates) {
-              const row = pickRow(currentRows, candidate);
-              if (row) return row;
-            }
-            // 2. Fallback de categoria: aceita qualquer linha da mesma categoria
-            if (category) {
-              const catRow = currentRows.find(r => {
-                const combined = ((r.textContent || '') + ' ' + (r.getAttribute('onclick') || '')).toUpperCase().replace(/\./g, '');
-                return combined.includes(category);
-              });
-              if (catRow) {
-                contentLogger.info('[searchCid] Usando resultado como fallback compatível com categoria:', category);
-                return catRow;
-              }
-            }
-            // 3. Se buscou pela categoria e retornou resultados, aceita o primeiro
-            if (variant === category && currentRows.length > 0) {
-              contentLogger.info('[searchCid] Usando primeiro resultado da busca por categoria:', category);
-              return currentRows[0];
-            }
-            return null;
-          };
-
-          for (const variant of searchVariants) {
+          for (const { v: variant, exato } of searchVariants) {
             contentLogger.info('[searchCid] Tentando busca com variante:', variant);
             await fillAndSearch(variant);
-            const currentRows = await waitForRows(3000);
+            const { picked, rows: currentRows } = await waitForCidRow(term);
+            const descartadas = currentRows.map(r => (r.textContent || '').trim().slice(0, 60)).join(' | ');
+            attempts.push({ variant, exato, linhas: currentRows.length, descartadas });
             if (currentRows.length === 0) continue;
 
             contentLogger.info(`[searchCid] Encontrados ${currentRows.length} resultado(s) para "${variant}"`);
-            contentLogger.debug('[searchCid] Resultados:', currentRows.map(r => (r.textContent || '').trim().slice(0, 60)).join(' | '));
+            contentLogger.debug('[searchCid] Resultados:', descartadas);
 
-            const picked = tryPickFromRows(currentRows, variant);
             if (picked) {
               targetRow = picked;
               rows = currentRows;
@@ -1473,22 +2243,25 @@ window.__shospMessageListener = (message, _sender, sendResponse) => {
               break;
             }
 
-            // Resultados existem mas nenhum corresponde ao CID desejado —
-            // provavelmente resultados residuais de busca anterior. Tentar próxima variante.
+            // Linhas na tela, nenhuma com o código pedido — pode ser o histórico
+            // "Últimos CIDs selecionados" ou resultado de outra categoria.
+            // Tentar a próxima variante em vez de aceitar um código diferente.
             contentLogger.info(`[searchCid] ${currentRows.length} resultado(s) para "${variant}" mas nenhum corresponde a ${term} — tentando próxima variante`);
           }
 
           if (!targetRow) {
-            // Nenhuma variante funcionou
-            const hadRows = rows.length > 0;
-            if (hadRows) {
-              contentLogger.error(`[searchCid] Nenhum resultado compatível com a categoria ${category || term}`);
-              contentLogger.debug('[searchCid] Linhas descartadas:', rows.map(r => (r.getAttribute('onclick') || '').slice(0, 60)).join(' | '));
-              sendResponse({ success: false, error: `Nenhum resultado compatível com a categoria para o CID: ${term}` });
-            } else {
-              contentLogger.warn('[searchCid] Nenhum resultado para:', term);
-              sendResponse({ success: false, error: `Nenhum resultado para o CID: ${term}` });
-            }
+            // Nenhuma variante funcionou. Distinguir os cenários é crucial para
+            // depurar: "SHOSP não indexa este código" exige entrada manual,
+            // enquanto "retornou linhas mas nenhuma casou" pode ser bug de matching
+            // OU o painel do histórico ocupando a tela — por isso o dump.
+            const _dump = dumpCidPanels(`falha "${term}"`);
+            const { motivo, error } = _classifyCidFailure(term, attempts);
+            const log = motivo === 'matching' ? contentLogger.error : contentLogger.warn;
+            log(`[searchCid] falha (${motivo}) em "${term}" — variantes: ${variantNames.join(', ')}`);
+            log('[searchCid] Tentativas:', JSON.stringify(attempts.map(a => ({ v: a.variant, exato: a.exato, linhas: a.linhas }))));
+            const comLinhas = attempts.filter(a => a.linhas > 0);
+            if (comLinhas.length) contentLogger.error('[searchCid] Linhas descartadas:', comLinhas.map(a => `[${a.variant}] ${a.descartadas}`).join('  ||  '));
+            sendResponse({ success: false, error, motivo, _dump, _attempts: attempts });
             return;
           }
 
@@ -1503,12 +2276,43 @@ window.__shospMessageListener = (message, _sender, sendResponse) => {
             sendResponse({ success: true, skipped: true });
             return;
           }
+          // Retificação cross-injeção: pula H52.9 quando um específico H52.0–H52.4
+          // já foi injetado neste paciente (ver _isRedundantUnspecifiedRefraction
+          // e nota de bug "H52.9 duplicado" 2026-07-21). Cobre a ordem OCR→áudio.
+          if (_isRedundantUnspecifiedRefraction(normCode, cidSet)) {
+            contentLogger.warn('[searchCid] H52.9 ignorado — CID refrativo específico já injetado neste paciente:', [...cidSet]);
+            sendResponse({ success: true, skipped: true, reason: 'redundant' });
+            return;
+          }
+          // Sanidade final: a linha escolhida tem mesmo o código pedido? `pickRow`
+          // já garante isso, mas o normCode vem do onclick e é ele que alimenta o
+          // Set de dedup — um desencontro aqui envenenaria o Set (um CID legítimo
+          // depois seria pulado como "já injetado").
+          const wantNorm = term.toUpperCase().replace(/\./g, '');
+          if (normCode && normCode !== wantNorm && !/^[A-Z]\d{2}$/.test(wantNorm)) {
+            contentLogger.error(`[searchCid] ABORTADO: linha escolhida é ${normCode}, mas o pedido era ${wantNorm}`);
+            sendResponse({ success: false, error: `CID ${term}: linha divergente (${normCode}) — não injetado`, _dump: dumpCidPanels(`divergência ${term}`) });
+            return;
+          }
+
           targetRow.click();
           if (normCode && cidSet) cidSet.add(normCode);
           contentLogger.success('[searchCid] CID selecionado:', targetRow.textContent?.trim().slice(0, 80));
 
           await new Promise(r => setTimeout(r, 500));
-          sendResponse({ success: true });
+          // `success` até aqui significa "cliquei na linha", não "o código está na
+          // ficha" — o SHOSP ainda precisa aceitar o registro (toast "Registro
+          // adicionado com sucesso", passo 6 da skill cid-oftalmologia). Qual
+          // contêiner lista os CIDs já lançados é desconhecido daqui, então
+          // procuramos o código FORA dos painéis de busca: se ele aparece numa
+          // folha (tr/li/td) que não é resultado, aterrissou — e o id do contêiner
+          // que sai no log é o que falta para escrever a verificação de verdade.
+          const _landed = normCode ? _findCidOutsideSearchPanels(normCode) : [];
+          contentLogger.info(`[searchCid] Pós-clique ${normCode || term} — ocorrências fora da busca:`, JSON.stringify(_landed));
+          if (normCode && _landed.length === 0) {
+            contentLogger.warn(`[searchCid] ${normCode} clicado mas NÃO encontrado fora do painel de busca — o SHOSP pode ter recusado o registro`);
+          }
+          sendResponse({ success: true, _landed });
 
         } catch (err) {
           contentLogger.error('[searchCid] Erro:', err.message);
@@ -1556,15 +2360,26 @@ window.__shospMessageListener = (message, _sender, sendResponse) => {
       })();
       return true;
 
-    case 'refreshFieldDetector':
-      fieldDetector.refresh()
-        .then(() => sendResponse({ success: true, stats: fieldDetector.getCacheStats() }))
-        .catch(err => sendResponse({ success: false, error: err.message }));
-      return true;
+    // ('refreshFieldDetector' e 'getFieldMapping' foram removidos: ninguém os enviava.
+    // Para depurar, use window.ShospExtension.fieldDetector no console da aba.)
 
-    case 'getFieldMapping':
-      sendResponse({ success: true, mapping: fieldDetector.getFullMapping() });
+    // Fronteira de paciente: o painel redefine o Set de CIDs já injetados.
+    // Sobrescreve (não mescla) — é justamente para DESCARTAR os códigos do
+    // paciente anterior, que a URL constante do SHOSP jamais descartaria.
+    case 'setInjectedCids': {
+      const _codes = Array.isArray(message.codes) ? message.codes : [];
+      const _antes = window.__shospInjectedCids ? [...window.__shospInjectedCids] : [];
+      window.__shospInjectedCids = new Set(_codes.map(_normalizeCidCode).filter(Boolean));
+      window.__shospInjectedCidsUrl = location.href;
+      const _depois = [...window.__shospInjectedCids];
+      const _descartados = _antes.filter(c => !window.__shospInjectedCids.has(c));
+      contentLogger.info(
+        `[setInjectedCids] Set redefinido pelo painel: ${JSON.stringify(_depois)}` +
+        (_descartados.length ? ` | descartados (paciente anterior): ${JSON.stringify(_descartados)}` : '')
+      );
+      sendResponse({ success: true, codes: _depois });
       return false;
+    }
 
     default:
       return false;

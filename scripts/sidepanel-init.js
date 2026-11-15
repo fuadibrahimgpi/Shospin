@@ -28,22 +28,29 @@ if (manualCaptureBtn) {
 }
 
 injectAllBtn.addEventListener('click', async () => {
-  try { await injectAll(); } catch (e) { console.log('[UI] Erro na injeção manual:', e.message); }
+  try { await injectAll(true); } catch (e) { console.log('[UI] Erro na injeção manual:', e.message); }
 });
 
-// Limpeza manual descarta também a fase 1 de dilatação persistida (novo paciente)
+// Limpeza manual (novo paciente) DESARMA retomadas pendentes; as pausas dos
+// pacientes em dilatação permanecem na sala de espera (descarte pelo ✕).
 clearBtn.addEventListener('click', () => clearAll({ clearAudio: true, clearCamera: true, discardDilatacao: true }));
 
 // Desfazer dilatação: reprocessa a consulta como completa (gatilho por engano).
+// Age sobre a pausa mais recente da fila.
 if (cancelDilatacaoBtn) cancelDilatacaoBtn.addEventListener('click', cancelarDilatacao);
 
-// Visibilidade do botão dirigida por UMA fonte: a chave persistida _shospDilatacaoPhase1.
-// storage.onChanged cobre todos os pontos de mutação (injeção de dilatação, undo,
-// clearAll, conclusão da fase 2) sem toggles espalhados. Checa também no load.
+// Sala de espera de dilatação dirigida por UMA fonte: a fila persistida
+// _shospDilatacaoPausas (os botões "retomar"/"✕" de cada linha são criados por
+// renderDilatacaoPausas). storage.onChanged cobre todos os pontos de mutação
+// (nova pausa, retomada armada/desarmada, consumo da fase 2, descarte) sem
+// toggles espalhados. Renderiza também no load — inclusive a migração da
+// chave legada _shospDilatacaoPhase1, convertida em slot na primeira leitura.
 chrome.storage.onChanged.addListener((changes, area) => {
-  if (area === 'local' && changes._shospDilatacaoPhase1) refreshUndoVisibility();
+  if (area === 'local' && (changes[DilatacaoPausas.STORAGE_KEY] || changes[DilatacaoPausas.LEGACY_KEY])) {
+    renderDilatacaoPausas();
+  }
 });
-refreshUndoVisibility();
+renderDilatacaoPausas();
 
 // ============================================================================
 // SELETOR DE MODO
@@ -60,6 +67,10 @@ function switchMode(mode) {
 
   // Áudio e câmera funcionam independentemente — não parar dispositivos ao trocar de modo
   if (mode === 'camera') {
+    // Entrada normal na câmera: a captura vai para a refração DINÂMICA. O modo
+    // 'estatica' é armado só pelo botão da retomada (startCameraCaptureEstatica),
+    // que não passa por switchMode.
+    _captureMode = 'normal';
     setTimeout(() => {
       if (!cameraStream) startCameraCapture();
     }, 100);
@@ -80,13 +91,24 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         statusText.textContent = 'Clique para iniciar o ditado';
         statusText.style.color = '';
       }, 3000);
-      sendResponse({ ok: true });
+      sendResponse({ success: true });
+      break;
+
+    // Enviada por camera-permission.html (scripts/permission-page.js).
+    case 'cameraPermissionGranted':
+      cameraPermissionChecked = true;
+      cameraStatusText.textContent = 'Câmera liberada! Clique para iniciar captura';
+      cameraStatusText.style.color = '';
+      // NÃO abre a câmera sozinho aqui: a página de permissão ainda está com a
+      // prévia ligada, e duas aberturas simultâneas podem deixar a do painel na
+      // resolução baixa da prévia — o OCR do ticket precisa da resolução cheia.
+      sendResponse({ success: true });
       break;
 
     // Atalhos de teclado roteados pelo background
     case 'toggleRecording':
       toggleRecording();
-      sendResponse({ ok: true });
+      sendResponse({ success: true });
       break;
 
     case 'captureExam':
@@ -95,13 +117,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         if (cameraStream) captureAndProcess();
         else startCameraCapture();
       }, 200);
-      sendResponse({ ok: true });
+      sendResponse({ success: true });
       break;
 
     case 'injectAllFromKeyboard':
-      injectAll()
-        .then(() => sendResponse({ ok: true }))
-        .catch(e => { console.log('[Keyboard] Erro na injeção:', e.message); sendResponse({ ok: false }); });
+      injectAll(true)
+        .then(() => sendResponse({ success: true }))
+        .catch(e => { console.log('[Keyboard] Erro na injeção:', e.message); sendResponse({ success: false }); });
       return true; // canal assíncrono — não fechar antes da Promise resolver
   }
 });

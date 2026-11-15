@@ -11,9 +11,10 @@ document.addEventListener('DOMContentLoaded', () => {
   // ── Carregar chave salva ──────────────────────────────────────────────
   async function loadSavedKey() {
     try {
-      const result = await chrome.storage.sync.get(['geminiApiKey']);
-      if (result.geminiApiKey) {
-        apiKeyInput.value = result.geminiApiKey;
+      // Local primeiro; a chave antiga do sync é migrada na primeira leitura.
+      const chaveSalva = await ShospGemini.lerChave(chrome.storage);
+      if (chaveSalva) {
+        apiKeyInput.value = chaveSalva;
         showStatus('✅ Chave API carregada do armazenamento.', 'success');
       } else {
         showStatus('ℹ️ Nenhuma chave configurada. Obtenha uma em aistudio.google.com/apikey e salve aqui.', 'error');
@@ -26,8 +27,8 @@ document.addEventListener('DOMContentLoaded', () => {
   // ── Salvar chave ──────────────────────────────────────────────────────
   async function saveApiKey(apiKey) {
     try {
-      await chrome.storage.sync.set({ geminiApiKey: apiKey });
-      showStatus('✅ Chave API salva com sucesso!', 'success');
+      await ShospGemini.salvarChave(chrome.storage, apiKey);
+      showStatus('✅ Chave API salva com sucesso! Ela fica guardada só neste navegador.', 'success');
       return true;
     } catch (err) {
       console.error('[Config] Erro ao salvar chave:', err);
@@ -47,10 +48,10 @@ document.addEventListener('DOMContentLoaded', () => {
     testBtn.disabled = true;
 
     try {
-      const endpoint = `https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
-      const response = await fetch(endpoint, {
+      // Mesmo modelo e mesma forma de enviar a chave que o painel usa.
+      const response = await fetch(ShospGemini.endpoint('v1'), {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: ShospGemini.cabecalhos(apiKey),
         body: JSON.stringify({
           contents: [{ parts: [{ text: 'Responda apenas: OK' }] }],
           generationConfig: { maxOutputTokens: 10 }

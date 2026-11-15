@@ -37,16 +37,19 @@ function normalizeText(text) {
 // Frases curtas/ambíguas (despedidas genéricas) ficam em STOP_COMMANDS_CURTOS.
 
 const STOP_COMMANDS = [
-  'algo que eu possa ajudar', 'algo que possa ajudar',
-  'algo que eu posso ajudar', 'algo que posso ajudar',
+  // "ajudar" SEMPRE com "mais": as formas curtas ('algo que eu possa ajudar',
+  // 'posso ajudar em alguma coisa') aparecem no meio de explicações de conduta
+  // e paravam a gravação cedo — removidas na revisão 2026-07-16.
   'algo mais que eu possa ajudar',
   'algo mais que eu posso ajudar',
   'mais alguma coisa que eu possa ajudar',
   'mais alguma coisa que eu posso ajudar',
   'alguma coisa mais que eu possa ajudar',
   'alguma coisa mais que eu posso ajudar',
-  'posso ajudar alguma duvida',
-  'posso ajudar em alguma coisa',
+  'posso ajudar em mais alguma coisa',
+  'posso te ajudar em mais alguma coisa',
+  'posso ajudar em alguma coisa mais',
+  'posso ajudar em algo mais',
   'pode ir na recepcao',
   'pode buscar na recepcao',
   'pode pegar na recepcao',
@@ -55,19 +58,15 @@ const STOP_COMMANDS = [
   'ate a proxima consulta',
   'ate o proximo retorno',
   'nos vemos em breve',
+  // Preferências do médico (2026-07-15): variantes com "me liga"/"pode ligar"
+  // removidas (não fazem parte do fraseado dele) e perguntas abertas tipo
+  // "alguma pergunta alguma duvida"/"ficou alguma duvida" removidas — caso
+  // real 2026-07-15: médico disse "alguma pergunta alguma duvida" e continuou
+  // a consulta por ~2 minutos (teria cortado o final da gravação).
   'qualquer duvida me procura',
-  'qualquer duvida me liga',
-  'qualquer duvida pode ligar',
-  'qualquer duvida pode me ligar',
-  'se tiver duvida me liga',
   'alguma duvida me procura',
-  'alguma duvida me liga',
-  'alguma duvida pode ligar',
-  'alguma duvida pode me ligar',
   'alguma duvida pode me chamar',
   'alguma duvida me chama',
-  'alguma pergunta alguma duvida',
-  'alguma duvida alguma pergunta',
   'pode se retirar',
   'pode ir embora',
   'obrigado pela consulta',
@@ -81,57 +80,65 @@ const STOP_COMMANDS = [
   'vai ate a recepcao',
   'pode ir la ate a recepcao',
   'passa na recepcao',
+  'passe na recepcao',
   'pode passar na recepcao',
-  'pode ir pegar a receita',
-  'pode pegar a receita',
+  // BALCÃO — fraseado recorrente do médico para encerrar mandando o paciente
+  // ao balcão (2026-07-15). Espelha as variantes de "recepcao".
+  // "passe" (imperativo formal) — caso real 2026-07-16: médico disse "passe no
+  // balcão" e a lista só tinha 'passa'/'passar'.
+  'passar no balcao',
+  'passa no balcao',
+  'passe no balcao',
+  'passar la no balcao',
+  'passa la no balcao',
+  'passe la no balcao',
+  'passa ai no balcao',
+  'passe ai no balcao',
+  'pode ir no balcao',
+  'pode ir la no balcao',
+  'pode ir ate o balcao',
+  'pode ir para o balcao',
+  'vai la no balcao',
+  'vai ate o balcao',
+  'vai para o balcao',
+  'entregar no balcao',
+  'entrega no balcao',
+  'entregar isso no balcao',
+  'entrega isso no balcao',
+  'buscar no balcao',
+  'busca no balcao',
+  'pegar no balcao',
+  'pega no balcao',
+  'pega la no balcao',
+  // pagamento no balcão também é encerramento
+  'pagar no balcao',
+  'paga no balcao',
+  'paga la no balcao',
   'pegar a receita na recepcao',
   'pode pegar la na recepcao',
+  // ⚠️ Frases que também são DITADO DE CONDUTA ('retorno em um ano', 'pode
+  // trocar os oculos', 'volta se piorar'...) NÃO entram nesta lista forte —
+  // elas param a gravação no meio da consulta porque o próprio texto satisfaz
+  // o gate de captura. Ficam em STOP_COMMANDS_ANCORADOS (só casam no fim da
+  // fala, com cancelamento). Revisão 2026-07-16.
   'ate o proximo ano',
   'ate ano que vem',
   'nos vemos ano que vem',
-  'volte no ano que vem',
-  'retorno ano que vem',
-  'retorno daqui a um ano',
-  'retorno em um ano',
-  'retorno em 1 ano',
-  'retorno no proximo ano',
-  'volte daqui a um ano',
-  'volte em um ano',
   'ate daqui a um ano',
   'ate daqui a seis meses',
-  'retorno em seis meses',
-  'retorno daqui a seis meses',
-  'volte em seis meses',
-  'volte daqui a seis meses',
   'ate daqui a tres meses',
-  'retorno em tres meses',
-  'volte em tres meses',
   'a gente se ve depois',
   'nos vemos depois',
   'ate a proxima vez',
   'qualquer coisa estamos ai',
   'qualquer coisa estamos aqui',
   'qualquer coisa pode chamar',
-  'qualquer coisa pode ligar',
-  'pode fazer os oculos',
-  'pode comprar os oculos',
-  'pode trocar os oculos',
-  'vai fazer os oculos',
   'pode ir na farmacia',
   'vai la na farmacia',
   'pode ir la na farmacia',
   'pode ir ate a farmacia',
-  'volta aqui se nao melhorar',
-  'volta aqui se piorar',
-  'volta se nao melhorar',
-  'volta se piorar',
-  'pode voltar se nao melhorar',
-  'pode voltar se piorar',
-  'volta aqui se necessario',
-  'volta se necessario',
   'bom viagem',
   'boa viagem',
-  'ficou alguma duvida',
 ];
 
 // ============================================================================
@@ -150,6 +157,57 @@ const STOP_COMMANDS_CURTOS = [
   'ate mais',
   'ate logo',
   'tchau',
+];
+
+// ============================================================================
+// STOP_COMMANDS_ANCORADOS — encerramentos que também são ditado de conduta
+// ============================================================================
+// Frases legítimas de despedida que TAMBÉM aparecem no meio da consulta como
+// ditado de conduta ("retorno em seis meses", "pode trocar os oculos") ou
+// entrega de documento ("declaracao de comparecimento"). Na lista forte elas
+// paravam a gravação NO MEIO da consulta: o próprio texto satisfaz o gate de
+// captura (são marcadores de conduta/conduta refrativa), então o stop
+// disparava em 500ms sem cancelamento. O hook que as consome usa endAnchored:
+// só casam no FIM da fala atual, e o stop agendado é CANCELADO se a fala
+// continuar (mesma mecânica dos STOP curtos). Revisão 2026-07-16.
+
+const STOP_COMMANDS_ANCORADOS = [
+  // óculos / receita (conduta refrativa — o próprio texto satisfaz o gate)
+  'pode fazer os oculos',
+  'pode comprar os oculos',
+  'pode trocar os oculos',
+  'vai fazer os oculos',
+  'pode ir pegar a receita',
+  'pode pegar a receita',
+  // retorno programado (marcador de conduta)
+  'retorno ano que vem',
+  'retorno no proximo ano',
+  'retorno daqui a um ano',
+  'retorno em um ano',
+  'retorno em 1 ano',
+  'retorno em seis meses',
+  'retorno daqui a seis meses',
+  'retorno em tres meses',
+  'volte no ano que vem',
+  'volte daqui a um ano',
+  'volte em um ano',
+  'volte em seis meses',
+  'volte daqui a seis meses',
+  'volte em tres meses',
+  // retorno condicional
+  'volta aqui se nao melhorar',
+  'volta aqui se piorar',
+  'volta se nao melhorar',
+  'volta se piorar',
+  'pode voltar se nao melhorar',
+  'pode voltar se piorar',
+  'volta aqui se necessario',
+  'volta se necessario',
+  // documento de fim de consulta — caso real 2026-07-16: "declaração de
+  // comparecimento" foi a última fala inteligível transcrita antes de o STT
+  // morrer e engolir as despedidas
+  'declaracao de comparecimento',
+  'atestado de comparecimento',
 ];
 
 // ============================================================================
@@ -198,6 +256,51 @@ const STOP_SAUDACAO_COMMANDS = [
   'boa tarde',
   'boa noite',
 ];
+
+// ============================================================================
+// CONTINUAÇÃO DE DESPEDIDA — prorroga (em vez de cancelar) stops ancorados
+// ============================================================================
+// Caso real 2026-07-17: a despedida veio em cadeia — "ta bom entao" (agendou o
+// stop) seguido de "ate daqui a pouquinho obrigada". A mecânica endAnchored
+// cancelou o stop porque "a fala continuou", mas a continuação era a própria
+// despedida; como o trecho final não é gatilho, nada re-disparou e o médico
+// precisou do "consulta encerrada" forçado. Não adianta mapear cada cauda de
+// despedida como gatilho novo (variam infinitamente) — em vez disso, quando a
+// fala continua após uma despedida ancorada, o runner verifica se a
+// continuação é composta APENAS destas palavras: se for, o timer de silêncio é
+// prorrogado; se houver qualquer palavra fora da lista (conteúdo clínico), o
+// stop é cancelado como antes.
+
+const DESPEDIDA_CONTINUACAO_WORDS = new Set([
+  // conectivos e muletas curtas
+  'a', 'o', 'e', 'um', 'uma', 'de', 'do', 'da', 'no', 'na', 'em',
+  'pra', 'para', 'com', 'se', 'que', 'ne', 'viu', 'hein', 'entao',
+  'ta', 'tao', 'ai', 'la', 'ok', 'beleza', 'certo', 'tudo', 'bem',
+  // vocabulário de despedida
+  'ate', 'logo', 'mais', 'breve', 'depois', 'amanha', 'daqui',
+  'pouquinho', 'pouco', 'tchau', 'obrigado', 'obrigada', 'brigado',
+  'brigada', 'valeu', 'prazer', 'foi', 'bom', 'boa', 'dia', 'tarde',
+  'noite', 'semana', 'fim', 'sorte', 'viagem', 'cuida', 'cuide',
+  'deus', 'vai', 'fica', 'tranquilo', 'tranquila', 'abraco', 'gente',
+  'nos', 'vemos', 've', 'proxima', 'consulta', 'retorno', 'ano', 'vem',
+]);
+
+/**
+ * true se o trecho dito APÓS uma despedida ancorada é continuação da própria
+ * despedida ("ate daqui a pouquinho obrigada") e não conteúdo clínico novo.
+ * Toda palavra precisa estar no vocabulário; limite de 12 palavras evita
+ * prorrogação indefinida. Auto-corretivo: se a cauda crescer com qualquer
+ * palavra clínica em eventos seguintes, o cancelamento normal acontece.
+ *
+ * @param {string} tail - texto normalizado após o fim do comando de despedida
+ * @returns {boolean}
+ */
+function isContinuacaoDespedida(tail) {
+  const words = tail.trim().split(/\s+/).filter(Boolean);
+  if (words.length === 0) return true;
+  if (words.length > 12) return false;
+  return words.every(w => DESPEDIDA_CONTINUACAO_WORDS.has(w));
+}
 
 // ============================================================================
 // DILATACAO_COMMANDS — pausa para dilatar pupila (prioridade 50)
@@ -278,6 +381,16 @@ const DILATACAO_COMMANDS = [
   'enquanto o colirio faz efeito',
   'aguardar o efeito do colirio',
   'esperar o efeito do colirio',
+  // Caso real 2026-07-29: o ASR comeu "colírio" ("vou colocar o colírio" virou
+  // "vou colher"), derrubando o combo ['colirio','dilatar'] — e nada mais casava
+  // "de fazer efeito para dilatar". Estas formas ancoram no par efeito+dilatar,
+  // que só ocorre ao anunciar a dilatação, sem depender da palavra "colírio".
+  // (Não usar combo ['efeito','dilatar']: 'efeito' solto já foi removido dos
+  // combos por falso positivo com "fazer efeito" de qualquer medicamento.)
+  // ("pra" já vira "para" no normalizeText — não duplicar a contração aqui.)
+  // NÃO adicionar 'efeito e dilatar': casa narração retrospectiva afirmativa
+  // ("pinguei, fez efeito e dilatar foi rápido") — testado e rejeitado.
+  'efeito para dilatar',
   'pode ir sentar la fora',
   'pode ir sentar ali fora',
   'pode sentar do lado de fora',
@@ -310,6 +423,23 @@ const DILATACAO_COMMANDS = [
   'aguardem aqui fora',
   'vao la fora esperar',
   'vao la fora aguardar',
+  // Infinitivo pessoal PLURAL ("-arem") — caso real 2026-07-29, criança com
+  // acompanhante: "vocês vão esperarem lá fora um pouquinho". Nenhuma forma
+  // acima casa por substring: 'esperar la fora' exige espaço logo após
+  // "esperar" e 'esperem la fora' é o imperativo. Mesmo cenário do bloco
+  // imperativo acima, só que noutra conjugação — a dilatação passou em branco.
+  'esperarem la fora',
+  'aguardarem la fora',
+  'ficarem la fora',
+  'sentarem la fora',
+  'esperarem ali fora',
+  'aguardarem ali fora',
+  'ficarem ali fora',
+  'sentarem ali fora',
+  'esperarem aqui fora',
+  'aguardarem aqui fora',
+  'ficarem aqui fora',
+  'sentarem aqui fora',
   // Médico instruindo o ACOMPANHANTE a levar a criança para aguardar
   'leva ele la fora',
   'leva ela la fora',
@@ -533,6 +663,21 @@ const LIO_COMMANDS = [
   'ja operou os olhos',
   'fez cirurgia de catarata',
   'fez a cirurgia de catarata',
+  'fez uma cirurgia de catarata',   // caso real 2026-07-17: "já que você fez uma cirurgia de catarata traumática"
+  // Fala do PRÓPRIO PACIENTE (1ª pessoa) — a transcrição é um stream único, médico e
+  // paciente misturados. Caso real 2026-08-03: "eu fiz a cirurgia de catarata tem um
+  // ano" não casava com nenhuma forma de 3ª pessoa e a lente saiu "cristalino
+  // transparente" em olho pseudofácico. Só formas de PASSADO entram (regra abaixo);
+  // 'operei' sozinho fica de fora — casaria com o médico falando de outro paciente.
+  'fiz cirurgia de catarata',
+  'fiz a cirurgia de catarata',
+  'fiz uma cirurgia de catarata',
+  'operei de catarata',
+  'operei a catarata',
+  'operei o olho',
+  'operei os olhos',
+  'fui operada de catarata',
+  'fui operado de catarata',
   // 'cirurgia de catarata' REMOVIDO: ambíguo — dispara quando médico *planeja* cirurgia futura
   // ("agora dá para pensar em mexer"), causando pseudofacia indevida em paciente fácico com catarata.
   // 'fez cirurgia de catarata' já cobre o caso passado com clareza.
@@ -586,6 +731,35 @@ const OPACIDADE_CAPSULA_COMMANDS = [
   'capsula opaca',
   'opacificacao de capsula',
   'opacificacao da capsula posterior',
+
+  // ── Linguagem leiga do médico ao paciente (2026-08-05) ────────────────────
+  // A consulta é fala médico→paciente, não laudo: a opacidade de cápsula é dita
+  // como "a lente tá um pouquinho embaçada", "tem uma sujeirinha na lente",
+  // "vai precisar dar uma limpada". Mesmo caso do log 2026-07-29 (blefarite leiga).
+  // REGRA para não repetir o falso positivo de 2026-06-18 ("fiz limpeza da lente",
+  // relato HISTÓRICO do paciente): toda frase de limpeza carrega o marcador de
+  // futuro/necessidade DENTRO da própria string. Substantivo solto ('limpeza da
+  // lente') continua PROIBIDO — casa o passado do paciente.
+  // Embaçamento/sujeira ficam ancorados na palavra "lente"/"capsula": "embaçado"
+  // solto é a queixa de visão do paciente, não a cápsula.
+  'lente esta embacada', 'lente ta embacada',
+  'lente esta embacando', 'lente ta embacando',
+  'lente meio embacada', 'lente esta meio embacada', 'lente ta meio embacada',
+  'lente um pouco embacada', 'lente esta um pouco embacada', 'lente ta um pouco embacada',
+  'lente um pouquinho embacada', 'lente esta um pouquinho embacada', 'lente ta um pouquinho embacada',
+  'embacamento na lente', 'embacamento da lente',
+  'capsula esta embacada', 'capsula ta embacada',
+  'lente esta suja', 'lente ta suja',
+  'sujeira na lente', 'sujeirinha na lente',
+  'lente com sujeira', 'lente com uma sujeira', 'lente com uma sujeirinha',
+  // "limpar/limpeza" SEM objeto explícito só entra com marcador de futuro: o passado
+  // ("já fiz a limpeza") é relato do paciente. 'limpar a lente' (acima) já cobre o
+  // objeto explícito, então aqui não há forma genérica de "limpar" sozinha.
+  'vai precisar fazer limpeza', 'vai precisar fazer uma limpeza',
+  'vai precisar fazer a limpeza',
+  'vai precisar de limpeza', 'vai precisar de uma limpeza',
+  'vai ter que fazer uma limpeza', 'vamos ter que fazer uma limpeza',
+  'dar uma limpada na lente', 'uma limpada na lente', 'uma limpadinha na lente',
 ];
 
 // ============================================================================
@@ -646,6 +820,9 @@ const OLHO_IRRITADO_COMMANDS = [
 // o encerramento é BLOQUEADO e a gravação continua — o médico dita o que
 // falta e repete a despedida.
 // Para desligar a exigência de um dos campos, mudar a flag para false.
+// EXCEÇÃO: conduta REFRATIVA (óculos/grau/lente — CONDUTA_REFRATIVA_MARKERS)
+// satisfaz também o requisito de TRATAMENTO, porque consulta de refração pura
+// legitimamente não tem tratamento a ditar (caso real 2026-07-15).
 // NÃO passam pelo gate: botão manual de parar, auto-stop por silêncio e o
 // stop de dilatação (pausa, não fim de consulta — conduta/tratamento vêm na
 // fase 2).
@@ -682,6 +859,29 @@ const CONDUTA_FALA_MARKERS = [
   // solicitação de exames complementares
   'vou solicitar', 'solicitar exame', 'solicitar o exame', 'solicitar um', 'solicitar uma',
   'vou pedir um exame', 'vou pedir o exame', 'campo visual', 'topografia',
+  'vou pedir oct', 'vou pedir um oct', 'vamos pedir oct', 'vamos pedir um oct', 'vamos fazer oct',
+  'vamos fazer um oct', 'vou fazer um oct', 'fazer um oct', 'fazer o oct', 'pedir um oct', 'pedir o oct',
+  'retinografia', 'paquimetria', 'biometria', 'angiografia', 'ecografia',
+  // cirurgia (indicação/programação)
+  'indicar cirurgia', 'indicacao de cirurgia', 'indicacao cirurgica',
+  'precisa operar', 'vai precisar operar', 'vamos operar',
+  'programar a cirurgia', 'agendar a cirurgia', 'marcar a cirurgia',
+  // suspensão / manutenção / alta
+  'suspender o colirio', 'suspender colirio', 'suspender o uso',
+  'suspende o colirio', 'parar o colirio', 'parar de usar o colirio',
+  'manter o colirio', 'manter a medicacao', 'manter o tratamento', 'manter o uso',
+  'dar alta',
+];
+
+// Marcadores de CONDUTA REFRATIVA — prescrição/ajuste/manutenção de óculos e
+// lentes. Ficam em lista própria porque, além de contarem como conduta, também
+// SATISFAZEM o requisito de tratamento no gate de captura: consulta refrativa
+// pura legitimamente não tem tratamento a ditar (a receita de óculos RESOLVE a
+// consulta). Caso real 2026-07-15: consulta de refração (multifocal + lente de
+// prova) foi bloqueada com "falta ditar TRATAMENTO" e exigiu "encerrar
+// consulta" forçado.
+
+const CONDUTA_REFRATIVA_MARKERS = [
   // óculos (prescrição, troca, ajuste ou manutenção é conduta)
   'prescrever oculos', 'prescrever os oculos', 'prescrever o oculos',
   'prescricao de oculos', 'receita de oculos', 'receita do oculos', 'receita dos oculos',
@@ -708,19 +908,31 @@ const CONDUTA_FALA_MARKERS = [
   'aumentar o grau', 'diminuir o grau', 'aumentar so um pouquinho',
   'grau de perto', 'grau para perto', 'grau de longe', 'grau para longe',
   'multifocal', 'bifocal', 'lente progressiva', 'lentes progressivas',
+  // correção de grau — caso real 2026-07-15: "vou corrigir aqui o grau do
+  // oculos" não tinha marcador direto (só "multifocal" salvou a conduta)
+  'corrigir o grau', 'corrigir aqui o grau', 'grau do oculos', 'corrigir o oculos',
+  // teste de lente de contato solicitado pelo médico (conduta refrativa)
+  'lente de prova',
   // corrupção STT real 2026-07-06: "bifocal/multifocal" transcrito como
   // "vai ter que ir para um tipo de fogao" — em consulta oftalmológica,
   // "fogao" só aparece como essa corrupção da prescrição de lente
   'tipo de fogao',
-  // cirurgia (indicação/programação)
-  'indicar cirurgia', 'indicacao de cirurgia', 'indicacao cirurgica',
-  'precisa operar', 'vai precisar operar', 'vamos operar',
-  'programar a cirurgia', 'agendar a cirurgia', 'marcar a cirurgia',
-  // suspensão / manutenção / alta
-  'suspender o colirio', 'suspender colirio', 'suspender o uso',
-  'suspende o colirio', 'parar o colirio', 'parar de usar o colirio',
-  'manter o colirio', 'manter a medicacao', 'manter o tratamento', 'manter o uso',
-  'dar alta',
+];
+
+// Marcadores de CONDUTA DE PROCEDIMENTO em consultório — o procedimento
+// resolve a consulta (excisão de calázio, drenagem, retirada de corpo
+// estranho): conta como conduta E satisfaz o requisito de tratamento no gate,
+// como a conduta refrativa. Caso real 2026-07-16: consulta de calázio ("eu vou
+// ate resolver isso aqui") não casava nenhum marcador — a despedida seria
+// bloqueada com "falta ditar CONDUTA e TRATAMENTO" mesmo com a consulta
+// resolvida.
+
+const CONDUTA_PROCEDIMENTO_MARKERS = [
+  'resolver isso aqui', 'resolvo isso aqui', 'vou resolver isso',
+  'tirar isso aqui', 'vou tirar isso', 'remover isso', 'retirar isso',
+  'fazer o procedimento', 'pequeno procedimento', 'pequena cirurgia',
+  'drenar', 'drenagem', 'excisao', 'exerese', 'curetagem',
+  'no consultorio mesmo', 'aqui no consultorio',
 ];
 
 // Marcadores de TRATAMENTO falado — prescrição de medicamentos/posologia.
@@ -759,10 +971,14 @@ const TRATAMENTO_FALA_MARKERS = [
 // "fazer uma CONSULTA COM DERMATOLOGISTA" — nenhum marcador simples casou e o
 // gate bloqueou o encerramento com a conduta já completa.
 const CONDUTA_FALA_REGEXES = [
-  // menção a ótica = prescrição de óculos em andamento (\b evita "antibiotica")
-  /\boticas?\b/,
   // "consulta com [qualquer especialista -ologista]" = encaminhamento
   /consulta com (?:o |a |um |uma )?[a-z]+ologista/,
+];
+
+// Conduta refrativa em padrões com fronteira de palavra.
+const CONDUTA_REFRATIVA_REGEXES = [
+  // menção a ótica = prescrição de óculos em andamento (\b evita "antibiotica")
+  /\boticas?\b/,
 ];
 
 // Posologia falada — padrões que só aparecem quando o médico dita prescrição.
@@ -842,6 +1058,9 @@ function detectaEncerramentoNaFala(text) {
   if (STOP_COMMANDS.some(cmd => norm.includes(cmd))) return true;
   const tail = norm.slice(-40);
   if (STOP_COMMANDS_CURTOS.some(cmd => tail.includes(cmd))) return true;
+  // Ancorados: aqui a gravação já terminou — se a frase está na cauda, foi a
+  // última coisa dita e vale como encerramento.
+  if (STOP_COMMANDS_ANCORADOS.some(cmd => tail.includes(cmd))) return true;
   // Saudações-despedida: aqui a gravação já terminou, então uma saudação no
   // FIM do texto é despedida (a saudação de abertura fica no início do texto).
   return STOP_SAUDACAO_COMMANDS.some(cmd => tail.includes(cmd));
@@ -857,7 +1076,132 @@ function detectaEncerramentoNaFala(text) {
 function detectaCondutaNaFala(text) {
   const norm = normalizeText(text);
   if (CONDUTA_FALA_MARKERS.some(m => norm.includes(m))) return true;
-  return CONDUTA_FALA_REGEXES.some(re => re.test(norm));
+  if (CONDUTA_FALA_REGEXES.some(re => re.test(norm))) return true;
+  if (detectaCondutaProcedimentoNaFala(norm)) return true;
+  return detectaCondutaRefrativaNaFala(norm);
+}
+
+/**
+ * Detecta se uma CONDUTA DE PROCEDIMENTO em consultório foi ditada na fala
+ * (excisão de calázio, drenagem, retirada de corpo estranho). Como a conduta
+ * refrativa, também satisfaz o requisito de tratamento no gate de captura:
+ * o procedimento É o tratamento da consulta.
+ *
+ * @param {string} text - transcrição (com ou sem acentos)
+ * @returns {boolean}
+ */
+function detectaCondutaProcedimentoNaFala(text) {
+  const norm = normalizeText(text);
+  return CONDUTA_PROCEDIMENTO_MARKERS.some(m => norm.includes(m));
+}
+
+// ============================================================================
+// CATÁLOGO DE EXAMES PEDIDOS NA CONDUTA (fonte única — 2026-10-22)
+// ============================================================================
+// Antes deste catálogo a lista de exames vivia em quatro lugares que divergiam
+// (exemplos do prompt, SKILL.md, EXAME_RE e CONDUTA_VALIDA_RE do agente). O
+// resultado visível era o OCT sumindo da conduta: o prompt só o aceitava se o
+// modelo "reconhecesse" a palavra, e nenhum código conferia a fala depois.
+//
+// `re` roda em texto NORMALIZADO (minúsculo, sem acento). `label` é o nome que
+// vai para a linha "Solicitar <label>". Regra-mãe, inalterada: o NOME do exame
+// só pode vir da FALA do médico — este catálogo lê a fala, nunca o diagnóstico.
+// Diagnóstico/achado NÃO nomeia exame (caso real 2026-08-17).
+//
+// Fora do catálogo de propósito: "fundo com dilatação" (é a dilatação, não um
+// exame pedido) e tonometria/biomicroscopia (feitos na própria consulta).
+
+const EXAMES_CATALOGO = [
+  { id: 'oct',            label: 'OCT',
+    re: /\b(?:oct|tomografia(?: de coerencia optica)?|coerencia optica)\b/ },
+  { id: 'campo_visual',   label: 'campo visual',
+    re: /\b(?:campo visual|campimetria|exame de campo)\b/ },
+  { id: 'retinografia',   label: 'retinografia',
+    re: /\bretinografia\b|\bfoto(?:grafia)? d[oae] (?:fundo|retina|nervo)\b/ },
+  { id: 'paquimetria',    label: 'paquimetria',
+    re: /\bpaquimetria\b/ },
+  { id: 'topografia',     label: 'topografia corneana',
+    re: /\btopografia\b|\bpentacam\b/ },
+  { id: 'curva_tensional', label: 'curva de tensão',
+    re: /\bcurva (?:de tensao|tensional|de pressao|de pio)\b/ },
+  { id: 'biometria',      label: 'biometria',
+    re: /\bbiometria\b/ },
+  { id: 'angiografia',    label: 'angiografia',
+    re: /\bangiografia\b|\bretinofluoresceinografia\b/ },
+  { id: 'ecografia',      label: 'ecografia ocular',
+    re: /\b(?:ecografia|ultrassonografia|ultrassom) (?:ocular|do olho|dos olhos)\b|\becografia\b/ },
+  { id: 'mapeamento_retina', label: 'mapeamento de retina',
+    re: /\bmapeamento de retina\b/ },
+];
+
+// Região do OCT dita logo depois do nome ("OCT de mácula", "OCT do nervo").
+// Só entra se foi DITA; sem região, a linha é apenas "Solicitar OCT".
+const _OCT_REGIAO_RE = /^\s*(?:de |da |do |dos |das )?(macula|nervo optico|nervo|disco optico|papila|retina|segmento anterior|camada de fibras)\b/;
+const _OCT_REGIAO_LABEL = {
+  'macula': 'de mácula', 'nervo optico': 'de nervo óptico', 'nervo': 'de nervo óptico',
+  'disco optico': 'de nervo óptico', 'papila': 'de nervo óptico', 'retina': 'de retina',
+  'segmento anterior': 'de segmento anterior', 'camada de fibras': 'de camada de fibras',
+};
+
+// Intenção de PEDIDO na janela em volta do nome do exame. O ASR não pontua,
+// então a janela é em caracteres, não em frases.
+//   FUTURO  — decisão do médico; vale mesmo com passado na janela
+//             ("vamos repetir o OCT que fez ano passado").
+//   FRACO   — "fazer" etc.; só vale se a janela não tiver marcador de passado.
+//   PASSADO — relato do paciente / resultado ("fiz OCT", "mandou fazer", "veio").
+//   NEGADO  — "não precisa de OCT" nunca vira pedido.
+const _EXAME_FUTURO_RE = /\b(?:vou|vamos|vai|vao|iremos|ira|precisa|preciso|precisamos|quero|queremos|temos que|tem que|pedir|pedindo|solicit\w*|repetir|repeticao|marcar|agendar|trazer|traga)\b/;
+const _EXAME_FRACO_RE  = /\b(?:fazer|faz|fazemos|realizar|pedido|novo|outro)\b(?! (?:um|dois|tres|\d+) (?:ano|mes|dia|semana))/;
+const _EXAME_PASSADO_RE = /\b(?:mandou|pediu|fez|fiz|fizeram|fizemos|feito|feita|realizou|realizado|trouxe|trouxeram|ontem|ano passado|mes passado|em 20\d\d|ha \d+ (?:ano|anos|mes|meses)|faz (?:um|dois|tres|\d+) (?:ano|anos|mes|meses)|veio|deu|mostrou|resultado)\b/;
+const _EXAME_NEGADO_RE = /\bnao (?:\w+ ){0,2}(?:precisa|preciso|vou|vamos|necessario|necessita|quero|pedir|fazer)\b|\bsem necessidade\b|\bdispensa\b/;
+
+/**
+ * Exames do catálogo que o médico PEDIU na fala. Determinístico: confere a
+ * transcrição (já com a sigla OCT restaurada do ASR), não o modelo. É a rede
+ * que impede o pedido de sumir da conduta quando o modelo o omite.
+ *
+ * @param {string} text - transcrição
+ * @returns {Array<{id:string,label:string}>} na ordem do catálogo, sem repetição
+ */
+function detectaExamesPedidosNaFala(text) {
+  if (typeof text !== 'string' || !text) return [];
+  const norm = normalizeText(text);
+  const out = [];
+  for (const ex of EXAMES_CATALOGO) {
+    const re = new RegExp(ex.re.source, 'g');
+    let m;
+    while ((m = re.exec(norm))) {
+      const ini = Math.max(0, m.index - 55);
+      const fim = Math.min(norm.length, m.index + m[0].length + 35);
+      const janela = norm.slice(ini, fim);
+      if (_EXAME_NEGADO_RE.test(janela)) continue;
+      const futuro = _EXAME_FUTURO_RE.test(janela);
+      const fraco  = _EXAME_FRACO_RE.test(janela) && !_EXAME_PASSADO_RE.test(janela);
+      if (!futuro && !fraco) continue;
+      let label = ex.label;
+      if (ex.id === 'oct') {
+        const reg = _OCT_REGIAO_RE.exec(norm.slice(m.index + m[0].length, m.index + m[0].length + 40));
+        if (reg) label += ' ' + _OCT_REGIAO_LABEL[reg[1]];
+      }
+      out.push({ id: ex.id, label });
+      break;
+    }
+  }
+  return out;
+}
+
+/**
+ * Detecta se uma CONDUTA REFRATIVA foi ditada na fala (prescrição, ajuste,
+ * troca ou manutenção de óculos/grau/lentes). Subconjunto da conduta geral
+ * que também satisfaz o requisito de tratamento no gate de captura.
+ *
+ * @param {string} text - transcrição (com ou sem acentos)
+ * @returns {boolean}
+ */
+function detectaCondutaRefrativaNaFala(text) {
+  const norm = normalizeText(text);
+  if (CONDUTA_REFRATIVA_MARKERS.some(m => norm.includes(m))) return true;
+  return CONDUTA_REFRATIVA_REGEXES.some(re => re.test(norm));
 }
 
 /**
@@ -884,7 +1228,18 @@ function detectaTratamentoNaFala(text) {
 function checkCondutaTratamentoCaptados(text) {
   const norm = normalizeText(text);
   const conduta    = !STOP_GATE.exigirConduta    || detectaCondutaNaFala(norm);
-  const tratamento = !STOP_GATE.exigirTratamento || detectaTratamentoNaFala(norm);
+  // Conduta REFRATIVA satisfaz o requisito de tratamento: consulta de refração
+  // pura não tem tratamento a ditar — a receita de óculos resolve a consulta.
+  // Caso real 2026-07-15: gate bloqueou "alguma pergunta alguma duvida" com
+  // "falta ditar TRATAMENTO" numa consulta só de óculos + lente de prova,
+  // forçando o médico a usar "encerrar consulta".
+  // Conduta de PROCEDIMENTO idem: a excisão/drenagem feita em consultório É o
+  // tratamento da consulta (caso real 2026-07-16: calázio resolvido na hora,
+  // nenhum colírio a ditar).
+  const tratamento = !STOP_GATE.exigirTratamento
+    || detectaTratamentoNaFala(norm)
+    || detectaCondutaRefrativaNaFala(norm)
+    || detectaCondutaProcedimentoNaFala(norm);
   return { conduta, tratamento, ok: conduta && tratamento };
 }
 
@@ -896,6 +1251,34 @@ function checkCondutaTratamentoCaptados(text) {
  * @param {string} text - texto da transcrição (com ou sem acentos)
  * @returns {boolean}
  */
+/**
+ * A fala nomeia uma cirurgia ocular que NÃO é de catarata?
+ *
+ * Caso real 2026-09-02: a paciente disse que a cirurgia dos dois olhos foi de
+ * PTERÍGIO. As formas genéricas de LIO_COMMANDS ("operou o olho", "operei os
+ * olhos") não distinguem o tipo — sozinhas, escreveriam pseudofacia em olho
+ * fácico. Este veto exige que a fala NÃO tenha nomeado outra cirurgia: quando o
+ * tipo é dito e não é catarata, a lente não pode ser inferida.
+ *
+ * Só veta o que é AMBÍGUO: se a mesma fala cita catarata/lente/facectomia, o
+ * paciente pode ter as duas histórias (pterígio antigo + catarata) e a evidência
+ * específica prevalece.
+ *
+ * @param {string} text - texto normalizado (sem acentos, minúsculo)
+ * @returns {boolean}
+ */
+const CIRURGIA_NAO_CATARATA_RE = /\b(pterigio|terigio|pinguecula|glaucoma|trabeculectomia|valvula|retina|vitrectomia|descolamento|transplante|ceratoplastia|ceratocone|crosslinking|cross\s?linking|estrabismo|palpebra|palpebras|blefaroplastia|ptose|calazio|refrativa|lasik)\b|miopia\s+a\s+laser/;
+// "lente" SOLTA fica de fora, pelo mesmo motivo do guard equivalente no
+// DecisionEngine (_LENTE_EVIDENCIA_RE): é a mesma palavra da lente de contato e da
+// lente do óculos. Aceitá-la aqui cancelaria o veto justamente na consulta em que o
+// médico pergunta sobre lente de contato a um paciente operado de pterígio.
+const CIRURGIA_CATARATA_RE = /\b(catarat\w*|facectomia\w*|facoemulsifica\w*|lios?)\b|lente\s+intra|\b(?:a|as)\s+lentes?\s+(?:esta|estao|ta|tao|ficou|ficaram)\b|(?:coloc|bot|po[sô]|troc)\w*\s+(?:a|as|uma|duas|essa)?\s*lentes?/;
+
+function cirurgiaNomeadaNaoCatarata(text) {
+  const norm = normalizeText(text);
+  return CIRURGIA_NAO_CATARATA_RE.test(norm) && !CIRURGIA_CATARATA_RE.test(norm);
+}
+
 function detectaExameEmAndamento(text) {
   const norm = normalizeText(text);
   const tail = norm.slice(-300);
@@ -910,8 +1293,11 @@ const ClinicalTriggers = {
   normalizeText,
   STOP_COMMANDS,
   STOP_COMMANDS_CURTOS,
+  STOP_COMMANDS_ANCORADOS,
   STOP_FORCAR_COMMANDS,
   STOP_SAUDACAO_COMMANDS,
+  DESPEDIDA_CONTINUACAO_WORDS,
+  isContinuacaoDespedida,
   DILATACAO_COMMANDS,
   DILATACAO_COMBOS,
   EXAME_EM_ANDAMENTO_COMMANDS,
@@ -925,13 +1311,22 @@ const ClinicalTriggers = {
   STOP_GATE,
   CONDUTA_FALA_MARKERS,
   CONDUTA_FALA_REGEXES,
+  CONDUTA_REFRATIVA_MARKERS,
+  CONDUTA_REFRATIVA_REGEXES,
+  CONDUTA_PROCEDIMENTO_MARKERS,
   TRATAMENTO_FALA_MARKERS,
   TRATAMENTO_FALA_REGEXES,
   matchComboPair,
+  CIRURGIA_NAO_CATARATA_RE,
+  cirurgiaNomeadaNaoCatarata,
   detectaDilatacaoNaFala,
   detectaExameEmAndamento,
   detectaEncerramentoNaFala,
   detectaCondutaNaFala,
+  detectaCondutaRefrativaNaFala,
+  detectaCondutaProcedimentoNaFala,
+  EXAMES_CATALOGO,
+  detectaExamesPedidosNaFala,
   detectaTratamentoNaFala,
   checkCondutaTratamentoCaptados,
 };

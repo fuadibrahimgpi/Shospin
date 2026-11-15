@@ -187,3 +187,11 @@ Pergunte ao usuário:
 2. Há algum dado clínico que queira ajustar?
 3. Quer que eu descreva com mais detalhe as imagens necessárias?
 4. Quer uma variação deste caso com apresentação diferente?
+
+---
+
+## Antes do passo final — revisão obrigatória
+
+**Passo final desta skill:** entregar o caso clínico ao professor (as "Regras invioláveis" e o "Formato de saída" desta skill entram inteiros na revisão).
+
+Antes de executá-lo, rodar a skill `revisao-final` sobre o resultado pronto: ela relê os parâmetros desta skill (regras críticas, checagem final, formato de saída, histórico de erros) e as regras do médico na memória, confere item por item e só então libera o passo final. Com algum item violado, corrige e revisa de novo (no máximo 3 rodadas); se ainda falhar, o passo final não é executado e o problema vai para o Fuad.

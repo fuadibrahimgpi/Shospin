@@ -813,7 +813,7 @@ test('[BLEF-PAD-1] sem colírio: compressa + higiene (xampu infantil) + lubrific
     'Compressa morna\nHigiene palpebral com shampoo infantil\nLubrificante ocular\nÔmega 3');
   expect(t).toBe([
     'Compressa morna por 2 min antes da higiene palpebral — 2x/dia',
-    'Higiene palpebral com xampu infantil — 3x/dia',
+    'Higiene palpebral com shampoo infantil — 3x/dia',
     'Carmelose sódica ou hialuronato de sódio em cada olho ao longo do dia',
     'Ômega 3 (EPA+DHA) 1000 mg — 1 comprimido no almoço e 1 no jantar por 30 dias',
   ].join('\n'));
@@ -837,7 +837,7 @@ test('[BLEF-PAD-3] higiene com gel: Blephagel e Hialurop vêm da fala', () => {
 
 test('[BLEF-PAD-4] promove, nunca cria: item não orientado não aparece; posologia dita vence o padrão', () => {
   const t = _blefPadrao('blefarite, faz a compressa morna 3 vezes ao dia', 'Compressa morna 3x/dia');
-  expect(t).toBe('Compressa morna por 2 min antes da higiene palpebral — 3x/dia');
+  expect(t).toBe('Compressa morna 3x/dia');
   expect(t.includes('Ômega')).toBe(false);
   expect(t.includes('Higiene')).toBe(false);
   expect(t.includes('Tobramicina')).toBe(false);
@@ -846,6 +846,104 @@ test('[BLEF-PAD-4] promove, nunca cria: item não orientado não aparece; posolo
 test('[BLEF-PAD-5] sem blefarite na fala o tratamento não é mexido', () => {
   const t = _blefPadrao('olho seco, usa lubrificante e compressa morna', 'Compressa morna\nLubrificante ocular');
   expect(t.includes('por 2 min antes da higiene palpebral')).toBe(false);
+});
+
+function _decTrat(fala, tratamento, extra) {
+  return DecisionEngine.buildDecision({
+    tipo_consulta: 'primeira_consulta',
+    dados: Object.assign({ hda: 'queixa', conduta: 'Retorno 1 mes', tratamento }, extra || {}),
+  }, { transcribedText: fala, hookFlags: {} });
+}
+
+test('[REV-C1] remédio de terceiro/passado NÃO nomeia o colírio novo (e o médico é avisado)', () => {
+  const d = _decTrat('minha mae pinga xalatan todo dia. e conjuntivite, vou passar um colirio quatro vezes ao dia',
+    'Medicação ocular prescrita 4x/dia');
+  expect(d.clonedAIResponse.dados.tratamento).toBe('Medicação ocular prescrita 4x/dia');
+  expect(d.avisos.some(a => a.includes('não como prescrição'))).toBe(true);
+  const d2 = _decTrat('ano passado usei tobrex. agora vou passar um colirio tres vezes ao dia', 'Medicação ocular prescrita 3x/dia');
+  expect(d2.clonedAIResponse.dados.tratamento.includes('Tobramicina')).toBe(false);
+});
+
+test('[REV-C1b] remédio dito na prescrição continua nomeando a linha', () => {
+  const d = _decTrat('vou passar o xalatan a noite', 'Medicação ocular prescrita à noite');
+  expect(d.clonedAIResponse.dados.tratamento).toBe('Latanoprosta (Xalatan) à noite');
+});
+
+test('[REV-C2] trocar/tirar/"não pinga mais" tira o remédio do tratamento; "continuar acompanhando" não mantém', () => {
+  const emUso = { medicacoes_em_uso: 'Timolol 2x/dia' };
+  const a = _decTrat('vamos trocar o timolol pelo xalatan a noite. continua vindo de seis em seis meses', null, emUso);
+  expect((a.clonedAIResponse.dados.tratamento || '').includes('Timolol')).toBe(false);
+  const b = _decTrat('vou tirar o timolol. retorno em seis meses', null, emUso);
+  expect((b.clonedAIResponse.dados.tratamento || '').includes('Timolol')).toBe(false);
+  const c = _decTrat('nao precisa mais do timolol. vamos continuar acompanhando', null, emUso);
+  expect((c.clonedAIResponse.dados.tratamento || '').includes('Timolol')).toBe(false);
+  const e = _decTrat('faz um ano que nao pingo o timolol. vamos continuar acompanhando', null, emUso);
+  expect((e.clonedAIResponse.dados.tratamento || '').includes('Timolol')).toBe(false);
+  const ok = _decTrat('mantem o timolol duas vezes ao dia', null, emUso);
+  expect(ok.clonedAIResponse.dados.tratamento).toContain('Timolol');
+});
+
+test('[REV-C3] fora da blefarite o protocolo NÃO dá Tobramicina + dexametasona', () => {
+  const falas = [
+    'caiu shampoo no olho da crianca, vou passar um colirio quatro vezes ao dia',
+    'palpebra inchada pela alergia, vou passar um colirio duas vezes ao dia',
+    'calazio, faz compressa morna e usa um colirio anti-inflamatorio',
+  ];
+  for (const f of falas) {
+    const t = _decTrat(f, 'Medicação ocular prescrita').clonedAIResponse.dados.tratamento;
+    expect([f, /Tobramicina/.test(t)]).toEqual([f, false]);
+  }
+  const calazio = _decTrat('terçol, faz compressa morna', 'Compressa morna').clonedAIResponse.dados.tratamento;
+  expect(calazio).toBe('Compressa morna');
+});
+
+test('[REV-C4] blefarite: classe dita sozinha ou negada não vira a associação', () => {
+  const base = 'blefarite, faz compressa e lava os cilios com shampoo e depois pinga o colirio de ';
+  const soATB = _decTrat(base + 'antibiotico', 'Colírio antibiótico').clonedAIResponse.dados.tratamento;
+  expect(soATB.includes('Tobramicina')).toBe(false);
+  const semCort = _decTrat(base + 'antibiotico, sem corticoide porque a pressao e alta', 'Colírio antibiótico').clonedAIResponse.dados.tratamento;
+  expect(semCort.includes('Tobramicina')).toBe(false);
+  const ambos = _decTrat(base + 'antibiotico com corticoide', 'Colírio antibiótico').clonedAIResponse.dados.tratamento;
+  expect(ambos).toContain('Tobramicina + dexametasona');
+});
+
+test('[REV-I1] o padrão da blefarite preserva posologia e produto ditos', () => {
+  const t = _blefPadrao('blefarite, compressa por 5 minutos, higiene de manha e a noite com sabonete neutro',
+    'Compressa morna 5 minutos\nHigiene palpebral com sabonete neutro de manhã e à noite');
+  expect(t).toBe('Compressa morna 5 minutos\nHigiene palpebral com sabonete neutro de manhã e à noite');
+});
+
+test('[REV-I2] formas faladas "pinga/passa/coloca" com campo vazio suprimem o texto padrão', () => {
+  for (const f of ['pinga esse colirio tres vezes ao dia', 'passa a pomada a noite', 'coloca o lubrificante quando precisar']) {
+    const d = _decTrat(f, null);
+    expect([f, d.injectFlags ? true : true, !!d.clonedAIResponse.suprimirTextoPadraoTratamento]).toEqual([f, true, true]);
+  }
+});
+
+test('[REV-I3] rebaixar a associação preserva posologia sem número', () => {
+  const t = _decTrat('colirio de antibiotico de manha e a noite', 'Associação (ATB + corticoide ocular) de manhã e à noite AO').clonedAIResponse.dados.tratamento;
+  expect(t).toBe('Colírio antibiótico de manhã e à noite AO');
+});
+
+test('[REV-I4] classe de colírio sem apoio na fala é rebaixada (corticoide, antialérgico, hipotensor)', () => {
+  const casos = [
+    ['colirio pra desinflamar, tres vezes ao dia', 'Colírio corticoide 3x/dia'],
+    ['vou passar um colirio duas vezes ao dia', 'Colírio antialérgico 2x/dia'],
+    ['vou passar um colirio uma vez a noite', 'Colírio hipotensor ocular 1x/noite'],
+  ];
+  for (const [fala, linha] of casos) {
+    const t = _decTrat(fala, linha).clonedAIResponse.dados.tratamento;
+    expect([fala, t.startsWith('Medicação ocular prescrita')]).toEqual([fala, true]);
+  }
+  // com apoio na fala a classe fica
+  expect(_decTrat('colirio de corticoide tres vezes ao dia', 'Colírio corticoide 3x/dia').clonedAIResponse.dados.tratamento).toBe('Colírio corticoide 3x/dia');
+  expect(_decTrat('colirio para a pressao uma vez a noite', 'Colírio hipotensor ocular 1x/noite').clonedAIResponse.dados.tratamento).toBe('Colírio hipotensor ocular 1x/noite');
+});
+
+test('[REV-I5] "o colírio continua normal" não sustenta a Tobramicina inventada', () => {
+  const t = _decTrat('blefarite, faz compressa e lava os cilios com shampoo. o colirio continua normal', 'Compressa morna\nHigiene palpebral\nTobramicina + dexametasona')
+    .clonedAIResponse.dados.tratamento;
+  expect(t.includes('Tobramicina')).toBe(false);
 });
 
 test('[DE-3b2] Na blefarite, "Associação ATB+corticoide" é PROMOVIDA ao protocolo declarado', () => {
@@ -930,7 +1028,7 @@ test('[DE-PROT-1] Combo compressa+shampoo+colírio: linha genérica vira "Tobram
   expect(trat.includes('Medicação ocular prescrita')).toBe(false);
   // Compressa e higiene não são o colírio — permanecem intactas.
   expect(trat.includes('Compressa morna')).toBe(true);
-  expect(trat.includes('Higiene palpebral com xampu infantil')).toBe(true);
+  expect(trat.includes('Higiene palpebral com shampoo infantil')).toBe(true);
   expect(raw.dados.tratamento.includes('Medicação ocular prescrita')).toBe(true);
 });
 
@@ -985,7 +1083,7 @@ test('[DE-PROT-4] PROMOVE, nunca CRIA: sem colírio prescrito, nenhuma linha é 
     hookFlags: {},
   });
   const trat = decision.clonedAIResponse.dados.tratamento;
-  expect(trat).toBe('Compressa morna por 2 min antes da higiene palpebral — 2x/dia\nHigiene palpebral com xampu infantil — 3x/dia');
+  expect(trat).toBe('Compressa morna 2x/dia\nHigiene palpebral com shampoo infantil — 3x/dia');
   expect(trat.includes('Tobramicina')).toBe(false);
 });
 
@@ -1029,8 +1127,8 @@ test('[DE-PROT-7] A posologia canônica ("após higiene palpebral") não impede 
     hookFlags: {},
   });
   const linhas = decision.clonedAIResponse.dados.tratamento.split('\n');
-  expect(linhas[0]).toBe('Compressa morna por 2 min antes da higiene palpebral — 2x/dia');
-  expect(linhas[1]).toBe('Higiene palpebral com xampu infantil — 3x/dia');
+  expect(linhas[0]).toBe('Compressa morna 2 min — 2x/dia'); // o que foi dito vence o padrão
+  expect(linhas[1]).toBe('Higiene palpebral com shampoo infantil — 3x/dia');
   expect(linhas[2]).toBe('Tobramicina + dexametasona 3x/dia após higiene palpebral');
   expect(linhas[3]).toBe('Tobramicina + dexametasona após a compressa');
 });

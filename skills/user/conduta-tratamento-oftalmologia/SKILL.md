@@ -939,3 +939,17 @@ Antes de executá-lo, rodar a skill `revisao-final` sobre o resultado pronto: el
 - **Pedido do usuário**: criar injeção padrão para a blefarite — compressa morna, higiene (com xampu infantil ou gel de higiene palpebral: Hialurop ou Blephagel), lubrificante e ômega 3 oral; e a mesma versão acrescida de tobramicina + dexametasona. O gatilho deve ser pautado pelas orientações dadas ao paciente.
 - **Correção aplicada**: novo guard `_guardBlefaritePadrao` (ver seção "Tratamento padrão da blefarite"). Promove e padroniza, nunca cria. Produto da higiene lido da fala. Testes `[BLEF-PAD-1..5]`; testes `[DE-PROT-*]` e `[LUB-10]` atualizados para o texto padronizado; vault ganhou o passo.
 - **Decisão assumida (não confirmada)**: higiene orientada sem produto dito → xampu infantil; frequências padrão (compressa 2x/dia, higiene 3x/dia, colírio 3x/dia após a higiene) vêm do padrão já existente do consultório.
+
+### 2026-11-15 — Revisão independente (Fable): correções dos achados críticos e importantes
+
+- **C1** — remédio citado como história de **terceiro** ("minha mãe pinga Xalatan") ou **passado** ("ano passado usei Tobrex"), ou sem verbo de prescrição/manutenção perto, não nomeia mais o colírio novo: a linha fica genérica e o médico é avisado (Guard 2g).
+- **C2** — `trocar/tirar/"não precisa mais"/"não pingo mais"` contam como suspensão no Guard 2e; "continuar acompanhando/vindo/retorno" não conta como manter remédio.
+- **C3** — o protocolo da blefarite exige **cuidado palpebral orientado** (higiene/lavagem de pálpebra ou cílios, ou compressa + xampu/sabonete). "Shampoo" ou "pálpebra" soltos não bastam; calázio/terçol sem a palavra blefarite não usam o pacote.
+- **C4** — na blefarite, classe dita **sozinha** ("colírio de antibiótico") ou **negada** ("sem corticoide") não é promovida a Tobramicina + dexametasona.
+- **I1** — o padrão da blefarite só preenche a linha "pelada" ("Compressa morna"); posologia, tempo ou produto ditos são preservados. Gel/Hialurop/Blephagel ditos vencem o produto da linha.
+- **I2** — a exceção do tratamento vazio reconhece "pinga", "passa", "passe", "coloca", "aplica".
+- **I3** — rebaixar "Associação" preserva posologia sem número ("de manhã e à noite").
+- **I4** — "Colírio corticoide / antialérgico / hipotensor" sem apoio na fala é rebaixado a "Medicação ocular prescrita" (antes só o antibiótico era conferido).
+- **I5** — "o colírio continua normal" / "pode parar o colírio" não sustentam a Tobramicina do protocolo.
+- **Pendente (depende do médico):** frequências padrão quando não ditas; calázio/terçol com pacote próprio; "lágrima artificial" como lubrificante; colírio contínuo sem menção; "mantido" genérico em retorno.
+- **Testes:** `[REV-C1..C4]`, `[REV-I1..I5]`.

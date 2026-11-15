@@ -306,7 +306,7 @@
     const downgraded = tratamento
       .split('\n')
       .map(line => /associa[çc][ãa]o/i.test(line)
-        ? line.replace(/associa[çc][ãa]o[^0-9]*/i, novoDescritor).trim()
+        ? line.replace(/associa[çc][ãa]o\s*(?:\([^)]*\))?\s*/i, novoDescritor).trim()
         : line)
       .join('\n')
       .trim();
@@ -365,6 +365,16 @@
   // do pacote compressa + higiene + lubrificante (2026-09-15).
   const _INTENCAO_COLIRIO_BLEFARITE_RE = /mais\s+forte|desinflam|anti-?\s?inflamat|antibiotic|corticoid/;
 
+  // Cuidado palpebral REALMENTE orientado: higiene/lavagem da pálpebra ou dos cílios (a palavra
+  // "shampoo" ou "pálpebra" sozinha não basta: "caiu shampoo no olho da criança"). Calázio/terçol
+  // sem a palavra blefarite não usam o pacote (revisão 2026-11-15).
+  function _orientouCuidadoPalpebral(rawText) {
+    const f = _normalizeForGuard(rawText);
+    if (/calazio|tercol|hordeolo/.test(f) && !/blefarit|meibomit|disfuncao\s+de\s+meibom/.test(f)) return false;
+    if (/compressa/.test(f) && /xampu|shampoo|sabonete/.test(f)) return true;
+    return /higiene\s+(?:\w+\s+){0,2}(?:palpebr|cilio)|lav\w*\s+(?:\w+\s+){0,3}(?:cilio|palpebra|bordo)|limp\w*\s+(?:\w+\s+){0,3}(?:cilio|palpebra|bordo)|lav\w*\s+(?:\w+\s+){0,3}(?:xampu|shampoo|sabonete)|(?:xampu|shampoo|sabonete|gel)\s+(?:\w+\s+){0,4}(?:cilio|palpebra)|(?:cilio|palpebra)\w*\s+(?:\w+\s+){0,4}(?:xampu|shampoo|sabonete)|higiene\s+palpebral|blefarit/.test(f);
+  }
+
   function _falaTemColirioDaBlefarite(rawText) {
     const words = _normalizeForGuard(rawText).split(/[^a-z0-9-]+/).filter(Boolean);
     if (_INTENCAO_COLIRIO_BLEFARITE_RE.test(words.join(' '))) return true;
@@ -373,6 +383,10 @@
       if (/^colirios?$/.test(w)) {
         // "sem colírio nenhum" é a negativa da prescrição, não a prescrição.
         if (words[i - 1] === 'sem' || words[i + 1] === 'nenhum') continue;
+        // "o colírio continua normal", "pode parar o colírio": é o colírio de uso contínuo
+        // (glaucoma), não o da blefarite (revisão 2026-11-15).
+        if (words.slice(Math.max(0, i - 3), i).some(w => /^(?:continu\w*|mant\w*|parar?|pare|suspend\w*|tirar|segue)$/.test(w)) ||
+            words.slice(i + 1, i + 4).some(w => /^(?:continua|normal|mesmo)$/.test(w))) continue;
         // "colírio lubrificante", "colírio de lágrima", "colírio da pressão"…
         const depois = words.slice(i + 1, i + 4).join(' ');
         if (_NAO_E_COLIRIO_DA_BLEFARITE_PERTO_RE.test(depois)) continue;
@@ -404,7 +418,18 @@
     // sozinho) MAIS um colírio a ser pingado mencionado na fala — que não seja o
     // lubrificante.
     if (!_detectBlefariteEvidencia(ctx.transcribedText).qualquer) return;
+    if (!_orientouCuidadoPalpebral(ctx.transcribedText)) return;
     if (!_falaTemColirioDaBlefarite(ctx.transcribedText)) return;
+    // Classe dita SOZINHA ("colírio de antibiótico, sem corticoide") não vira a associação:
+    // o protocolo só nomeia quando a fala não restringiu a classe (regra "nunca complete uma
+    // classe com a outra", 2026-11-15). Negação de corticoide/antibiótico também bloqueia.
+    {
+      const fN = _normalizeForGuard(ctx.transcribedText);
+      const L = _listasDoLexico();
+      const atb = L.falaAntibiotico.test(fN), cort = L.falaCorticoide.test(fN);
+      const negou = /(?:sem|nao\s+(?:pode|usa|usar|quero|precisa(?:\s+de)?)|nada\s+de)\s+(?:\w+\s+){0,2}(?:corticoid|cortison|antibiotic)/.test(fN);
+      if (negou || (atb !== cort && (atb || cort))) return;
+    }
 
     const linhas = tratamento.split('\n');
     // Nível 1 vence: remédio já nomeado em qualquer linha → não mexer.
@@ -465,15 +490,14 @@
     const tratamento = cloned.dados && cloned.dados.tratamento;
     if (!tratamento) return;
     if (!_detectBlefariteEvidencia(ctx.transcribedText).qualquer) return;
+    if (!_orientouCuidadoPalpebral(ctx.transcribedText)) return;
     const fala = _normalizeForGuard(ctx.transcribedText || '');
 
     // Cada linha do tratamento cai em UMA categoria; o resto passa intacto.
     const cat = { compressa: null, higiene: null, tobra: null, lubrificante: null, omega: null };
     const outras = [];
-    const posologia = (l) => {
-      const m = l.match(/\s[—-]\s.*$|\s\d+\s*x\s*\/?\s*(?:dia|ao dia)\b.*$|\s\d+x\/dia.*$/i);
-      return m ? m[0] : '';
-    };
+    // Posologia/produto/duração já escritos na linha: o que foi dito VENCE o padrão.
+    const temDetalhe = (l) => /\d|vez(?:es)?\b|manh[aã]|noite|tarde|hora|semana|dias?\b|at[eé]\b|acabar|\bcom\b|\bde\b/i.test(l);
     for (const linha of tratamento.split('\n')) {
       const t = linha.trim();
       if (!t) continue;
@@ -490,19 +514,31 @@
 
     const novas = [];
     if (cat.compressa) {
-      const p = posologia(cat.compressa);
-      novas.push(_BLEF_PAD.compressa + (p ? (/^\s*\d/.test(p) ? ' — ' + p.trim() : p) : _BLEF_PAD.compressaPosologiaPadrao));
+      // Só a linha "pelada" ("Compressa morna") recebe o texto padrão; "compressa 5 minutos"
+      // ou "de manhã e à noite" ficam como o médico disse.
+      const pelada = /^(?:[-•*]\s*)?compressas?(?:\s+(?:morna|mornas|quente|quentes))?\s*$/i.test(cat.compressa);
+      novas.push(pelada ? _BLEF_PAD.compressa + _BLEF_PAD.compressaPosologiaPadrao : cat.compressa);
     }
     if (cat.higiene) {
-      const p = posologia(cat.higiene);
-      novas.push('Higiene palpebral com ' + _produtoHigieneDaFala(fala) + (p ? (/^\s*\d/.test(p) ? ' — ' + p.trim() : p) : _BLEF_PAD.higienePosologiaPadrao));
+      const gelDito = /blephagel|blefagel|blefa\s*gel|hialurop|\bgel\b/.test(fala) && !/xampu|shampoo|shampu/.test(fala);
+      const m = cat.higiene.match(/^(\s*(?:[-•*]\s*)?higiene(?:\s+palpebral)?)(?:\s+com\s+(.+?))?(\s[—-]\s.*|\s\d.*)?$/i);
+      let linhaH = cat.higiene;
+      if (m) {
+        const produtoLinha = m[2] && m[2].trim();
+        const tail = (m[3] || '').trim();
+        // Produto: gel/marca DITOS na fala vencem; senão vale o que a linha já traz; linha sem
+        // produto → xampu infantil (padrão do consultório).
+        const produto = gelDito ? _produtoHigieneDaFala(fala) : (produtoLinha || 'xampu infantil');
+        const posologia = tail || (produtoLinha && temDetalhe(produtoLinha) ? '' : _BLEF_PAD.higienePosologiaPadrao);
+        linhaH = 'Higiene palpebral com ' + produto + (posologia ? (/^[—-]/.test(posologia) ? ' ' + posologia : /^\d/.test(posologia) ? ' — ' + posologia : posologia) : '');
+      }
+      novas.push(linhaH);
     }
     if (cat.tobra) {
-      // A linha já é nomeada (marca, posologia ou "até acabar" ditos): só completa quando é o nome puro.
+      // Linha já nomeada (marca, posologia ou "até acabar" ditos): só completa o nome puro.
       novas.push(/^(?:[-•*]\s*)?tobramicina\s*\+\s*dexametasona\s*$/i.test(cat.tobra) ? cat.tobra + _BLEF_PAD.tobraDexaPosologiaPadrao : cat.tobra);
     }
     if (cat.lubrificante) {
-      // Lubrificante já nomeado (marca/princípio) ou com posologia dita é preservado.
       const generico = /^(?:[-•*]\s*)?(?:carmelose s[óo]dica ou hialuronato de s[óo]dio|lubrificante(?: ocular)?)\s*$/i.test(cat.lubrificante);
       novas.push(generico ? _BLEF_PAD.lubrificante : cat.lubrificante);
     }
@@ -513,7 +549,7 @@
     const final = novas.concat(outras).join('\n');
     if (final !== tratamento) {
       cloned.dados.tratamento = final;
-      log.push('Tratamento da blefarite padronizado (higiene: ' + _produtoHigieneDaFala(fala) + ')');
+      log.push('Tratamento da blefarite padronizado');
     }
   }
 
@@ -577,19 +613,35 @@
   function _guardClasseAntibioticoSemFala(cloned, ctx, log) {
     const tratamento = cloned.dados && cloned.dados.tratamento;
     if (!tratamento) return;
-    const linhas = tratamento.split('\n');
-    if (!linhas.some(l => _LINHA_CLASSE_ATB_RE.test(_normalizeForGuard(l)))) return;
-    // A classe dita ("antibiótico", "ATB") ou qualquer antibiótico do léxico citado.
-    if (_listasDoLexico().falaAntibiotico.test(_normalizeForGuard(ctx.transcribedText))) return;
-
+    const L = _listasDoLexico();
+    const Lex = _lexico();
+    const fala = _normalizeForGuard(ctx.transcribedText);
+    // Classes de colírio que a FALA precisa sustentar (revisão 2026-11-15: antes só o antibiótico
+    // era conferido; "colírio pra desinflamar" saía "Colírio corticoide"). A classe dita ou
+    // qualquer remédio da classe citado vale.
+    const classes = [
+      { nome: 'antibiótico', re: _LINHA_CLASSE_ATB_RE, troca: /^(\s*(?:[-•*]\s*)?)col[ií]rio\s+antibi[oó]tico/i, fala: L.falaAntibiotico },
+      { nome: 'corticoide', re: /^(\s*(?:[-•*]\s*)?)colirio\s+(?:com\s+)?corticoide\b/, troca: /^(\s*(?:[-•*]\s*)?)col[ií]rio\s+(?:com\s+)?corticoide/i, fala: L.falaCorticoide },
+      { nome: 'antialérgico', re: /^(\s*(?:[-•*]\s*)?)colirio\s+antialergico\b/, troca: /^(\s*(?:[-•*]\s*)?)col[ií]rio\s+antial[eé]rgico/i,
+        fala: new RegExp(Lex.PALAVRAS_DE_CLASSE.antialergico + '|' + Lex.fonteDeClasse(['antialergico'])) },
+      { nome: 'hipotensor', re: /^(\s*(?:[-•*]\s*)?)colirio\s+hipotensor\b/, troca: /^(\s*(?:[-•*]\s*)?)col[ií]rio\s+hipotensor(?:\s+ocular)?/i, fala: L.hipotensor ?
+        new RegExp(Lex.PALAVRAS_DE_CLASSE.hipotensor + '|' + L.hipotensor.source) : null },
+    ];
+    let linhas = tratamento.split('\n');
     let rebaixadas = 0;
-    cloned.dados.tratamento = linhas.map(l => {
-      if (!_LINHA_CLASSE_ATB_RE.test(_normalizeForGuard(l))) return l;
-      rebaixadas++;
-      return l.replace(/^(\s*(?:[-•*]\s*)?)col[ií]rio\s+antibi[oó]tico/i, '$1Medicação ocular prescrita');
-    }).join('\n');
+    for (const c of classes) {
+      if (!c.fala || !linhas.some(l => c.re.test(_normalizeForGuard(l)))) continue;
+      if (c.fala.test(fala)) continue;
+      linhas = linhas.map(l => {
+        if (!c.re.test(_normalizeForGuard(l))) return l;
+        rebaixadas++;
+        return l.replace(c.troca, '$1Medicação ocular prescrita');
+      });
+      log.push(`Guard 2d: "Colírio ${c.nome}" rebaixado para "Medicação ocular prescrita" — fala não cita ${c.nome}`);
+    }
+    if (!rebaixadas) return;
+    cloned.dados.tratamento = linhas.join('\n');
     _pushAviso(cloned, _AVISO_NOME_NAO_CLARO);
-    log.push(`Guard 2d: "Colírio antibiótico" rebaixado para "Medicação ocular prescrita" — fala não cita antibiótico (${rebaixadas} linha(s))`);
   }
 
   /**
@@ -645,6 +697,17 @@
       .map(a => Lexico.nomeRegistrado(a))
       .map((n, i) => (i === 0 ? n : n.charAt(0).toLowerCase() + n.slice(1)))
       .join(' + ');
+  }
+
+  // O remédio foi citado como PRESCRIÇÃO/MANUTENÇÃO (verbo de prescrever perto) e não como
+  // história de terceiro ("minha mãe pinga Xalatan") ou passado ("ano passado usei Tobrex").
+  const _CITACAO_TERCEIRO_OU_PASSADO_RE = /\b(?:mae|pai|avo|avos|marido|esposa|filho|filha|irmao|irma|vizinh\w*|amig\w*|antigamente)\b|\bja\s+(?:us|tom|ping)\w+|ano\s+passado|anos\s+atras|tempo\s+atras/;
+  const _CITACAO_VERBO_PRESCRICAO_RE = /\b(?:pass\w+|prescrev\w+|receit\w+|inici\w+|comec\w+|troc\w+|ping\w+|usar|use|coloc\w+|aplic\w+|tom(?:ar|e|a)|mant\w+|continu\w+|segue)\b/;
+  function _citacaoSustentaPrescricao(a, t) {
+    const antes = t.slice(Math.max(0, a.indice - 80), a.indice).trim().split(/\s+/).slice(-7).join(' ');
+    const depois = t.slice(a.indice + a.termo.length, a.indice + a.termo.length + 70).split(' ').slice(0, 7).join(' ');
+    if (_CITACAO_TERCEIRO_OU_PASSADO_RE.test(antes)) return false;
+    return _CITACAO_VERBO_PRESCRICAO_RE.test(antes + ' ' + depois);
   }
 
   /** Linha de classe/genérico → os remédios citados na fala que poderiam nomeá-la (ou null). */
@@ -839,10 +902,22 @@
     //    tratamento, já com o nome, pelo Guard 2e.
     const linhasEmUso = new Set(emUsoOriginal.split('\n').map(chaveLinha).filter(Boolean));
     const jaConstaEmUso = _constaEmMedicacoesEmUso(d, Lexico);
+    // Revisão 2026-11-15: remédio citado como história de terceiro/passado ou sem verbo de
+    // prescrição perto NÃO nomeia o colírio novo ("minha mãe pinga Xalatan… vou passar um
+    // colírio 4x/dia" saía "Latanoprosta (Xalatan) 4x/dia"). A linha fica genérica e o médico
+    // é avisado.
+    const tNorm = Lexico.normalizarLexico(ctx.transcribedText || '');
+    const citadosTrat = citados.filter(a => _citacaoSustentaPrescricao(a, tNorm));
+    const naoSustentados = citados.filter(a => !citadosTrat.includes(a));
+    const candidatosTrat = (linha) => _candidatosNomeDaLinha(linha, citadosTrat);
     if (typeof d.tratamento === 'string' && d.tratamento.trim()) {
       const linhas = d.tratamento.split('\n');
+      if (naoSustentados.length && linhas.some(l => _candidatosNomeDaLinha(l, naoSustentados))) {
+        log.push(`Guard 2g: ${naoSustentados.map(a => a.principio).join(', ')} citado sem ser prescrição (terceiro/passado) — linha do tratamento mantida genérica`);
+        _pushAviso(cloned, `Medicação: "${naoSustentados.map(a => a.principio).join(', ')}" foi citado na fala, mas não como prescrição; a linha do tratamento ficou genérica. Confira o nome do colírio prescrito.`);
+      }
       const novo = linhas.map((l, i) => {
-        const c = candidatosDaLinha(l);
+        const c = candidatosTrat(l);
         // Linha já nomeada: corrige o nome não pronunciado. A troca "pela classe" obedece
         // à mesma regra do colírio novo: remédio em uso só entra na linha idêntica.
         if (!c) {
@@ -903,8 +978,8 @@
    * são preservadas no tratamento para impedir o placeholder "Nega uso de tratamentos".
    * Se já há tratamento (ex.: colírio novo prescrito), os mantidos são mesclados.
    */
-  const _VERBO_MANTER_RE = /\b(?:mantid[oa]s?|mantem|mantenho|manter|mantendo|continu(?:a|ar|e|o|ando)|segue\s+com|seguir\s+com)\b/i;
-  const _VERBO_SUSPENDER_RE = /\b(?:suspend(?:er|o|e|a|eu|ido|am|em)?|interromp(?:er|a|o|eu|ido|am|em)?|par(?:ar|o|a|ou|em)?|descontinu(?:ar|e|o|ou|em)?|retir(?:ar|o|a|ou|em)?|cort(?:ar|o|a|ou|em)?)\b/i;
+  const _VERBO_MANTER_RE = /\b(?:mantid[oa]s?|mantem|mantenho|manter|mantendo|continu(?:a|ar|e|o|ando)(?!\s+(?:a\s+|em\s+)?(?:acompanh\w*|vindo|vir|retorn\w*|monitor\w*|controle|consult\w*|avali\w*))|segue\s+com|seguir\s+com)\b/i;
+  const _VERBO_SUSPENDER_RE = /\b(?:suspend(?:er|o|e|a|eu|ido|am|em)?|interromp(?:er|a|o|eu|ido|am|em)?|par(?:ar|o|a|ou|em)?|descontinu(?:ar|e|o|ou|em)?|retir(?:ar|o|a|ou|em)?|cort(?:ar|o|a|ou|em)?|tir(?:ar|o|a|e|amos|ou)|troc(?:ar|o|a|e|amos|ou))\b/i;
   const _MANTER_GERAL_RE = /\b(?:mantid[oa]s?\s+(?:as?\s+)?(?:conduta|medicac(?:ao|oes)|remedios?|colirios?|tratamento|o\s+que|o\s+uso|prescric(?:ao|oes))|manter\s+(?:as?\s+)?(?:conduta|medicac(?:ao|oes)|remedios?|colirios?|tratamento|o\s+que|o\s+uso|prescric(?:ao|oes))|continua\s+(?:com\s+)?(?:tudo|o\s+mesmo|as?\s+mesmas?)|mesm[oa]\s+(?:conduta|tratamento))\b/i;
   const _NAO_E_REMEDIO_RE = /^(?:nega|refere|uso|usa|usando|colirio|medicacao|medicacoes|ocular|oculares|nao|identificado|consulta|paciente|vezes|dia|olho|olhos|direito|esquerdo|ambos|gotas?|noite|manha|tarde|ao)$/i;
 
@@ -932,7 +1007,7 @@
         // parar: lido como suspensão, o colírio mantido sumia do tratamento e o painel
         // gravava "Nega uso de tratamentos" (revisão 2026-11-10). Só as formas que
         // são inequivocamente do verbo contam aqui.
-        const reSusp = new RegExp(`(?:${_VERBO_SUSPENDER_RE.source})\\s+(?:com\\s+)?(?:o|a|os|as)?\\s*${nome}|${nome}\\s+(?:suspend|interromp|par(?:ar|ou|e|em|ad[oa])\\b|para\\s+de\\b|descontinu|retir|cort)`, 'i');
+        const reSusp = new RegExp(`(?:${_VERBO_SUSPENDER_RE.source})\\s+(?:com\\s+)?(?:o|a|os|as)?\\s*${nome}|${nome}\\s+(?:suspend|interromp|par(?:ar|ou|e|em|ad[oa])\\b|para\\s+de\\b|descontinu|retir|cort)|nao\\s+precisa\\s+mais\\s+(?:de\\s+|do\\s+|da\\s+)?(?:o\\s+|a\\s+)?${nome}|nao\\s+(?:ping|us|tom|coloc)\\w*\\s+(?:mais\\s+)?(?:o\\s+|a\\s+|os\\s+|as\\s+)?${nome}|${nome}\\s+(?:\\w+\\s+){0,2}nao\\s+precisa\\s+mais`, 'i');
         return reSusp.test(fala);
       });
       if (suspenso) return false;
@@ -2211,7 +2286,7 @@
    * comportamento de antes. Nenhum dos dois inventa prescrição. Não usa lista de remédios
    * própria: remédio vem do léxico, e o resto são palavras genéricas.
    */
-  const _VERBO_PRESCRICAO_TOKEN_RE = /^(?:passar|passo|prescrev\w*|receit\w*|indic\w*|manter|mantem|mantenho|mantido|mantida|mantidos|mantidas|mantendo|continu\w*|inici\w*|comec\w*|aplicar|aplique|pingar|pingue|pinguem|tomar|tome|colocar|coloque|trocar|troco|troque)$/;
+  const _VERBO_PRESCRICAO_TOKEN_RE = /^(?:passar|passo|prescrev\w*|receit\w*|indic\w*|manter|mantem|mantenho|mantido|mantida|mantidos|mantidas|mantendo|continu\w*|inici\w*|comec\w*|aplicar|aplique|aplica|pingar|pinga|pingue|pinguem|tomar|tome|colocar|coloque|coloca|passa|passe|trocar|troco|troque)$/;
   const _VERBO_USAR_TOKEN_RE = /^(?:usar|use)$/;
   const _MODAL_ANTES_DE_USAR_RE = /^(?:pode|podem|vai|va|deve|devem|precisa|precisar|vamos|vou|quero|tem|tenha|recomendo|convem)$/;
   const _NEGACAO_TOKEN_RE = /^(?:nao|sem|nunca|nenhum|nenhuma|dispenso|dispensa|dispensar|desnecessario)$/;

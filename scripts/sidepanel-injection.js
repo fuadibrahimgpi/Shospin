@@ -104,7 +104,7 @@ async function selectShospTab(tabs, { retries = 0, reinject = false } = {}) {
     dbg('[selectShospTab] Nenhuma aba com prontuário aberto — re-injetando content script nas candidatas...');
     for (const t of tabs) {
       try {
-        await chrome.scripting.executeScript({ target: { tabId: t.id }, files: ['src/content.js'] });
+        await chrome.scripting.executeScript({ target: { tabId: t.id }, files: ['src/content/core.js', 'src/content/field-detector.js', 'src/content/injector.js', 'src/content.js'] });
       } catch (e) {
         console.warn('[selectShospTab] Falha ao re-injetar na aba', t.id, e?.message);
       }

@@ -71,7 +71,7 @@ async function _reInjectContentScript(tabId, reason) {
     try {
       await chrome.scripting.executeScript({
         target: { tabId },
-        files: ['src/content.js']
+        files: ['src/content/core.js', 'src/content/field-detector.js', 'src/content/injector.js', 'src/content.js']
       });
       bgLogger.info(`Content script re-injetado na aba ${tabId} (${reason})`);
     } catch (err) {

@@ -14,7 +14,7 @@ Extensão Chrome (Manifest V3, JavaScript puro, sem build) que automatiza o pron
 ## Estrutura
 | Pasta | Conteúdo |
 |---|---|
-| `src/` | service worker (`background.js`), content script, cliente Gemini (`ApiService.js`, `gemini-config.js`), agentes de entrevista e exame, `Logger.js` |
+| `src/` | service worker (`background.js`), content script (`content/core.js`, `content/field-detector.js`, `content/injector.js` e `content.js`, nesta ordem; ver `manifest.json`), cliente Gemini (`ApiService.js`, `gemini-config.js`), agentes de entrevista e exame, `Logger.js` |
 | `scripts/` | lógica do painel lateral (áudio, câmera, injeção, hooks, estado) |
 | `config/` | gatilhos clínicos |
 | `skills/user/` | prompts/regras clínicas (OCR, CID, conduta, transcrição) |

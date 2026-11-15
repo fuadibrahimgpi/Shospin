@@ -229,7 +229,8 @@ function readSrcNormalized(...segments) {
   return fs.readFileSync(p, 'utf8').replace(/\r\n/g, '\n');
 }
 
-const contentJsSource = readSrcNormalized('src', 'content.js');
+// Content script dividido: os testes de texto olham o conjunto (mesma ordem do manifest).
+const contentJsSource = [['src', 'content', 'core.js'], ['src', 'content', 'field-detector.js'], ['src', 'content', 'injector.js'], ['src', 'content.js']].map(seg => readSrcNormalized(...seg)).join('\n');
 
 test('[C4] Comentário "// Biomicroscopia" não aparece duplicado consecutivamente', () => {
   expect(contentJsSource).not.toContain(

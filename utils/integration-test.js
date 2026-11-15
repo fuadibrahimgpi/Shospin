@@ -713,7 +713,7 @@ test('[DE-3h] Guard 2e: se houver ordem expressa de suspender medicação, ela N
 
 // 2026-11-11: "para" DEPOIS do nome é preposição, não o verbo parar. "Mantém o timolol para a
 // pressão" era lido como suspensão; o tratamento ficava vazio e o painel gravava
-// "Sem prescrição de medicação" — o oposto da fala.
+// "Nega uso de tratamentos" — o oposto da fala.
 test('[DE-3h2] Guard 2e: "mantém o timolol para a pressão" NÃO é suspensão — o colírio mantido chega ao tratamento', () => {
   const raw = { tipo_consulta: 'retorno', dados: { medicacoes_em_uso: 'Timolol 2x/dia', tratamento: null } };
   const decision = DecisionEngine.buildDecision(raw, {
@@ -3571,7 +3571,7 @@ test('[V6-IDP-4] sidepanel-injection.js reverte flags no else de injectResp.succ
 });
 
 // ──────────────────────────────────────────────────────────────────────────────
-// 2026-07-03 — Tratamento vazio é injetado como "Sem prescrição de medicação"
+// 2026-07-03 — Tratamento vazio é injetado como "Nega uso de tratamentos"
 // ──────────────────────────────────────────────────────────────────────────────
 
 test('[TRAT-1] payload de injeção usa o texto padrão (via tratamentoPadrao) quando tratamento vazio', () => {
@@ -3603,7 +3603,7 @@ const _semPrescDecision = (fala, tratamento, extra, hookFlags) => DecisionEngine
   dados: { medicacoes_em_uso: 'Nega uso de medicações oculares', conduta: 'Retorno 1 ano', tratamento, ...(extra || {}) },
 }, { transcribedText: fala, hookFlags: hookFlags || {} });
 
-test('[TRAT-3] nenhum medicamento mencionado: o texto padrão "Sem prescrição de medicação" é escrito', () => {
+test('[TRAT-3] nenhum medicamento mencionado: o texto padrão "Nega uso de tratamentos" é escrito', () => {
   for (const fala of [
     'o grau esta igual vou so manter os oculos volta em um ano',
     'o grau mudou vou prescrever oculos novos volta em um ano',
@@ -3611,7 +3611,7 @@ test('[TRAT-3] nenhum medicamento mencionado: o texto padrão "Sem prescrição 
   ]) {
     const d = _semPrescDecision(fala, null);
     expect(d.clonedAIResponse.suprimirTextoPadraoTratamento).toBe(undefined);
-    expect(_tratamentoPadrao(d.clonedAIResponse)).toBe('Sem prescrição de medicação');
+    expect(_tratamentoPadrao(d.clonedAIResponse)).toBe('Nega uso de tratamentos');
     expect(d.segurarInjecao).toBe(false);
   }
 });
@@ -3627,7 +3627,7 @@ test('[TRAT-4] fala prescreve ou mantém medicação e o tratamento ficou vazio:
     const d = _semPrescDecision(fala, null);
     expect(d.clonedAIResponse.suprimirTextoPadraoTratamento).toBe(true);
     expect(_tratamentoPadrao(d.clonedAIResponse)).toBe(null);
-    expect(d.avisos.some(a => a.includes('"Sem prescrição de medicação" NÃO foi escrito'))).toBe(true);
+    expect(d.avisos.some(a => a.includes('"Nega uso de tratamentos" NÃO foi escrito'))).toBe(true);
     expect(d.guardsApplied.some(g => g.startsWith('Texto padrão do tratamento suprimido'))).toBe(true);
     expect(d.segurarInjecao).toBe(false); // a flag fica FORA de `dados`: nunca segura a injeção
     expect(d.clonedAIResponse.dados.tratamento).toBe(null); // o guard não escreve nada no campo
@@ -3651,7 +3651,7 @@ test('[TRAT-5] o que NÃO é prescrição mantém o texto padrão: histórico, n
   ]) {
     const d = _semPrescDecision(fala, null);
     expect(d.clonedAIResponse.suprimirTextoPadraoTratamento).toBe(undefined);
-    expect(_tratamentoPadrao(d.clonedAIResponse)).toBe('Sem prescrição de medicação');
+    expect(_tratamentoPadrao(d.clonedAIResponse)).toBe('Nega uso de tratamentos');
   }
 });
 
@@ -3674,7 +3674,7 @@ test('[TRAT-7] injeção manual com o campo vazio NÃO devolve o texto padrão q
     dilatacao, (d) => _tratamentoPadrao(d), audioData);
   expect(montar({ suprimirTextoPadraoTratamento: true }, false)('')).toBe(null);          // campo vazio + flag → não escreve
   expect(montar({ suprimirTextoPadraoTratamento: true }, false)('Colírio X 3x/dia')).toBe('Colírio X 3x/dia'); // médico preencheu → vale o dele
-  expect(montar({}, false)('')).toBe('Sem prescrição de medicação');                       // sem flag → texto padrão
+  expect(montar({}, false)('')).toBe('Nega uso de tratamentos');                       // sem flag → texto padrão
   expect(montar({}, true)('')).toBe(null);                                                 // dilatação → null
   expect(montar({}, false)('Timolol 2x/dia')).toBe('Timolol 2x/dia');
 });
@@ -3682,15 +3682,15 @@ test('[TRAT-7] injeção manual com o campo vazio NÃO devolve o texto padrão q
 test('[TRAT-8] o texto padrão tem UM só dono: nenhum outro ponto do painel o escreve por conta própria', () => {
   const semComentario = (s) => s.split('\n').filter(l => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
   for (const [nome, src] of [['sidepanel-audio.js', audioJsSource], ['sidepanel-injection.js', injectionJsSource]]) {
-    expect([nome, semComentario(src).includes('Sem prescrição de medicação')]).toEqual([nome, false]);
+    expect([nome, semComentario(src).includes('Nega uso de tratamentos')]).toEqual([nome, false]);
   }
 });
 
 test('[TRAT-9] a linha [Med] diz a verdade sobre o texto padrão (escrito × suprimido)', () => {
   const sup = _semPrescDecision('vou passar um colirio tres vezes ao dia', null);
-  expect(sup.diagMedicacao).toContain('o painel NÃO vai escrever "Sem prescrição de medicação"');
+  expect(sup.diagMedicacao).toContain('o painel NÃO vai escrever "Nega uso de tratamentos"');
   const normal = _semPrescDecision('eu estou usando o colirio so para hidratar toma omega tres', null, { medicacoes_em_uso: 'Colírio lubrificante' });
-  expect(normal.diagMedicacao).toContain('o painel vai escrever "Sem prescrição de medicação"');
+  expect(normal.diagMedicacao).toContain('o painel vai escrever "Nega uso de tratamentos"');
 });
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -6290,12 +6290,12 @@ test('[SKILL-SYNC] regras de 2026-11-10/12 estão na skill E no código (texto p
   const conduta = skill('conduta-tratamento-oftalmologia');
   const de = readSrcNormalized('src', 'DecisionEngine.js');
   // texto padrão do tratamento
-  expect(conduta).toContain('`Sem prescrição de medicação`');
+  expect(conduta).toContain('`Nega uso de tratamentos`');
   expect(conduta).toContain('_guardTratamentoVazioComMedicacao');
   expect(de).toContain('function _guardTratamentoVazioComMedicacao');
-  expect(readSrcNormalized('scripts', 'sidepanel-constants.js')).toContain("const TEXTO_SEM_PRESCRICAO = 'Sem prescrição de medicação'");
-  expect(skill('transcricao-consulta-oftalmologia')).toContain('Sem prescrição de medicação');
-  expect(skill('revisao-final')).toContain('Sem prescrição de medicação');
+  expect(readSrcNormalized('scripts', 'sidepanel-constants.js')).toContain("const TEXTO_SEM_PRESCRICAO = 'Nega uso de tratamentos'");
+  expect(skill('transcricao-consulta-oftalmologia')).toContain('Nega uso de tratamentos');
+  expect(skill('revisao-final')).toContain('Nega uso de tratamentos');
   // guard de nervo (fundoscopia)
   expect(skill('fundoscopia-oftalmologia')).toContain('_guardNervoOpticoSemEvidencia');
   expect(de).toContain('function _guardNervoOpticoSemEvidencia');

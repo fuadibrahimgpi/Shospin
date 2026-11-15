@@ -397,7 +397,7 @@ O mesmo vale para `medicacoes_em_uso`, que **nunca** pode ficar em branco:
 > dela para preencher os dois campos.
 >
 > **Texto padrão do tratamento:** quando nenhum medicamento foi mencionado na conduta, o campo
-> `tratamento` recebe `Sem prescrição de medicação` (escrito pelo painel quando o campo vem `null`;
+> `tratamento` recebe `Nega uso de tratamentos` (escrito pelo painel quando o campo vem `null`;
 > regra do médico, 2026-11-12). Se a fala prescreve ou mantém medicação e o campo ficou vazio, o
 > texto NÃO é escrito: o médico é avisado para preencher. Detalhes na skill de conduta.
 

@@ -817,7 +817,7 @@ async function injectAll(force = false) {
 
     const _dilatacao = !!audioData.dilatacaoDetectada;
     // Sem tratamento ditado e nenhum medicamento mencionado, o campo TRATAMENTO é injetado com o
-    // registro explícito "Sem prescrição de medicação" (o mesmo texto que o painel exibe via
+    // registro explícito "Nega uso de tratamentos" (o mesmo texto que o painel exibe via
     // displayAudioResults) — o prontuário não fica com tratamento em branco. Quem decide é
     // tratamentoPadrao(audioData), e NÃO só o valor do campo: se a fala prescreve ou mantém uma
     // medicação e o tratamento ficou vazio, o painel mostra o campo vazio com aviso, e injetar

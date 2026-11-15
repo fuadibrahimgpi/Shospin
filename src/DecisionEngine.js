@@ -787,7 +787,7 @@
    *
    * "o paciente está em uso de timolol duas vezes ao dia, mantido timolol": o modelo
    * deixou tratamento null por já constar em medicacoes_em_uso, e a injeção escreveu
-   * "Sem prescrição de medicação" — o oposto da fala. Quando tratamento está vazio e a
+   * "Nega uso de tratamentos" — o oposto da fala. Quando tratamento está vazio e a
    * fala liga "mantido/mantém/continua" a um remédio de medicacoes_em_uso, a linha
    * desse remédio (com a posologia já extraída) vira o tratamento. Só preenche
    * tratamento vazio; nunca altera o que o modelo escreveu.
@@ -797,14 +797,14 @@
    *
    * "o paciente está em uso de timolol duas vezes ao dia, mantido timolol": o modelo
    * deixou tratamento null por já constar em medicacoes_em_uso, e a injeção escreveu
-   * "Sem prescrição de medicação" — o oposto da fala. Quando tratamento está vazio e a
+   * "Nega uso de tratamentos" — o oposto da fala. Quando tratamento está vazio e a
    * fala liga "mantido/mantém/continua" a um remédio de medicacoes_em_uso, a linha
    * desse remédio (com a posologia já extraída) vira o tratamento.
    *
    * Extensão 2026-10-26: cobre também manutenções de conduta em retorno/controle
    * (ex: "mantido óculos retorno para controle" com timolol em uso). Se a fala tem
    * verbo de manutenção e não há ordem de suspender, as medicações ativas em uso
-   * são preservadas no tratamento para impedir o placeholder "Sem prescrição de medicação".
+   * são preservadas no tratamento para impedir o placeholder "Nega uso de tratamentos".
    * Se já há tratamento (ex.: colírio novo prescrito), os mantidos são mesclados.
    */
   const _VERBO_MANTER_RE = /\b(?:mantid[oa]s?|mantem|mantenho|manter|mantendo|continu(?:a|ar|e|o|ando)|segue\s+com|seguir\s+com)\b/i;
@@ -834,7 +834,7 @@
       const suspenso = nomes.some(nome => {
         // DEPOIS do nome, "para" é preposição ("timolol para a pressão"), não o verbo
         // parar: lido como suspensão, o colírio mantido sumia do tratamento e o painel
-        // gravava "Sem prescrição de medicação" (revisão 2026-11-10). Só as formas que
+        // gravava "Nega uso de tratamentos" (revisão 2026-11-10). Só as formas que
         // são inequivocamente do verbo contam aqui.
         const reSusp = new RegExp(`(?:${_VERBO_SUSPENDER_RE.source})\\s+(?:com\\s+)?(?:o|a|os|as)?\\s*${nome}|${nome}\\s+(?:suspend|interromp|par(?:ar|ou|e|em|ad[oa])\\b|para\\s+de\\b|descontinu|retir|cort)`, 'i');
         return reSusp.test(fala);
@@ -2095,7 +2095,7 @@
 
   /**
    * TEXTO PADRÃO DO TRATAMENTO (regra do médico, 2026-11-12): quando NENHUM medicamento foi
-   * mencionado na conduta, o campo tratamento recebe "Sem prescrição de medicação". Quem
+   * mencionado na conduta, o campo tratamento recebe "Nega uso de tratamentos". Quem
    * escreve o texto é o painel (`tratamentoPadrao`, em sidepanel-constants.js); este guard
    * decide só a EXCEÇÃO: o tratamento ficou vazio, mas a fala PRESCREVE ou MANTÉM uma
    * medicação. Escrever "Sem prescrição" aí seria o oposto da fala; o campo fica vazio e o
@@ -2163,7 +2163,7 @@
         cloned.suprimirTextoPadraoTratamento = true;
         _pushAviso(cloned,
           `Tratamento: a fala indica medicação ("…${trecho}…"), mas o campo ficou vazio. ` +
-          'O texto "Sem prescrição de medicação" NÃO foi escrito — preencha o tratamento manualmente.');
+          'O texto "Nega uso de tratamentos" NÃO foi escrito — preencha o tratamento manualmente.');
         log.push(`Texto padrão do tratamento suprimido — tratamento vazio com medicação prescrita/mantida na fala ("…${trecho}…")`);
         return;
       }
@@ -2245,12 +2245,12 @@
       if (naoNomeados.length) {
         linhas.push(`      ALERTA: fala cita ${naoNomeados.map(a => a.principio).join(', ')} e nem em_uso nem trat nomeiam`);
       }
-      // Ponto A: o painel troca tratamento vazio por "Sem prescrição de medicação" — salvo quando a
+      // Ponto A: o painel troca tratamento vazio por "Nega uso de tratamentos" — salvo quando a
       // fala prescreve/mantém medicação (_guardTratamentoVazioComMedicacao): aí o campo fica vazio.
       if ((!d.tratamento || !String(d.tratamento).trim()) && (achados.length || genericos.length)) {
         linhas.push(cloned.suprimirTextoPadraoTratamento
-          ? '      ATENÇÃO: trat vazio com medicação prescrita/mantida na fala — o painel NÃO vai escrever "Sem prescrição de medicação"; o médico foi avisado para preencher'
-          : '      ATENÇÃO: trat vazio com palavra de medicação na fala — o painel vai escrever "Sem prescrição de medicação" (conferir se procede)');
+          ? '      ATENÇÃO: trat vazio com medicação prescrita/mantida na fala — o painel NÃO vai escrever "Nega uso de tratamentos"; o médico foi avisado para preencher'
+          : '      ATENÇÃO: trat vazio com palavra de medicação na fala — o painel vai escrever "Nega uso de tratamentos" (conferir se procede)');
       }
       return linhas.join('\n');
     } catch (e) {

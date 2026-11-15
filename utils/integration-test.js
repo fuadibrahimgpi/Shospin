@@ -244,7 +244,7 @@ test('[C4] Comentário "// Biomicroscopia" não aparece duplicado consecutivamen
 const injectionJsSource = readSrcNormalized('scripts', 'sidepanel-injection.js');
 
 test('[C5] clearAll reseta dilatacaoDetectada no bloco de clearAudio', () => {
-  expect(injectionJsSource).toContain('dilatacaoDetectada = false;');
+  expect(injectionJsSource).toContain("StateManager.setHookFlag('dilatacaoDetectada', false);");
 });
 
 test('[C5] clearAll reseta dilatacaoDetectada também quando apenas clearCamera é true', () => {

@@ -459,13 +459,13 @@ async function processAudioInBackground(audioBlob, capturedText) {
       // (o hook de dilatação pode não ter disparado se o Speech API reiniciou nesse momento)
       if (!dilatacaoDetectada) {
         if (data.dilatacaoDetectada) {
-          dilatacaoDetectada = true;
+          StateManager.setHookFlag('dilatacaoDetectada', true);
         } else {
           const finalNorm = normalizeText(textToProcess) || normalizeText(recentTextBuffer);
           // Fase 2: só a cauda conta (narração retrospectiva não é nova pausa)
           const scanDil = fase2DilatacaoAtiva ? finalNorm.slice(-300) : finalNorm;
           if (ClinicalTriggers.detectaDilatacaoNaFala(scanDil)) {
-            dilatacaoDetectada = true;
+            StateManager.setHookFlag('dilatacaoDetectada', true);
           }
         }
       }
@@ -495,7 +495,7 @@ async function processAudioInBackground(audioBlob, capturedText) {
           // Copiar flags reconciliadas de volta para o objeto de trabalho
           workingData.injectExamesNormais = decision.injectFlags.injectExamesNormais;
           workingData.injectBlefarite     = decision.injectFlags.injectBlefarite;
-          if (decision.injectFlags.dilatacao) dilatacaoDetectada = true;
+          if (decision.injectFlags.dilatacao) StateManager.setHookFlag('dilatacaoDetectada', true);
         }
       } catch (e) {
         console.warn('[DecisionEngine] Falha ao calcular decisão (não-fatal):', e.message);
@@ -741,7 +741,7 @@ function _checkSilence() {
     silencePendingStop = null;
     if (isRecording && !stopCommandTimeout) {
       dbg('[Silence] Auto-stop por silêncio — encerrando consulta');
-      consultaEncerradaDetectada = true;
+      StateManager.setHookFlag('consultaEncerradaDetectada', true);
       stopRecording();
     }
   }, SILENCE_WARN_MS);

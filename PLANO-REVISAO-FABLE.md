@@ -68,3 +68,5 @@ Ordem recomendada: 1, 8, 2, 3, 4, 6, 5, 7. As etapas 5 e 7 por último, porque s
 - Dividir arquivos grandes, trocar esperas fixas (`setTimeout`), terminar a migração do estado, extrair prompts, ESLint/Prettier e versão única.
 
 **Etapa 8 concluída (qualidade):** ESLint configurado (`npm run lint`: 0 erros, 135 avisos de variáveis não usadas), conferência de versão entre `manifest.json` e `package.json` no `npm run check`. Prettier não foi adotado porque reformataria todos os arquivos de uma vez e esconderia mudanças reais.
+
+**Etapa 4 (estado), parcial e segura:** todas as escritas diretas nas 13 flags de gatilho em `sidepanel-audio.js` e `sidepanel-injection.js` agora passam por `StateManager.setHookFlag` (os hooks já escreviam via `HOOK_STATE`). O `StateManager` é o único ponto de escrita dessas flags. Variáveis de gravação/câmera/Speech (cerca de 400 usos, ligadas a timers e streams) ficaram como estão: migrá-las exige teste real de microfone e câmera.

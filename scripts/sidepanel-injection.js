@@ -483,8 +483,8 @@ async function injectAll(force = false) {
   if (!catarataDetectada && !lioDetectada && !opacidadeCapsulaDetectada) {
     const _cat = parseCatarataFromDiagnostico(audioData?.dados?.diagnostico);
     if (_cat.detected) {
-      catarataDetectada = true;
-      if (!catarataGrau && _cat.grau) catarataGrau = _cat.grau;
+      StateManager.setHookFlag('catarataDetectada', true);
+      if (!catarataGrau && _cat.grau) StateManager.setHookFlag('catarataGrau', _cat.grau);
       dbg('[Catarata] Flag derivada do diagnóstico (gatilho de voz não disparou):', catarataGrau || '(grau não especificado)');
     }
   }
@@ -800,16 +800,16 @@ function clearAll(options = { clearAudio: true, clearCamera: true }) {
     // Para adicionar uma nova flag: declarar em sidepanel-constants.js,
     // registrar o hook em sidepanel-hooks.js e adicionar o reset aqui.
     if (clearAudio && !isRecording) {
-      examesNormaisInjetados = false;
-      blefariteInjetada = false;
-      fundoscopiaDetectada = false;
-      receitaOlhoIrritadoInjetada = false;
-      catarataDetectada = false;
-      catarataGrau = null;
-      lioDetectada = false;
-      opacidadeCapsulaDetectada = false;
-      dilatacaoDetectada = false;
-      fase2DilatacaoAtiva = false;
+      StateManager.setHookFlag('examesNormaisInjetados', false);
+      StateManager.setHookFlag('blefariteInjetada', false);
+      StateManager.setHookFlag('fundoscopiaDetectada', false);
+      StateManager.setHookFlag('receitaOlhoIrritadoInjetada', false);
+      StateManager.setHookFlag('catarataDetectada', false);
+      StateManager.setHookFlag('catarataGrau', null);
+      StateManager.setHookFlag('lioDetectada', false);
+      StateManager.setHookFlag('opacidadeCapsulaDetectada', false);
+      StateManager.setHookFlag('dilatacaoDetectada', false);
+      StateManager.setHookFlag('fase2DilatacaoAtiva', false);
       lastTriggerTime = 0;
       if (stopCommandTimeout) { clearTimeout(stopCommandTimeout); stopCommandTimeout = null; }
       stopPendingInfo = null;
@@ -821,7 +821,7 @@ function clearAll(options = { clearAudio: true, clearCamera: true }) {
     // dilatacaoDetectada também é resetada se limpar câmera sem áudio
     // (evita que flag de sessão anterior suprima conduta da próxima gravação)
     if (clearCamera && !clearAudio && !isRecording) {
-      dilatacaoDetectada = false;
+      StateManager.setHookFlag('dilatacaoDetectada', false);
     }
 
     // ── 4. Limpar campos de áudio ──

@@ -22,7 +22,7 @@ async function checkMicrophonePermission() {
   try {
     const result = await navigator.permissions.query({ name: 'microphone' });
     if (result.state === 'granted') {
-      permissionChecked = true;
+      AppState.permissionChecked = true;
       statusText.textContent = 'Clique para iniciar o ditado';
     } else if (result.state === 'denied') {
       statusText.textContent = 'Permissão de microfone necessária';
@@ -30,7 +30,7 @@ async function checkMicrophonePermission() {
     }
     result.onchange = () => {
       if (result.state === 'granted') {
-        permissionChecked = true;
+        AppState.permissionChecked = true;
         statusText.textContent = 'Clique para iniciar o ditado';
       }
     };
@@ -47,19 +47,17 @@ function openPermissionPage() {
 // GRAVAÇÃO
 // ============================================================================
 
-let _lastToggleTime = 0;
 const TOGGLE_DEBOUNCE_MS = 1000;
-let sessionStartTime = 0;
 
 async function toggleRecording() {
   const now = Date.now();
-  if (now - _lastToggleTime < TOGGLE_DEBOUNCE_MS) {
+  if (now - AppState._lastToggleTime < TOGGLE_DEBOUNCE_MS) {
     dbg('[Audio] toggleRecording ignorado — debounce ativo');
     return;
   }
-  _lastToggleTime = now;
+  AppState._lastToggleTime = now;
 
-  if (isRecording) {
+  if (AppState.isRecording) {
     stopRecording();
   } else {
     await startRecording();
@@ -69,27 +67,27 @@ async function toggleRecording() {
 async function startRecording() {
   try {
     // Reutilizar stream existente ou criar novo
-    if (!persistentStream || persistentStream.getTracks()[0].readyState === 'ended') {
-      persistentStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    if (!AppState.persistentStream || AppState.persistentStream.getTracks()[0].readyState === 'ended') {
+      AppState.persistentStream = await navigator.mediaDevices.getUserMedia({ audio: true });
     }
-    permissionChecked = true;
+    AppState.permissionChecked = true;
 
-    mediaRecorder = new MediaRecorder(persistentStream);
-    audioChunks = [];
+    AppState.mediaRecorder = new MediaRecorder(AppState.persistentStream);
+    AppState.audioChunks = [];
 
     // Resetar todo o estado de sessão via StateManager (flags, transcript, buffers, timers)
     StateManager.resetSession();
 
     // Proteção: cancelar stopCommandTimeout residual de sessão anterior
     // (pode sobreviver ao resetSession se foi agendado entre o reset e o start)
-    if (stopCommandTimeout) {
-      clearTimeout(stopCommandTimeout);
-      stopCommandTimeout = null;
+    if (AppState.stopCommandTimeout) {
+      clearTimeout(AppState.stopCommandTimeout);
+      AppState.stopCommandTimeout = null;
       dbg('[Audio] stopCommandTimeout residual cancelado ao iniciar nova sessão');
     }
-    stopPendingInfo = null;
-    stopGateOffset = 0;
-    stopGateBlockCount = 0;
+    AppState.stopPendingInfo = null;
+    AppState.stopGateOffset = 0;
+    AppState.stopGateBlockCount = 0;
 
     // Fase 2 de dilatação: se há pausa persistida, esta gravação é o RETORNO
     // do paciente. Suprimir o hook de dilatação por voz nesta sessão — frases
@@ -108,23 +106,23 @@ async function startRecording() {
     } catch (_e) { /* storage indisponível — segue sem supressão */ }
 
     // Timestamp de início — usado para calcular duração mínima da sessão
-    sessionStartTime = Date.now();
-    lastSpeechTime = Date.now();
-    if (silenceCheckInterval) clearInterval(silenceCheckInterval);
-    silenceCheckInterval = setInterval(_checkSilence, 10_000);
+    AppState.sessionStartTime = Date.now();
+    AppState.lastSpeechTime = Date.now();
+    if (AppState.silenceCheckInterval) clearInterval(AppState.silenceCheckInterval);
+    AppState.silenceCheckInterval = setInterval(_checkSilence, 10_000);
 
     // Limpar explicitamente os campos de diagnóstico no DOM que foram poupados na consulta anterior
     if (diagnosticoField) diagnosticoField.value = '';
     if (diagnosticoRetornoField) diagnosticoRetornoField.value = '';
 
-    mediaRecorder.ondataavailable = (event) => {
-      audioChunks.push(event.data);
+    AppState.mediaRecorder.ondataavailable = (event) => {
+      AppState.audioChunks.push(event.data);
     };
 
-    mediaRecorder.onstop = async () => {
+    AppState.mediaRecorder.onstop = async () => {
       // Se é troca de modo, não processar
-      if (isModeSwitching) {
-        isModeSwitching = false;
+      if (AppState.isModeSwitching) {
+        AppState.isModeSwitching = false;
         return;
       }
 
@@ -132,8 +130,8 @@ async function startRecording() {
       // Se a sessão durou menos de 3 segundos E não há texto reconhecido nem buffer,
       // descartar silenciosamente — evita enviar sessões acidentais ao Gemini.
       const MIN_SESSION_MS = 3000;
-      const sessionElapsed = Date.now() - sessionStartTime;
-      if (sessionElapsed < MIN_SESSION_MS && !recognizedText.trim() && !(recentTextBuffer && recentTextBuffer.trim())) {
+      const sessionElapsed = Date.now() - AppState.sessionStartTime;
+      if (sessionElapsed < MIN_SESSION_MS && !AppState.recognizedText.trim() && !(AppState.recentTextBuffer && AppState.recentTextBuffer.trim())) {
         console.warn(`[Audio] Sessão muito curta (${Math.round(sessionElapsed / 1000)}s) sem texto — descartando.`);
         stopSpeechRecognition();
         statusText.textContent = 'Sessão descartada (muito curta)';
@@ -147,18 +145,18 @@ async function startRecording() {
       }
 
       // ── Solicitar parada imediata do Speech para forçar a finalização do buffer ──
-      if (speechRecognition) {
+      if (AppState.speechRecognition) {
         try {
           dbg('[Audio] Parando Speech Recognition no onstop para forçar flush de interim results...');
-          speechRecognition.stop();
+          AppState.speechRecognition.stop();
         } catch (e) {
           console.warn('[Audio] Erro ao parar Speech Recognition no onstop:', e);
         }
       }
 
       // ── Espera inteligente por resultados finais do Speech API ──
-      const textBefore = recognizedText;
-      const hasSpeech = (textBefore && textBefore.trim().length > 0) || (recentTextBuffer && recentTextBuffer.trim().length > 0);
+      const textBefore = AppState.recognizedText;
+      const hasSpeech = (textBefore && textBefore.trim().length > 0) || (AppState.recentTextBuffer && AppState.recentTextBuffer.trim().length > 0);
 
       if (hasSpeech) {
         let waitedMs = 0;
@@ -168,7 +166,7 @@ async function startRecording() {
         while (waitedMs < MAX_WAIT) {
           await new Promise(r => setTimeout(r, POLL_INTERVAL));
           waitedMs += POLL_INTERVAL;
-          if (recognizedText !== textBefore) {
+          if (AppState.recognizedText !== textBefore) {
             dbg(`[Audio] Speech finalizado após ${waitedMs}ms.`);
             break;
           }
@@ -180,7 +178,7 @@ async function startRecording() {
       // Parar de vez e limpar
       stopSpeechRecognition();
 
-      const capturedText = recognizedText;
+      const capturedText = AppState.recognizedText;
       if (capturedText && capturedText.trim().length > 0) {
         const words = capturedText.trim().split(/\s+/).length;
         dbg(`[Audio] Texto capturado para processamento (${words} palavras):`, capturedText.substring(0, 120) + (capturedText.length > 120 ? '…' : ''));
@@ -192,13 +190,13 @@ async function startRecording() {
       // produzir resultado final, os hooks de dilatação/stop não terão disparado.
       // Só executam se o hook runner ainda não detectou (evita dupla detecção).
       const _finalNorm = normalizeText(capturedText);
-      const _textToScan = _finalNorm || normalizeText(recentTextBuffer);
+      const _textToScan = _finalNorm || normalizeText(AppState.recentTextBuffer);
 
       if (!StateManager.getHookFlag('dilatacaoDetectada')) {
         // Na fase 2 (retorno da dilatação), narrações retrospectivas espalhadas
         // pela sessão não contam — só um comando na CAUDA (dito logo antes da
         // parada manual) indica uma NOVA pausa real de dilatação.
-        const _dilScan = fase2DilatacaoAtiva ? _textToScan.slice(-300) : _textToScan;
+        const _dilScan = AppState.fase2DilatacaoAtiva ? _textToScan.slice(-300) : _textToScan;
         if (ClinicalTriggers.detectaDilatacaoNaFala(_dilScan)) {
           StateManager.setHookFlag('dilatacaoDetectada', true);
           dbg('[Audio] Dilatação detectada no fallback onstop');
@@ -216,12 +214,12 @@ async function startRecording() {
         }
       }
 
-      const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+      const audioBlob = new Blob(AppState.audioChunks, { type: 'audio/webm' });
       await processAudioInBackground(audioBlob, capturedText);
     };
 
-    mediaRecorder.start();
-    isRecording = true;
+    AppState.mediaRecorder.start();
+    AppState.isRecording = true;
 
     startSpeechRecognition();
 
@@ -254,15 +252,15 @@ async function startRecording() {
  * O speech é parado dentro do mediaRecorder.onstop, DEPOIS de capturar o texto.
  */
 function stopRecording(keepStreamOpen = true) {
-  isRecording = false;
-  if (silenceCheckInterval) { clearInterval(silenceCheckInterval); silenceCheckInterval = null; }
-  if (silencePendingStop) { clearTimeout(silencePendingStop); silencePendingStop = null; }
+  AppState.isRecording = false;
+  if (AppState.silenceCheckInterval) { clearInterval(AppState.silenceCheckInterval); AppState.silenceCheckInterval = null; }
+  if (AppState.silencePendingStop) { clearTimeout(AppState.silencePendingStop); AppState.silencePendingStop = null; }
 
-  if (mediaRecorder && mediaRecorder.state !== 'inactive') {
-    mediaRecorder.stop();
+  if (AppState.mediaRecorder && AppState.mediaRecorder.state !== 'inactive') {
+    AppState.mediaRecorder.stop();
     if (!keepStreamOpen) {
-      mediaRecorder.stream.getTracks().forEach(track => track.stop());
-      persistentStream = null;
+      AppState.mediaRecorder.stream.getTracks().forEach(track => track.stop());
+      AppState.persistentStream = null;
     }
   }
 
@@ -274,16 +272,16 @@ function stopRecording(keepStreamOpen = true) {
 }
 
 function stopRecordingCompletely() {
-  isRecording = false;
-  if (silenceCheckInterval) { clearInterval(silenceCheckInterval); silenceCheckInterval = null; }
-  if (silencePendingStop) { clearTimeout(silencePendingStop); silencePendingStop = null; }
+  AppState.isRecording = false;
+  if (AppState.silenceCheckInterval) { clearInterval(AppState.silenceCheckInterval); AppState.silenceCheckInterval = null; }
+  if (AppState.silencePendingStop) { clearTimeout(AppState.silencePendingStop); AppState.silencePendingStop = null; }
   stopSpeechRecognition();
-  if (mediaRecorder && mediaRecorder.state !== 'inactive') {
-    mediaRecorder.stop();
-    mediaRecorder.stream.getTracks().forEach(track => track.stop());
+  if (AppState.mediaRecorder && AppState.mediaRecorder.state !== 'inactive') {
+    AppState.mediaRecorder.stop();
+    AppState.mediaRecorder.stream.getTracks().forEach(track => track.stop());
   }
-  if (persistentStream) {
-    persistentStream.getTracks().forEach(track => track.stop());
-    persistentStream = null;
+  if (AppState.persistentStream) {
+    AppState.persistentStream.getTracks().forEach(track => track.stop());
+    AppState.persistentStream = null;
   }
 }

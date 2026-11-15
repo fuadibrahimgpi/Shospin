@@ -4,7 +4,7 @@
  * ============================================================================
  * Carregado após config/clinical-triggers.js (que define normalizeText e
  * todos os arrays de gatilhos de voz). Este arquivo define apenas:
- *   - Variáveis de estado da sessão (let)
+ *   - AppState: fonte única do estado mutável da sessão
  *   - STATE BRIDGE v5.1 (__shospState)
  *   - Textos-padrão clínicos (BIOMICROSCOPIA_NORMAL, etc.)
  *   - Função auxiliar getBiomicroscopiaComLente()
@@ -22,71 +22,117 @@
 // ESTADO DA APLICAÇÃO
 // ============================================================================
 
-let currentMode = 'audio';
-let isRecording = false;
-let mediaRecorder = null;
-let audioChunks = [];
-let timerInterval = null;
-let seconds = 0;
-let permissionChecked = false;
-let cameraPermissionChecked = false;
+// Fonte única do estado mutável da sessão (antes: ~40 `let` globais soltos).
+// Acesso: AppState.<nome>. Chave desconhecida (typo) LANÇA erro em vez de
+// criar/ler variável fantasma. Flags de detecção: ver SESSION_FLAG_DEFAULTS.
+const AppState = (() => {
+  const state = {
+    // ── origem: scripts/sidepanel-audio.js ──
+    _lastToggleTime: 0,
+    sessionStartTime: 0,
+    // ── origem: scripts/sidepanel-camera.js ──
+    _processingTimerInterval: null,
+    _processingTimerSeconds: 0,
+    // ── origem: scripts/sidepanel-constants.js ──
+    currentMode: 'audio',
+    isRecording: false,
+    mediaRecorder: null,
+    audioChunks: [],
+    timerInterval: null,
+    seconds: 0,
+    permissionChecked: false,
+    cameraPermissionChecked: false,
+    // Dados cumulativos
+    audioData: null,
+    cameraData: null,
+    // Controle de injeção duplicada
+    audioDataInjected: false,
+    cameraDataInjected: false,
+    // Confirmação pendente para refração suspeita (OD=OE)
+    pendingRefractionConfirmation: false,
+    // Web Speech API
+    speechRecognition: null,
+    recognizedText: '',
+    isModeSwitching: false,
+    noSpeechCount: 0, // contador de erros no-speech consecutivos (backoff)
+    isSpeechPausedByCamera: false,
+    isSpeechActive: false,
+    isSpeechBackingOff: false,
+    speechRecoveryTimer: null,
+    // Stream de áudio persistente
+    persistentStream: null,
+    // Estado da câmera
+    cameraStream: null,
+    captureInterval: null,
+    captureTimeout: null,
+    // Flags de detecção de gatilhos (resetadas a cada gravação)
+    examesNormaisInjetados: false,
+    blefariteInjetada: false,
+    receitaOlhoIrritadoInjetada: false,
+    catarataDetectada: false,
+    catarataGrau: null, // "inicial" | "incipiente" | "moderada" | "avançada" | null
+    lioDetectada: false,
+    opacidadeCapsulaDetectada: false,
+    lenteLimpaDetectada: false,
+    dilatacaoDetectada: false,
+    fundoscopiaDetectada: false,
+    consultaEncerradaDetectada: false,
+    // Sticky: uma despedida/encerramento já foi DETECTADA nesta sessão (mesmo que
+    // bloqueada pelo gate ou cancelada). Diferente de consultaEncerradaDetectada,
+    // NÃO é limpa no cancelamento — persiste até o resetSession. Usada para suprimir
+    // a dilatação depois que o médico já sinalizou fim de consulta (evita hijack de
+    // consulta encerrada quando o "vamos dilatar" se refere a outra pessoa).
+    despedidaNaSessao: false,
+    // Fase 2 de dilatação: havia uma pausa de dilatação persistida
+    // (_shospDilatacaoPhase1) quando esta gravação começou — ou seja, esta sessão
+    // é o RETORNO do paciente. Suprime o hook de dilatação por voz: frases
+    // retrospectivas inevitáveis no retorno ("já dilatou", "pinguei o colírio
+    // para dilatar a pupila") re-disparavam a pausa e a consulta nunca fechava.
+    // Setada em startRecording() a partir do storage (exceto motivo='exame');
+    // os fallbacks pós-parada passam a varrer só a cauda do texto nesta fase.
+    fase2DilatacaoAtiva: false,
+    // Cooldown unificado e debounce de parada
+    lastTriggerTime: 0,
+    stopCommandTimeout: null,
+    // Metadados do stop agendado: { hookId, cmd, endAnchored, onCancel }.
+    // Usado pelo runner para CANCELAR stops de frases curtas (endAnchored) caso
+    // a fala continue depois da despedida ("tá bom então... vamos medir a pressão").
+    stopPendingInfo: null,
+    // Âncora do gate de captura (condicionante de encerramento): posição no texto
+    // normalizado até onde despedidas já foram BLOQUEADAS por falta de conduta/
+    // tratamento ditados. Só uma despedida dita APÓS esta posição pode encerrar
+    // a consulta — sem isso, a despedida antiga que ficou no transcript pararia
+    // a gravação no meio do ditado da prescrição. Ver _stopGateBlocks no runner.
+    stopGateOffset: 0,
+    // Válvula de escape do gate: nº de despedidas DISTINTAS já bloqueadas por
+    // falta de conduta/tratamento nesta sessão. A partir da 2ª despedida distinta
+    // sem captura o gate LIBERA o encerramento — casos reais (2026-07-03/06/07)
+    // mostraram que despedida repetida sem captura indica marcador de conduta
+    // faltando (falso bloqueio), não conduta faltando. Ver _stopGateBlocks.
+    stopGateBlockCount: 0,
+    // Auto-stop por silêncio prolongado (consultas que terminam sem despedida detectável)
+    lastSpeechTime: 0,
+    silenceCheckInterval: null,
+    silencePendingStop: null,
+    // Buffer de texto recente — persiste entre restarts do Speech API
+    // (sem isso, o hook de stop perde o trigger se o Speech reiniciar no momento exato)
+    recentTextBuffer: '',
+    recentTextTimeout: null,
+  };
+  const permitido = k => typeof k === "symbol" || k in state || k === "toJSON" || k in Object.prototype;
+  return new Proxy(state, {
+    get(t, k) {
+      if (!permitido(k)) throw new Error(`AppState: chave desconhecida '${String(k)}'`);
+      return t[k];
+    },
+    set(t, k, v) {
+      if (!(k in t)) throw new Error(`AppState: chave desconhecida '${String(k)}' (typo?)`);
+      t[k] = v;
+      return true;
+    },
+  });
+})();
 
-// Dados cumulativos
-let audioData = null;
-let cameraData = null;
-
-// Controle de injeção duplicada
-let audioDataInjected = false;
-let cameraDataInjected = false;
-
-// Confirmação pendente para refração suspeita (OD=OE)
-let pendingRefractionConfirmation = false;
-
-// Web Speech API
-let speechRecognition = null;
-let recognizedText = '';
-let isModeSwitching = false;
-let noSpeechCount = 0; // contador de erros no-speech consecutivos (backoff)
-let isSpeechPausedByCamera = false;
-let isSpeechActive = false;
-let isSpeechBackingOff = false;
-let speechRecoveryTimer = null;
-
-
-// Stream de áudio persistente
-let persistentStream = null;
-
-// Estado da câmera
-let cameraStream = null;
-let captureInterval = null;
-let captureTimeout = null;
-
-// Flags de detecção de gatilhos (resetadas a cada gravação)
-let examesNormaisInjetados = false;
-let blefariteInjetada = false;
-let receitaOlhoIrritadoInjetada = false;
-let catarataDetectada = false;
-let catarataGrau = null; // "inicial" | "incipiente" | "moderada" | "avançada" | null
-let lioDetectada = false;
-let opacidadeCapsulaDetectada = false;
-let lenteLimpaDetectada = false;
-let dilatacaoDetectada = false;
-let fundoscopiaDetectada = false;
-let consultaEncerradaDetectada = false;
-// Sticky: uma despedida/encerramento já foi DETECTADA nesta sessão (mesmo que
-// bloqueada pelo gate ou cancelada). Diferente de consultaEncerradaDetectada,
-// NÃO é limpa no cancelamento — persiste até o resetSession. Usada para suprimir
-// a dilatação depois que o médico já sinalizou fim de consulta (evita hijack de
-// consulta encerrada quando o "vamos dilatar" se refere a outra pessoa).
-let despedidaNaSessao = false;
-// Fase 2 de dilatação: havia uma pausa de dilatação persistida
-// (_shospDilatacaoPhase1) quando esta gravação começou — ou seja, esta sessão
-// é o RETORNO do paciente. Suprime o hook de dilatação por voz: frases
-// retrospectivas inevitáveis no retorno ("já dilatou", "pinguei o colírio
-// para dilatar a pupila") re-disparavam a pausa e a consulta nunca fechava.
-// Setada em startRecording() a partir do storage (exceto motivo='exame');
-// os fallbacks pós-parada passam a varrer só a cauda do texto nesta fase.
-let fase2DilatacaoAtiva = false;
 
 // ============================================================================
 // REGISTRO CANÔNICO DAS FLAGS DE SESSÃO
@@ -112,35 +158,6 @@ const SESSION_FLAG_DEFAULTS = Object.freeze({
   fase2DilatacaoAtiva: false,
 });
 
-// Cooldown unificado e debounce de parada
-let lastTriggerTime = 0;
-let stopCommandTimeout = null;
-// Metadados do stop agendado: { hookId, cmd, endAnchored, onCancel }.
-// Usado pelo runner para CANCELAR stops de frases curtas (endAnchored) caso
-// a fala continue depois da despedida ("tá bom então... vamos medir a pressão").
-let stopPendingInfo = null;
-// Âncora do gate de captura (condicionante de encerramento): posição no texto
-// normalizado até onde despedidas já foram BLOQUEADAS por falta de conduta/
-// tratamento ditados. Só uma despedida dita APÓS esta posição pode encerrar
-// a consulta — sem isso, a despedida antiga que ficou no transcript pararia
-// a gravação no meio do ditado da prescrição. Ver _stopGateBlocks no runner.
-let stopGateOffset = 0;
-// Válvula de escape do gate: nº de despedidas DISTINTAS já bloqueadas por
-// falta de conduta/tratamento nesta sessão. A partir da 2ª despedida distinta
-// sem captura o gate LIBERA o encerramento — casos reais (2026-07-03/06/07)
-// mostraram que despedida repetida sem captura indica marcador de conduta
-// faltando (falso bloqueio), não conduta faltando. Ver _stopGateBlocks.
-let stopGateBlockCount = 0;
-
-// Auto-stop por silêncio prolongado (consultas que terminam sem despedida detectável)
-let lastSpeechTime = 0;
-let silenceCheckInterval = null;
-let silencePendingStop = null;
-
-// Buffer de texto recente — persiste entre restarts do Speech API
-// (sem isso, o hook de stop perde o trigger se o Speech reiniciar no momento exato)
-let recentTextBuffer = '';
-let recentTextTimeout = null;
 
 // ============================================================================
 // STATE BRIDGE v5.1 (introspecção / debug)
@@ -152,40 +169,39 @@ let recentTextTimeout = null;
 //   - construir telemetria sem tocar nas variáveis individuais
 //   - migração futura: o caller pode adotar __shospState e a substituição
 //     interna por StateManager não quebra a API.
-// As variáveis continuam sendo a fonte da verdade — este bridge não as
-// substitui nem altera comportamento clínico.
+// A fonte da verdade é AppState — este bridge só expõe leitura.
 window.__shospState = Object.freeze({
-  get currentMode()                  { return currentMode; },
-  get isRecording()                  { return isRecording; },
-  get permissionChecked()            { return permissionChecked; },
-  get cameraPermissionChecked()      { return cameraPermissionChecked; },
-  get audioData()                    { return audioData; },
-  get cameraData()                   { return cameraData; },
-  get audioDataInjected()            { return audioDataInjected; },
-  get cameraDataInjected()           { return cameraDataInjected; },
-  get pendingRefractionConfirmation(){ return pendingRefractionConfirmation; },
-  get recognizedText()               { return recognizedText; },
-  get noSpeechCount()                { return noSpeechCount; },
-  get isSpeechPausedByCamera()       { return isSpeechPausedByCamera; },
-  get isSpeechActive()               { return isSpeechActive; },
-  get examesNormaisInjetados()       { return examesNormaisInjetados; },
-  get blefariteInjetada()            { return blefariteInjetada; },
-  get receitaOlhoIrritadoInjetada()  { return receitaOlhoIrritadoInjetada; },
-  get catarataDetectada()            { return catarataDetectada; },
-  get catarataGrau()                 { return catarataGrau; },
-  get lioDetectada()                 { return lioDetectada; },
-  get opacidadeCapsulaDetectada()    { return opacidadeCapsulaDetectada; },
-  get lenteLimpaDetectada()          { return lenteLimpaDetectada; },
-  get dilatacaoDetectada()           { return dilatacaoDetectada; },
-  get fundoscopiaDetectada()         { return fundoscopiaDetectada; },
-  get consultaEncerradaDetectada()   { return consultaEncerradaDetectada; },
-  get despedidaNaSessao()            { return despedidaNaSessao; },
-  get fase2DilatacaoAtiva()          { return fase2DilatacaoAtiva; },
-  get lastTriggerTime()              { return lastTriggerTime; },
-  get hasStopScheduled()             { return stopCommandTimeout !== null; },
-  get stopGateOffset()               { return stopGateOffset; },
-  get stopGateBlockCount()           { return stopGateBlockCount; },
-  get recentTextBufferLength()       { return recentTextBuffer.length; },
+  get currentMode()                  { return AppState.currentMode; },
+  get isRecording()                  { return AppState.isRecording; },
+  get permissionChecked()            { return AppState.permissionChecked; },
+  get cameraPermissionChecked()      { return AppState.cameraPermissionChecked; },
+  get audioData()                    { return AppState.audioData; },
+  get cameraData()                   { return AppState.cameraData; },
+  get audioDataInjected()            { return AppState.audioDataInjected; },
+  get cameraDataInjected()           { return AppState.cameraDataInjected; },
+  get pendingRefractionConfirmation(){ return AppState.pendingRefractionConfirmation; },
+  get recognizedText()               { return AppState.recognizedText; },
+  get noSpeechCount()                { return AppState.noSpeechCount; },
+  get isSpeechPausedByCamera()       { return AppState.isSpeechPausedByCamera; },
+  get isSpeechActive()               { return AppState.isSpeechActive; },
+  get examesNormaisInjetados()       { return AppState.examesNormaisInjetados; },
+  get blefariteInjetada()            { return AppState.blefariteInjetada; },
+  get receitaOlhoIrritadoInjetada()  { return AppState.receitaOlhoIrritadoInjetada; },
+  get catarataDetectada()            { return AppState.catarataDetectada; },
+  get catarataGrau()                 { return AppState.catarataGrau; },
+  get lioDetectada()                 { return AppState.lioDetectada; },
+  get opacidadeCapsulaDetectada()    { return AppState.opacidadeCapsulaDetectada; },
+  get lenteLimpaDetectada()          { return AppState.lenteLimpaDetectada; },
+  get dilatacaoDetectada()           { return AppState.dilatacaoDetectada; },
+  get fundoscopiaDetectada()         { return AppState.fundoscopiaDetectada; },
+  get consultaEncerradaDetectada()   { return AppState.consultaEncerradaDetectada; },
+  get despedidaNaSessao()            { return AppState.despedidaNaSessao; },
+  get fase2DilatacaoAtiva()          { return AppState.fase2DilatacaoAtiva; },
+  get lastTriggerTime()              { return AppState.lastTriggerTime; },
+  get hasStopScheduled()             { return AppState.stopCommandTimeout !== null; },
+  get stopGateOffset()               { return AppState.stopGateOffset; },
+  get stopGateBlockCount()           { return AppState.stopGateBlockCount; },
+  get recentTextBufferLength()       { return AppState.recentTextBuffer.length; },
   // Snapshot serializável para logs (sem referências a timers ou DOM).
   // As flags são derivadas de SESSION_FLAG_DEFAULTS via os getters acima —
   // uma flag nova sem getter apareceria como undefined (pego pelos testes).
@@ -193,14 +209,14 @@ window.__shospState = Object.freeze({
     const flags = {};
     for (const name of Object.keys(SESSION_FLAG_DEFAULTS)) flags[name] = this[name];
     return {
-      currentMode, isRecording,
-      hasAudioData: audioData !== null,
-      hasCameraData: cameraData !== null,
-      audioDataInjected, cameraDataInjected,
-      isSpeechPausedByCamera, isSpeechActive,
+      currentMode: AppState.currentMode, isRecording: AppState.isRecording,
+      hasAudioData: AppState.audioData !== null,
+      hasCameraData: AppState.cameraData !== null,
+      audioDataInjected: AppState.audioDataInjected, cameraDataInjected: AppState.cameraDataInjected,
+      isSpeechPausedByCamera: AppState.isSpeechPausedByCamera, isSpeechActive: AppState.isSpeechActive,
       flags,
-      hasStopScheduled: stopCommandTimeout !== null,
-      recognizedTextLength: recognizedText.length,
+      hasStopScheduled: AppState.stopCommandTimeout !== null,
+      recognizedTextLength: AppState.recognizedText.length,
     };
   },
 });
@@ -262,14 +278,14 @@ const MAX_TIME = 15000;
  * Prioridade: opacidade cápsula > LIO > catarata > padrão (cristalino transparente)
  */
 function getBiomicroscopiaComLente(baseText) {
-  if (opacidadeCapsulaDetectada) return baseText.replaceAll('cristalino transparente', LENTE_OPACIDADE_CAPSULA);
+  if (AppState.opacidadeCapsulaDetectada) return baseText.replaceAll('cristalino transparente', LENTE_OPACIDADE_CAPSULA);
   // LIO tem prioridade sobre catarata: pseudofacia confirmada significa que o cristalino
   // natural já foi removido — não pode haver catarata nesse olho. Se ambas as flags
   // dispararam, a menção de catarata é histórica ("antes da cirurgia tinha catarata") e a
   // LIO (LIO_COMMANDS já não cobre cirurgia futura) é o achado definitivo. Ver Caso 7.
-  if (lioDetectada) return baseText.replaceAll('cristalino transparente', LENTE_LIO);
-  if (catarataDetectada) {
-    const lente = catarataGrau ? `catarata ${catarataGrau}` : LENTE_CATARATA;
+  if (AppState.lioDetectada) return baseText.replaceAll('cristalino transparente', LENTE_LIO);
+  if (AppState.catarataDetectada) {
+    const lente = AppState.catarataGrau ? `catarata ${AppState.catarataGrau}` : LENTE_CATARATA;
     return baseText.replaceAll('cristalino transparente', lente);
   }
   return baseText;

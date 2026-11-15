@@ -9,18 +9,18 @@
 // ============================================================================
 
 function startTimer() {
-  seconds = 0;
+  AppState.seconds = 0;
   updateTimerDisplay();
-  timerInterval = setInterval(() => { seconds++; updateTimerDisplay(); }, 1000);
+  AppState.timerInterval = setInterval(() => { AppState.seconds++; updateTimerDisplay(); }, 1000);
 }
 
 function stopTimer() {
-  clearInterval(timerInterval);
+  clearInterval(AppState.timerInterval);
 }
 
 function updateTimerDisplay() {
-  const mins = Math.floor(seconds / 60).toString().padStart(2, '0');
-  const secs = (seconds % 60).toString().padStart(2, '0');
+  const mins = Math.floor(AppState.seconds / 60).toString().padStart(2, '0');
+  const secs = (AppState.seconds % 60).toString().padStart(2, '0');
   timerText.textContent = `${mins}:${secs}`;
 }
 
@@ -32,7 +32,7 @@ function displayAudioResults(data) {
   statusText.textContent = 'Clique para nova gravação';
   statusText.style.color = '';
   statusText.style.fontWeight = 'normal';
-  audioData = data;
+  AppState.audioData = data;
 
   consultationType.classList.remove('hidden');
   const badge = consultationType.querySelector('.type-badge');

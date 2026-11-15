@@ -33,5 +33,6 @@ npm test        # integração + hooks
 - A chave do Gemini fica em `chrome.storage.local` (não sincroniza com a conta Google) e é enviada no cabeçalho `x-goog-api-key`, nunca na URL.
 - Logs de depuração ficam desligados por padrão (`Logger.enableDebug(true)` para ativar) para não expor dados de paciente no console.
 - Modelo e endpoints do Gemini ficam em `src/gemini-config.js`.
+- Todo o estado mutável da sessão (gravação, câmera, voz, flags de gatilho) fica em `AppState` (`scripts/sidepanel-constants.js`). Chave desconhecida lança erro, então um erro de digitação não cria variável fantasma. As flags de gatilho são alteradas por `StateManager.setHookFlag`.
 
 Histórico de mudanças: `CHANGELOG-v5.1.md`. Revisão e plano de evolução: `PLANO-REVISAO-FABLE.md`.

@@ -50,7 +50,7 @@ refreshUndoVisibility();
 // ============================================================================
 
 function switchMode(mode) {
-  currentMode = mode;
+  AppState.currentMode = mode;
 
   audioModeBtn.classList.toggle('active', mode === 'audio');
   cameraModeBtn.classList.toggle('active', mode === 'camera');
@@ -61,7 +61,7 @@ function switchMode(mode) {
   // Áudio e câmera funcionam independentemente — não parar dispositivos ao trocar de modo
   if (mode === 'camera') {
     setTimeout(() => {
-      if (!cameraStream) startCameraCapture();
+      if (!AppState.cameraStream) startCameraCapture();
     }, 100);
   }
 }
@@ -73,7 +73,7 @@ function switchMode(mode) {
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   switch (message.action) {
     case 'permissionGranted':
-      permissionChecked = true;
+      AppState.permissionChecked = true;
       statusText.textContent = 'Microfone liberado! Clique para iniciar';
       statusText.style.color = '#16a34a';
       setTimeout(() => {
@@ -92,7 +92,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     case 'captureExam':
       switchMode('camera');
       setTimeout(() => {
-        if (cameraStream) captureAndProcess();
+        if (AppState.cameraStream) captureAndProcess();
         else startCameraCapture();
       }, 200);
       sendResponse({ ok: true });

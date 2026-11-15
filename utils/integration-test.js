@@ -250,7 +250,7 @@ test('[C5] clearAll reseta dilatacaoDetectada no bloco de clearAudio', () => {
 });
 
 test('[C5] clearAll reseta dilatacaoDetectada também quando apenas clearCamera é true', () => {
-  expect(injectionJsSource).toContain('if (clearCamera && !clearAudio && !isRecording)');
+  expect(injectionJsSource).toContain('if (clearCamera && !clearAudio && !AppState.isRecording)');
 });
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -280,7 +280,7 @@ const audioJsSource = ['audio', 'audio-processing', 'speech', 'audio-results'].m
 const initJsSource = readSrcNormalized('scripts', 'sidepanel-init.js');
 
 test('[C7] onend verifica !stopCommandTimeout antes de reiniciar speech', () => {
-  expect(audioJsSource).toContain('isRecording && speechRecognition && !stopCommandTimeout');
+  expect(audioJsSource).toContain('AppState.isRecording && AppState.speechRecognition && !AppState.stopCommandTimeout');
 });
 
 test('[C7] A guarda !stopCommandTimeout está no bloco onend', () => {
@@ -294,7 +294,7 @@ test('[C7] A guarda !stopCommandTimeout está no bloco onend', () => {
   // Procurar a próxima função após onend para fechar o slice
   const onendEnd = audioJsSource.indexOf('function stopSpeechRecognition', onendStart);
   const onendBlock = audioJsSource.slice(onendStart, onendEnd > 0 ? onendEnd : onendStart + 600);
-  expect(onendBlock).toContain('!stopCommandTimeout');
+  expect(onendBlock).toContain('!AppState.stopCommandTimeout');
 });
 
 // ──────────────────────────────────────────────────────────────────────────────

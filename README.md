@@ -14,7 +14,7 @@ Extensão Chrome (Manifest V3, JavaScript puro, sem build) que automatiza o pron
 ## Estrutura
 | Pasta | Conteúdo |
 |---|---|
-| `src/` | service worker (`background.js`), content script, cliente Gemini (`ApiService.js`, `gemini-config.js`), agentes de entrevista e exame, `Logger.js` |
+| `src/` | service worker (`background.js`), content script (`content/core.js`, `content/field-detector.js`, `content/injector.js` e `content.js`, nesta ordem; ver `manifest.json`), cliente Gemini (`ApiService.js`, `gemini-config.js`), agentes de entrevista e exame, `Logger.js` |
 | `scripts/` | lógica do painel lateral (áudio, câmera, injeção, hooks, estado) |
 | `config/` | gatilhos clínicos |
 | `skills/user/` | prompts/regras clínicas (OCR, CID, conduta, transcrição) |
@@ -33,5 +33,6 @@ npm test        # integração + hooks
 - A chave do Gemini fica em `chrome.storage.local` (não sincroniza com a conta Google) e é enviada no cabeçalho `x-goog-api-key`, nunca na URL.
 - Logs de depuração ficam desligados por padrão (`Logger.enableDebug(true)` para ativar) para não expor dados de paciente no console.
 - Modelo e endpoints do Gemini ficam em `src/gemini-config.js`.
+- Todo o estado mutável da sessão (gravação, câmera, voz, flags de gatilho) fica em `AppState` (`scripts/sidepanel-constants.js`). Chave desconhecida lança erro, então um erro de digitação não cria variável fantasma. As flags de gatilho são alteradas por `StateManager.setHookFlag`.
 
 Histórico de mudanças: `CHANGELOG-v5.1.md`. Revisão e plano de evolução: `PLANO-REVISAO-FABLE.md`.

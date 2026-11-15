@@ -19,8 +19,8 @@
 // ============================================================================
 
 function updateDataSummary() {
-  const hasAudio = audioData !== null;
-  const hasCamera = cameraData !== null;
+  const hasAudio = AppState.audioData !== null;
+  const hasCamera = AppState.cameraData !== null;
 
   if (hasAudio || hasCamera) {
     dataSummary.classList.remove('hidden');
@@ -104,7 +104,7 @@ async function selectShospTab(tabs, { retries = 0, reinject = false } = {}) {
     dbg('[selectShospTab] Nenhuma aba com prontuário aberto — re-injetando content script nas candidatas...');
     for (const t of tabs) {
       try {
-        await chrome.scripting.executeScript({ target: { tabId: t.id }, files: ['src/content.js'] });
+        await chrome.scripting.executeScript({ target: { tabId: t.id }, files: ['src/content/core.js', 'src/content/field-detector.js', 'src/content/injector.js', 'src/content.js'] });
       } catch (e) {
         console.warn('[selectShospTab] Falha ao re-injetar na aba', t.id, e?.message);
       }
@@ -130,8 +130,8 @@ async function injectAll(force = false) {
 
   // Guard de segurança: isolar injeção quando transcrição foi sinalizada como ruidosa.
   // Se forçado manualmente (force === true), ignora a trava de segurança e tenta injetar o que houver.
-  if (!force && audioData && (audioData.tipo_consulta === 'invalida' || audioData.noiseDetected === true || audioData.revisao_manual === true)) {
-    if (!cameraData || cameraDataInjected) {
+  if (!force && AppState.audioData && (AppState.audioData.tipo_consulta === 'invalida' || AppState.audioData.noiseDetected === true || AppState.audioData.revisao_manual === true)) {
+    if (!AppState.cameraData || AppState.cameraDataInjected) {
       _setRunningState(false);
       showError('Revisão manual obrigatória: transcrição ruidosa ou clinicamente insegura.');
       throw new Error('Revisão manual obrigatória');
@@ -182,10 +182,10 @@ async function injectAll(force = false) {
   }
 
   // 2. Verificar se há dados para injetar
-  const temAudio = audioData && !audioDataInjected && !skipAudioDueToError;
-  const temCamera = cameraData && !cameraDataInjected;
+  const temAudio = AppState.audioData && !AppState.audioDataInjected && !skipAudioDueToError;
+  const temCamera = AppState.cameraData && !AppState.cameraDataInjected;
 
-  dbg('[InjectAll] check:', { audioData: !!audioData, audioDataInjected, skipAudioDueToError, cameraData: !!cameraData, cameraDataInjected, temAudio, temCamera });
+  dbg('[InjectAll] check:', { audioData: !!AppState.audioData, audioDataInjected: AppState.audioDataInjected, skipAudioDueToError, cameraData: !!AppState.cameraData, cameraDataInjected: AppState.cameraDataInjected, temAudio, temCamera });
 
   if (!temAudio && !temCamera) {
     _setRunningState(false);
@@ -195,8 +195,8 @@ async function injectAll(force = false) {
 
   // Marcar como injetado ANTES dos awaits para bloquear chamadas concorrentes.
   // Será revertido em caso de erro.
-  if (temAudio) audioDataInjected = true;
-  if (temCamera) cameraDataInjected = true;
+  if (temAudio) AppState.audioDataInjected = true;
+  if (temCamera) AppState.cameraDataInjected = true;
 
   try {
   // 3-4. Selecionar a aba SHOSP correta e garantir que o content script responde.
@@ -237,8 +237,8 @@ async function injectAll(force = false) {
   // Exames normais / blefarite / biomicroscopia personalizada
   // Guard !blefariteInjetada && !examesNormaisInjetados evita dupla injeção se exames já foram disparados por hooks de voz.
   // Guard adicional: injectExamesNormais não pode disparar quando há tratamento ativo (consulta patológica).
-  const _temTratamentoAtivo = !!(audioData?.dados?.tratamento || audioData?.dados?.conduta?.match(/encaminhamento/i));
-  const transcricaoNorm = normalizeText(recognizedText || '');
+  const _temTratamentoAtivo = !!(AppState.audioData?.dados?.tratamento || AppState.audioData?.dados?.conduta?.match(/encaminhamento/i));
+  const transcricaoNorm = normalizeText(AppState.recognizedText || '');
   const mencionouFundoNaFala = transcricaoNorm.includes('fundo') || transcricaoNorm.includes('fundoscop');
 
   // Reconciliação de catarata a partir do diagnóstico do LLM.
@@ -249,42 +249,42 @@ async function injectAll(force = false) {
   // contradizendo o diagnóstico. Aqui derivamos a flag do próprio diagnóstico.
   // Respeita a prioridade da lente (opacidade cápsula > LIO > catarata): olho pseudofácico
   // (LIO/opacidade já detectadas) NÃO recebe catarata — a menção seria histórica.
-  if (!catarataDetectada && !lioDetectada && !opacidadeCapsulaDetectada) {
-    const _cat = parseCatarataFromDiagnostico(audioData?.dados?.diagnostico);
+  if (!AppState.catarataDetectada && !AppState.lioDetectada && !AppState.opacidadeCapsulaDetectada) {
+    const _cat = parseCatarataFromDiagnostico(AppState.audioData?.dados?.diagnostico);
     if (_cat.detected) {
       StateManager.setHookFlag('catarataDetectada', true);
-      if (!catarataGrau && _cat.grau) StateManager.setHookFlag('catarataGrau', _cat.grau);
-      dbg('[Catarata] Flag derivada do diagnóstico (gatilho de voz não disparou):', catarataGrau || '(grau não especificado)');
+      if (!AppState.catarataGrau && _cat.grau) StateManager.setHookFlag('catarataGrau', _cat.grau);
+      dbg('[Catarata] Flag derivada do diagnóstico (gatilho de voz não disparou):', AppState.catarataGrau || '(grau não especificado)');
     }
   }
 
-  if (!blefariteInjetada && !examesNormaisInjetados) {
-    if (!audioData?.dilatacaoDetectada && audioData?.injectExamesNormais && !_temTratamentoAtivo) {
+  if (!AppState.blefariteInjetada && !AppState.examesNormaisInjetados) {
+    if (!AppState.audioData?.dilatacaoDetectada && AppState.audioData?.injectExamesNormais && !_temTratamentoAtivo) {
       combinedData.examesNormais = {
         biomicroscopia: getBiomicroscopiaComLente(BIOMICROSCOPIA_NORMAL),
-        fundoscopia: (fundoscopiaDetectada || mencionouFundoNaFala) ? FUNDOSCOPIA_NORMAL : null
+        fundoscopia: (AppState.fundoscopiaDetectada || mencionouFundoNaFala) ? FUNDOSCOPIA_NORMAL : null
       };
-    } else if (!audioData?.dilatacaoDetectada && audioData?.injectBlefarite) {
+    } else if (!AppState.audioData?.dilatacaoDetectada && AppState.audioData?.injectBlefarite) {
       // Blefarite: se Gemini gerou biomicroscopia personalizada (ex: pterígio + blefarite),
       // usa ela; caso contrário usa o template padrão de blefarite.
       // Com dilatação pendente NÃO injeta — descrição de exames pertence à fase 2.
-      const _bioBase = audioData?.dados?.biomicroscopia || BIOMICROSCOPIA_BLEFARITE;
+      const _bioBase = AppState.audioData?.dados?.biomicroscopia || BIOMICROSCOPIA_BLEFARITE;
       combinedData.examesNormais = {
         biomicroscopia: getBiomicroscopiaComLente(_bioBase),
         fundoscopia: FUNDOSCOPIA_NORMAL // blefarite sempre injeta fundoscopia normal
       };
-    } else if (!audioData?.dilatacaoDetectada &&
-               (audioData?.dados?.biomicroscopia || audioData?.dados?.fundoscopia)) {
+    } else if (!AppState.audioData?.dilatacaoDetectada &&
+               (AppState.audioData?.dados?.biomicroscopia || AppState.audioData?.dados?.fundoscopia)) {
       // Biomicroscopia/fundoscopia personalizada gerada pelo Gemini (ex: pinguecula, pterígio, nevo)
       // Quando só fundoscopia foi preenchida (achado posterior com segmento anterior normal),
       // injeta o template normal de biomicroscopia para não deixar o campo em branco.
       combinedData.examesNormais = {
         biomicroscopia: getBiomicroscopiaComLente(
-          audioData.dados.biomicroscopia || BIOMICROSCOPIA_NORMAL
+          AppState.audioData.dados.biomicroscopia || BIOMICROSCOPIA_NORMAL
         ),
-        fundoscopia: audioData.dados.fundoscopia || null
+        fundoscopia: AppState.audioData.dados.fundoscopia || null
       };
-    } else if (audioData && consultaEncerradaDetectada && !audioData.dilatacaoDetectada && !_temTratamentoAtivo) {
+    } else if (AppState.audioData && AppState.consultaEncerradaDetectada && !AppState.audioData.dilatacaoDetectada && !_temTratamentoAtivo) {
       // Fallback de despedida: a consulta foi encerrada pelo STOP (despedida) e
       // nenhum gatilho de exame disparou (garantido pelo guard externo).
       // Guard: _temTratamentoAtivo impede injeção de exames "normais" em consultas
@@ -296,26 +296,26 @@ async function injectAll(force = false) {
     }
   }
 
-  if (audioData?.injectBlefarite) {
-    const campoConduta   = audioData.tipo_consulta === 'retorno' ? condutaRetornoField   : condutaField;
-    const campoTratamento = audioData.tipo_consulta === 'retorno' ? medicamentosPrescritosRetornoField : medicamentosPrescritosField;
-    if (!campoConduta.value && audioData?.dados?.conduta) {
-      campoConduta.value = audioData.dados.conduta;
+  if (AppState.audioData?.injectBlefarite) {
+    const campoConduta   = AppState.audioData.tipo_consulta === 'retorno' ? condutaRetornoField   : condutaField;
+    const campoTratamento = AppState.audioData.tipo_consulta === 'retorno' ? medicamentosPrescritosRetornoField : medicamentosPrescritosField;
+    if (!campoConduta.value && AppState.audioData?.dados?.conduta) {
+      campoConduta.value = AppState.audioData.dados.conduta;
     }
     // O Gemini é responsável por decidir se a Associação (ATB + corticoide) é indicada.
     // Regra: só inclui quando o médico prescreveu antibiótico/anti-inflamatório explicitamente
     // OU não prescreveu nenhum colírio específico. Não sobrescrever a decisão da IA.
     // Preencher o campo apenas se o Gemini retornou um tratamento E ele está vazio.
-    if (!campoTratamento.value && audioData?.dados?.tratamento) {
-      campoTratamento.value = audioData.dados.tratamento;
+    if (!campoTratamento.value && AppState.audioData?.dados?.tratamento) {
+      campoTratamento.value = AppState.audioData.dados.tratamento;
     }
   }
 
   // Áudio
   if (temAudio) {
-    const tipo = audioData.tipo_consulta;
+    const tipo = AppState.audioData.tipo_consulta;
 
-    const _dilatacao = !!audioData.dilatacaoDetectada;
+    const _dilatacao = !!AppState.audioData.dilatacaoDetectada;
     // Sem tratamento ditado, o campo TRATAMENTO é injetado com o registro
     // explícito "Sem prescrição de medicação" (mesmo texto que o painel exibe
     // via displayAudioResults) — o prontuário nunca fica com tratamento em
@@ -362,14 +362,14 @@ async function injectAll(force = false) {
     const receitaCheckbox = document.getElementById('injectReceitaCheckbox');
     combinedData.exames = {
       tonometria: {
-        od: cameraData.tonometria ? parseClinicalInt(cameraData.tonometria.od) : null,
-        oe: cameraData.tonometria ? parseClinicalInt(cameraData.tonometria.oe) : null
+        od: AppState.cameraData.tonometria ? parseClinicalInt(AppState.cameraData.tonometria.od) : null,
+        oe: AppState.cameraData.tonometria ? parseClinicalInt(AppState.cameraData.tonometria.oe) : null
       },
       paquimetria: {
-        od: cameraData.paquimetria ? parseClinicalInt(cameraData.paquimetria.od) : null,
-        oe: cameraData.paquimetria ? parseClinicalInt(cameraData.paquimetria.oe) : null
+        od: AppState.cameraData.paquimetria ? parseClinicalInt(AppState.cameraData.paquimetria.od) : null,
+        oe: AppState.cameraData.paquimetria ? parseClinicalInt(AppState.cameraData.paquimetria.oe) : null
       },
-      refracao: cameraData.refracao,
+      refracao: AppState.cameraData.refracao,
       injectReceita: receitaCheckbox ? receitaCheckbox.checked : true
     };
   }
@@ -423,12 +423,12 @@ async function injectAll(force = false) {
     // Persistir dados de áudio quando a dilatação foi detectada, para que a fase 2
     // possa re-injetá-los caso o SHOSP descarte campos não salvos durante o período.
     // Em injeções normais (sem dilatação), limpar o dado persistido se existir.
-    if (combinedData.audio && audioData?.dilatacaoDetectada) {
+    if (combinedData.audio && AppState.audioData?.dilatacaoDetectada) {
       // Preservar a transcrição da fase 1 já persistida pelo sidepanel-audio
       // (acumula fases anteriores); fallback para o texto da sessão atual.
       chrome.storage.local.set({ _shospDilatacaoPhase1: {
         audio: combinedData.audio,
-        transcript: _phase1Data?.transcript || recognizedText || '',
+        transcript: _phase1Data?.transcript || AppState.recognizedText || '',
         ts: Date.now(),
         motivo: 'dilatacao',
       } });
@@ -449,8 +449,8 @@ async function injectAll(force = false) {
       dbg('[AutoCID] campo:', cidField ? (cidField === diagnosticoField ? 'diagnosticoField' : 'diagnosticoRetornoField') : 'nenhum', '| valor:', cidField?.value?.slice(0, 80));
 
       // Capturar CIDs de refração do OCR antes do clearAll (cameraData será apagado)
-      const ocrCids = (combinedData.exames && cameraData?.cid_refracao?.length)
-        ? [...cameraData.cid_refracao]
+      const ocrCids = (combinedData.exames && AppState.cameraData?.cid_refracao?.length)
+        ? [...AppState.cameraData.cid_refracao]
         : [];
 
       clearAll({
@@ -502,16 +502,16 @@ async function injectAll(force = false) {
     return true;
   } else {
     console.warn('[InjectAll] Injeção não sucedida (success=false). Revertendo flags para permitir nova tentativa.');
-    if (temAudio) audioDataInjected = false;
-    if (temCamera) cameraDataInjected = false;
+    if (temAudio) AppState.audioDataInjected = false;
+    if (temCamera) AppState.cameraDataInjected = false;
     showError('Alguns campos não foram preenchidos');
     return false;
   }
 
   } catch (err) {
     // Reverter flags early em caso de qualquer erro
-    if (temAudio) audioDataInjected = false;
-    if (temCamera) cameraDataInjected = false;
+    if (temAudio) AppState.audioDataInjected = false;
+    if (temCamera) AppState.cameraDataInjected = false;
     _setRunningState(false);
     throw err;
   }

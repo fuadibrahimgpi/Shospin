@@ -140,8 +140,8 @@ function _hookMatches(hook, normalizedFinal, normalizedCurrent, recentTextBuffer
  */
 function _sessionTooShort(hook) {
   if (!hook.minSessionMs) return false;
-  if (typeof sessionStartTime === 'undefined' || !sessionStartTime) return false;
-  return (Date.now() - sessionStartTime) < hook.minSessionMs;
+  if (typeof AppState.sessionStartTime === 'undefined' || !AppState.sessionStartTime) return false;
+  return (Date.now() - AppState.sessionStartTime) < hook.minSessionMs;
 }
 
 /**
@@ -197,9 +197,9 @@ function _stopGateBlocks(hook, normalizedCurrent, matchedCmd) {
   if (!gate.exigirConduta && !gate.exigirTratamento) return false;
 
   let matchEnd;
-  if (!hook.endAnchored && stopGateOffset > 0) {
+  if (!hook.endAnchored && AppState.stopGateOffset > 0) {
     // Âncora ativa: só uma despedida encontrada APÓS a âncora conta.
-    matchEnd = _findStopCmdEndAfter(hook, normalizedCurrent, stopGateOffset);
+    matchEnd = _findStopCmdEndAfter(hook, normalizedCurrent, AppState.stopGateOffset);
     if (matchEnd === -1) return true; // só a despedida antiga — segue gravando
   } else {
     const idx = normalizedCurrent.lastIndexOf(matchedCmd);
@@ -209,17 +209,17 @@ function _stopGateBlocks(hook, normalizedCurrent, matchedCmd) {
   const captura = ClinicalTriggers.checkCondutaTratamentoCaptados(normalizedCurrent);
   if (captura.ok) return false;
 
-  const jaAvisado = matchEnd <= stopGateOffset;
-  stopGateOffset = Math.max(stopGateOffset, matchEnd);
+  const jaAvisado = matchEnd <= AppState.stopGateOffset;
+  AppState.stopGateOffset = Math.max(AppState.stopGateOffset, matchEnd);
   if (jaAvisado) return true; // mesma despedida já bloqueada — sem repetir aviso
 
   // Válvula de escape: já houve despedida distinta bloqueada nesta sessão →
   // esta 2ª despedida libera o encerramento (provável falso bloqueio do gate)
-  if (stopGateBlockCount >= 1) {
+  if (AppState.stopGateBlockCount >= 1) {
     dbg(`[HookRunner] STOP "${matchedCmd}" liberado pela válvula de escape — 2ª despedida distinta sem captura completa (provável marcador de conduta/tratamento faltando)`);
     return false;
   }
-  stopGateBlockCount++;
+  AppState.stopGateBlockCount++;
 
   const faltando = [!captura.conduta && 'CONDUTA', !captura.tratamento && 'TRATAMENTO']
     .filter(Boolean).join(' e ');
@@ -228,7 +228,7 @@ function _stopGateBlocks(hook, normalizedCurrent, matchedCmd) {
     statusText.textContent = `⚠️ Falta ditar ${faltando} — dite ou diga "encerrar consulta"`;
     statusText.style.color = '#eab308';
     setTimeout(() => {
-      if (isRecording && !stopCommandTimeout) {
+      if (AppState.isRecording && !AppState.stopCommandTimeout) {
         statusText.textContent = 'Gravando...';
         statusText.style.color = '#ef4444';
       }
@@ -244,18 +244,18 @@ function _stopGateBlocks(hook, normalizedCurrent, matchedCmd) {
  * Guard: só agenda se stopCommandTimeout ainda não estiver ativo.
  */
 function _scheduleStop(hook, matchedCmd) {
-  if (stopCommandTimeout) return; // já agendado
-  stopPendingInfo = {
+  if (AppState.stopCommandTimeout) return; // já agendado
+  AppState.stopPendingInfo = {
     hookId: hook.id,
     cmd: matchedCmd,
     endAnchored: !!hook.endAnchored,
     endAnchorSlack: hook.endAnchorSlack ?? 10,
     onCancel: hook.onCancel || null,
   };
-  stopCommandTimeout = setTimeout(() => {
-    if (isRecording) stopRecording();
-    stopCommandTimeout = null;
-    stopPendingInfo = null;
+  AppState.stopCommandTimeout = setTimeout(() => {
+    if (AppState.isRecording) stopRecording();
+    AppState.stopCommandTimeout = null;
+    AppState.stopPendingInfo = null;
   }, hook.stopDelay ?? 500);
 }
 
@@ -265,16 +265,16 @@ function _scheduleStop(hook, matchedCmd) {
  * Retorna true se o stop foi cancelado (o runner deve seguir processando).
  */
 function _maybeCancelAnchoredStop(normalizedCurrent) {
-  if (!stopCommandTimeout || !stopPendingInfo || !stopPendingInfo.endAnchored) return false;
-  const { cmd, endAnchorSlack = 10 } = stopPendingInfo;
+  if (!AppState.stopCommandTimeout || !AppState.stopPendingInfo || !AppState.stopPendingInfo.endAnchored) return false;
+  const { cmd, endAnchorSlack = 10 } = AppState.stopPendingInfo;
   const idx = normalizedCurrent.lastIndexOf(cmd);
   const aindaNoFim = idx !== -1 && (idx + cmd.length) >= normalizedCurrent.length - endAnchorSlack;
   if (aindaNoFim) return false;
 
-  clearTimeout(stopCommandTimeout);
-  stopCommandTimeout = null;
-  const info = stopPendingInfo;
-  stopPendingInfo = null;
+  clearTimeout(AppState.stopCommandTimeout);
+  AppState.stopCommandTimeout = null;
+  const info = AppState.stopPendingInfo;
+  AppState.stopPendingInfo = null;
   dbg(`[HookRunner] STOP "${info.cmd}" cancelado — a fala continuou após a despedida curta`);
   if (info.onCancel) {
     try { info.onCancel(HOOK_STATE); } catch (e) { /* ignorar */ }
@@ -286,7 +286,7 @@ function _maybeCancelAnchoredStop(normalizedCurrent) {
     statusText.textContent = `⚠️ Encerramento cancelado ("${info.cmd}") — repita a despedida no fim da fala`;
     statusText.style.color = '#eab308';
     setTimeout(() => {
-      if (isRecording && !stopCommandTimeout) {
+      if (AppState.isRecording && !AppState.stopCommandTimeout) {
         statusText.textContent = 'Gravando...';
         statusText.style.color = '#ef4444';
       }
@@ -306,7 +306,7 @@ function _maybeCancelAnchoredStop(normalizedCurrent) {
 function _runStopCheck(normalizedFinal, normalizedCurrent, recentTextBuffer) {
   for (const hook of SORTED_HOOKS) {
     if (hook.type !== 'stop') continue;
-    if (stopCommandTimeout) break;
+    if (AppState.stopCommandTimeout) break;
     if (hook.guard && hook.guard(HOOK_STATE)) continue;
     if (_sessionTooShort(hook)) continue;
 
@@ -357,7 +357,7 @@ function runHooks(normalizedFinal, normalizedCurrent, recentTextBuffer) {
   // é chamado várias vezes antes do setTimeout(stopDelay) expirar.
   // Exceção: stop endAnchored cuja frase deixou de estar no fim da fala é
   // cancelado aqui, e o processamento segue normalmente neste evento.
-  if (stopCommandTimeout) {
+  if (AppState.stopCommandTimeout) {
     if (!_maybeCancelAnchoredStop(normalizedCurrent)) return false;
   }
 

@@ -38,7 +38,7 @@ async function checkCameraPermission() {
   try {
     const result = await navigator.permissions.query({ name: 'camera' });
     if (result.state === 'granted') {
-      cameraPermissionChecked = true;
+      AppState.cameraPermissionChecked = true;
       cameraStatusText.textContent = 'Clique para iniciar captura';
     } else if (result.state === 'denied') {
       cameraStatusText.textContent = 'Permissão negada. Clique no botão para tentar novamente.';
@@ -48,7 +48,7 @@ async function checkCameraPermission() {
     }
     result.onchange = () => {
       if (result.state === 'granted') {
-        cameraPermissionChecked = true;
+        AppState.cameraPermissionChecked = true;
         cameraStatusText.textContent = 'Clique para iniciar captura';
       }
     };
@@ -68,7 +68,7 @@ function openCameraPermissionPage() {
 
 async function startCameraCapture() {
   // Pausar reconhecimento de voz se gravação estiver ativa
-  if (isRecording && typeof pauseSpeechRecognition === 'function') {
+  if (AppState.isRecording && typeof pauseSpeechRecognition === 'function') {
     pauseSpeechRecognition();
   }
 
@@ -76,7 +76,7 @@ async function startCameraCapture() {
     cameraStatusText.textContent = 'Iniciando câmera...';
     cameraOverlay.classList.remove('hidden');
 
-    cameraStream = await navigator.mediaDevices.getUserMedia({
+    AppState.cameraStream = await navigator.mediaDevices.getUserMedia({
       video: {
         facingMode: 'environment',
         width: { ideal: 4096, min: 1920 },
@@ -91,7 +91,7 @@ async function startCameraCapture() {
 
     // Foco automático e zoom leve
     try {
-      const track = cameraStream.getVideoTracks()[0];
+      const track = AppState.cameraStream.getVideoTracks()[0];
       const caps = track.getCapabilities();
       const constraints = { advanced: [] };
 
@@ -107,7 +107,7 @@ async function startCameraCapture() {
       if (constraints.advanced.length > 0) await track.applyConstraints(constraints);
     } catch (e) { /* foco/zoom não suportado */ }
 
-    cameraVideo.srcObject = cameraStream;
+    cameraVideo.srcObject = AppState.cameraStream;
     cameraOverlay.classList.add('hidden');
 
     startCameraBtn.classList.add('hidden');
@@ -129,12 +129,12 @@ async function startCameraCapture() {
 }
 
 function stopCameraCapture() {
-  if (cameraStream) {
-    cameraStream.getTracks().forEach(t => t.stop());
-    cameraStream = null;
+  if (AppState.cameraStream) {
+    AppState.cameraStream.getTracks().forEach(t => t.stop());
+    AppState.cameraStream = null;
   }
-  if (captureInterval) { clearInterval(captureInterval); captureInterval = null; }
-  if (captureTimeout) { clearTimeout(captureTimeout); captureTimeout = null; }
+  if (AppState.captureInterval) { clearInterval(AppState.captureInterval); AppState.captureInterval = null; }
+  if (AppState.captureTimeout) { clearTimeout(AppState.captureTimeout); AppState.captureTimeout = null; }
 
   startCameraBtn.classList.remove('hidden');
   stopCameraBtn.classList.add('hidden');
@@ -146,7 +146,7 @@ function stopCameraCapture() {
   cameraStatusText.style.color = '';
 
   // Retomar reconhecimento de voz se foi pausado pela câmera
-  if (isRecording && isSpeechPausedByCamera && typeof resumeSpeechRecognition === 'function') {
+  if (AppState.isRecording && AppState.isSpeechPausedByCamera && typeof resumeSpeechRecognition === 'function') {
     resumeSpeechRecognition();
   }
 }
@@ -186,24 +186,22 @@ async function compressImageBlob(blob, maxDim = 3840, quality = 0.98) {
 // TIMER DE PROCESSAMENTO
 // ============================================================================
 
-let _processingTimerInterval = null;
-let _processingTimerSeconds = 0;
 
 function startProcessingTimer() {
-  _processingTimerSeconds = 0;
+  AppState._processingTimerSeconds = 0;
   const el = document.getElementById('processingTimer');
   if (el) el.textContent = '0s';
-  if (_processingTimerInterval) clearInterval(_processingTimerInterval);
-  _processingTimerInterval = setInterval(() => {
-    _processingTimerSeconds++;
-    if (el) el.textContent = _processingTimerSeconds + 's';
+  if (AppState._processingTimerInterval) clearInterval(AppState._processingTimerInterval);
+  AppState._processingTimerInterval = setInterval(() => {
+    AppState._processingTimerSeconds++;
+    if (el) el.textContent = AppState._processingTimerSeconds + 's';
   }, 1000);
 }
 
 function stopProcessingTimer() {
-  if (_processingTimerInterval) {
-    clearInterval(_processingTimerInterval);
-    _processingTimerInterval = null;
+  if (AppState._processingTimerInterval) {
+    clearInterval(AppState._processingTimerInterval);
+    AppState._processingTimerInterval = null;
   }
 }
 
@@ -239,7 +237,7 @@ function updateProcessingStep(idx) {
 // ============================================================================
 
 async function captureAndProcess() {
-  if (!cameraStream) return;
+  if (!AppState.cameraStream) return;
   if (!processingOverlay.classList.contains('hidden')) return; // evitar chamadas simultâneas
 
   // Desabilitar botão imediatamente para evitar duplo clique no frame
@@ -251,7 +249,7 @@ async function captureAndProcess() {
     startProcessingTimer();
     updateProcessingStep(0);
 
-    const videoTrack = cameraStream.getVideoTracks()[0];
+    const videoTrack = AppState.cameraStream.getVideoTracks()[0];
     const imageCapture = new ImageCapture(videoTrack);
     const capabilities = imageCapture.track.getCapabilities();
 
@@ -323,7 +321,7 @@ async function captureAndProcess() {
     displayCameraResults(validated);
     cameraStatusText.textContent = 'Processamento concluído!';
 
-    if (cameraData) {
+    if (AppState.cameraData) {
       try { await injectAll(); } catch (e) { console.error('[Camera] Erro na auto-injeção:', e); }
     }
 
@@ -343,7 +341,7 @@ async function captureAndProcess() {
 // ============================================================================
 
 function displayCameraResults(data) {
-  cameraData = data;
+  AppState.cameraData = data;
   processingOverlay.classList.add('hidden');
   examFieldsContainer.classList.remove('hidden');
 

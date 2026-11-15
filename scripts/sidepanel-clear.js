@@ -15,19 +15,19 @@ function clearAll(options = { clearAudio: true, clearCamera: true }) {
 
     // ── 1. Resetar dados ──
     if (clearAudio) {
-      audioData = null;
-      audioDataInjected = false;
+      AppState.audioData = null;
+      AppState.audioDataInjected = false;
     }
     if (clearCamera) {
-      cameraData = null;
-      cameraDataInjected = false;
+      AppState.cameraData = null;
+      AppState.cameraDataInjected = false;
     }
 
     // ── 2. Resetar flags de gatilhos (SOMENTE se NÃO está gravando) ──
     // Cada flag corresponde a um hook em sidepanel-hooks.js.
     // Para adicionar uma nova flag: declarar em sidepanel-constants.js,
     // registrar o hook em sidepanel-hooks.js e adicionar o reset aqui.
-    if (clearAudio && !isRecording) {
+    if (clearAudio && !AppState.isRecording) {
       StateManager.setHookFlag('examesNormaisInjetados', false);
       StateManager.setHookFlag('blefariteInjetada', false);
       StateManager.setHookFlag('fundoscopiaDetectada', false);
@@ -38,23 +38,23 @@ function clearAll(options = { clearAudio: true, clearCamera: true }) {
       StateManager.setHookFlag('opacidadeCapsulaDetectada', false);
       StateManager.setHookFlag('dilatacaoDetectada', false);
       StateManager.setHookFlag('fase2DilatacaoAtiva', false);
-      lastTriggerTime = 0;
-      if (stopCommandTimeout) { clearTimeout(stopCommandTimeout); stopCommandTimeout = null; }
-      stopPendingInfo = null;
-      stopGateOffset = 0;
-      stopGateBlockCount = 0;
-      recognizedText = '';
+      AppState.lastTriggerTime = 0;
+      if (AppState.stopCommandTimeout) { clearTimeout(AppState.stopCommandTimeout); AppState.stopCommandTimeout = null; }
+      AppState.stopPendingInfo = null;
+      AppState.stopGateOffset = 0;
+      AppState.stopGateBlockCount = 0;
+      AppState.recognizedText = '';
     }
 
     // dilatacaoDetectada também é resetada se limpar câmera sem áudio
     // (evita que flag de sessão anterior suprima conduta da próxima gravação)
-    if (clearCamera && !clearAudio && !isRecording) {
+    if (clearCamera && !clearAudio && !AppState.isRecording) {
       StateManager.setHookFlag('dilatacaoDetectada', false);
     }
 
     // ── 4. Limpar campos de áudio ──
     // Guard: não limpar campos se gravação ativa (protege dados injetados manualmente)
-    if (clearAudio && !isRecording) {
+    if (clearAudio && !AppState.isRecording) {
       // diagnosticoField e diagnosticoRetornoField são preservados para permitir
       // busca de CID após a injeção. São limpos quando o campo fica vazio após
       // todos os termos serem processados por handleSearchCid.
@@ -85,7 +85,7 @@ function clearAll(options = { clearAudio: true, clearCamera: true }) {
 
       const banner = document.getElementById('refractionWarningBanner');
       if (banner) banner.remove();
-      pendingRefractionConfirmation = false;
+      AppState.pendingRefractionConfirmation = false;
     }
 
     if (clearAudio && clearCamera) {
@@ -98,8 +98,8 @@ function clearAll(options = { clearAudio: true, clearCamera: true }) {
     if (processingIndicator) processingIndicator.classList.add('hidden');
 
     // ── 10. Resetar timer visual ──
-    if (clearAudio && !isRecording) {
-      seconds = 0;
+    if (clearAudio && !AppState.isRecording) {
+      AppState.seconds = 0;
       if (timerText) {
         timerText.textContent = '00:00';
         timerText.classList.add('hidden');

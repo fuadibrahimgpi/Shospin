@@ -27,12 +27,12 @@ async function injectExamesNormaisDirect() {
     action: 'injectExamesNormais',
     data: {
       biomicroscopia: getBiomicroscopiaComLente(BIOMICROSCOPIA_NORMAL),
-      fundoscopia: fundoscopiaDetectada ? FUNDOSCOPIA_NORMAL : null,
+      fundoscopia: AppState.fundoscopiaDetectada ? FUNDOSCOPIA_NORMAL : null,
     },
   });
   if (response?.success) {
     statusText.textContent = 'Gravando... (exames injetados)';
-    setTimeout(() => { if (isRecording) statusText.textContent = 'Gravando...'; }, 2000);
+    setTimeout(() => { if (AppState.isRecording) statusText.textContent = 'Gravando...'; }, 2000);
   } else {
     statusText.textContent = 'Gravando... (exames não injetados)';
   }
@@ -50,7 +50,7 @@ async function injectBlefariteDirect() {
   });
   if (response?.success) {
     statusText.textContent = 'Gravando... (blefarite + fundoscopia injetadas)';
-    setTimeout(() => { if (isRecording) statusText.textContent = 'Gravando...'; }, 2000);
+    setTimeout(() => { if (AppState.isRecording) statusText.textContent = 'Gravando...'; }, 2000);
   } else {
     statusText.textContent = 'Gravando... (exame não injetado)';
   }
@@ -65,7 +65,7 @@ async function injectReceitaOlhoIrritadoDirect() {
   });
   if (response?.success) {
     statusText.textContent = 'Gravando... (receita injetada e impressa)';
-    setTimeout(() => { if (isRecording) statusText.textContent = 'Gravando...'; }, 3000);
+    setTimeout(() => { if (AppState.isRecording) statusText.textContent = 'Gravando...'; }, 3000);
   } else {
     statusText.textContent = 'Gravando... (receita não injetada)';
   }

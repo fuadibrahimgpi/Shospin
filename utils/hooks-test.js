@@ -40,12 +40,11 @@ var _injectCounts = { exames: 0, blefarite: 0, olhoIrritado: 0, stop: 0 };
 // sessionStartTime vive em sidepanel-audio.js (não carregado nos testes).
 // Default: sessão "antiga" (10 min), para que hooks com minSessionMs fiquem
 // liberados — testes específicos simulam sessão recém-iniciada via _BRIDGE.
-var sessionStartTime = Date.now() - 600000;
 
 function injectExamesNormaisDirect()     { _injectCounts.exames++; }
 function injectBlefariteDirect()          { _injectCounts.blefarite++; }
 function injectReceitaOlhoIrritadoDirect(){ _injectCounts.olhoIrritado++; }
-function stopRecording() { _injectCounts.stop++; isRecording = false; }
+function stopRecording() { _injectCounts.stop++; AppState.isRecording = false; }
 
 `;
 
@@ -53,56 +52,56 @@ function stopRecording() { _injectCounts.stop++; isRecording = false; }
 // Definida DEPOIS dos módulos para garantir que os lets já existem.
 const BRIDGE_SRC = `
 var _BRIDGE = {
-  get stopCommandTimeout()  { return stopCommandTimeout; },
-  set stopCommandTimeout(v) { stopCommandTimeout = v; },
-  get isRecording()         { return isRecording; },
-  set isRecording(v)        { isRecording = v; },
-  get dilatacaoDetectada()  { return dilatacaoDetectada; },
-  set dilatacaoDetectada(v) { dilatacaoDetectada = v; },
-  get examesNormaisInjetados()  { return examesNormaisInjetados; },
-  set examesNormaisInjetados(v) { examesNormaisInjetados = v; },
-  get blefariteInjetada()  { return blefariteInjetada; },
-  set blefariteInjetada(v) { blefariteInjetada = v; },
-  get lastTriggerTime()    { return lastTriggerTime; },
-  set lastTriggerTime(v)   { lastTriggerTime = v; },
-  get sessionStartTime()   { return sessionStartTime; },
-  set sessionStartTime(v)  { sessionStartTime = v; },
-  get stopGateOffset()     { return stopGateOffset; },
-  set stopGateOffset(v)    { stopGateOffset = v; },
-  get stopGateBlockCount()  { return stopGateBlockCount; },
-  set stopGateBlockCount(v) { stopGateBlockCount = v; },
+  get stopCommandTimeout()  { return AppState.stopCommandTimeout; },
+  set stopCommandTimeout(v) { AppState.stopCommandTimeout = v; },
+  get isRecording()         { return AppState.isRecording; },
+  set isRecording(v)        { AppState.isRecording = v; },
+  get dilatacaoDetectada()  { return AppState.dilatacaoDetectada; },
+  set dilatacaoDetectada(v) { AppState.dilatacaoDetectada = v; },
+  get examesNormaisInjetados()  { return AppState.examesNormaisInjetados; },
+  set examesNormaisInjetados(v) { AppState.examesNormaisInjetados = v; },
+  get blefariteInjetada()  { return AppState.blefariteInjetada; },
+  set blefariteInjetada(v) { AppState.blefariteInjetada = v; },
+  get lastTriggerTime()    { return AppState.lastTriggerTime; },
+  set lastTriggerTime(v)   { AppState.lastTriggerTime = v; },
+  get sessionStartTime()   { return AppState.sessionStartTime; },
+  set sessionStartTime(v)  { AppState.sessionStartTime = v; },
+  get stopGateOffset()     { return AppState.stopGateOffset; },
+  set stopGateOffset(v)    { AppState.stopGateOffset = v; },
+  get stopGateBlockCount()  { return AppState.stopGateBlockCount; },
+  set stopGateBlockCount(v) { AppState.stopGateBlockCount = v; },
   resetFlags() {
-    stopPendingInfo        = null;
-    stopGateOffset         = 0;
-    stopGateBlockCount     = 0;
-    examesNormaisInjetados = false;
-    blefariteInjetada      = false;
-    receitaOlhoIrritadoInjetada = false;
-    catarataDetectada      = false;
-    catarataGrau           = null;
-    lioDetectada           = false;
-    opacidadeCapsulaDetectada = false;
-    lenteLimpaDetectada    = false;
-    dilatacaoDetectada     = false;
-    fundoscopiaDetectada   = false;
-    consultaEncerradaDetectada = false;
-    despedidaNaSessao      = false;
-    fase2DilatacaoAtiva    = false;
-    lastTriggerTime        = 0;
-    isRecording            = true;
-    recentTextBuffer       = '';
-    sessionStartTime       = Date.now() - 600000;
+    AppState.stopPendingInfo        = null;
+    AppState.stopGateOffset         = 0;
+    AppState.stopGateBlockCount     = 0;
+    AppState.examesNormaisInjetados = false;
+    AppState.blefariteInjetada      = false;
+    AppState.receitaOlhoIrritadoInjetada = false;
+    AppState.catarataDetectada      = false;
+    AppState.catarataGrau           = null;
+    AppState.lioDetectada           = false;
+    AppState.opacidadeCapsulaDetectada = false;
+    AppState.lenteLimpaDetectada    = false;
+    AppState.dilatacaoDetectada     = false;
+    AppState.fundoscopiaDetectada   = false;
+    AppState.consultaEncerradaDetectada = false;
+    AppState.despedidaNaSessao      = false;
+    AppState.fase2DilatacaoAtiva    = false;
+    AppState.lastTriggerTime        = 0;
+    AppState.isRecording            = true;
+    AppState.recentTextBuffer       = '';
+    AppState.sessionStartTime       = Date.now() - 600000;
   },
-  get catarataDetectada()        { return catarataDetectada; },
-  set catarataDetectada(v)       { catarataDetectada = v; },
-  get catarataGrau()             { return catarataGrau; },
-  set catarataGrau(v)            { catarataGrau = v; },
-  get lioDetectada()             { return lioDetectada; },
-  set lioDetectada(v)            { lioDetectada = v; },
-  get opacidadeCapsulaDetectada()  { return opacidadeCapsulaDetectada; },
-  set opacidadeCapsulaDetectada(v) { opacidadeCapsulaDetectada = v; },
-  get lenteLimpaDetectada()        { return lenteLimpaDetectada; },
-  set lenteLimpaDetectada(v)       { lenteLimpaDetectada = v; },
+  get catarataDetectada()        { return AppState.catarataDetectada; },
+  set catarataDetectada(v)       { AppState.catarataDetectada = v; },
+  get catarataGrau()             { return AppState.catarataGrau; },
+  set catarataGrau(v)            { AppState.catarataGrau = v; },
+  get lioDetectada()             { return AppState.lioDetectada; },
+  set lioDetectada(v)            { AppState.lioDetectada = v; },
+  get opacidadeCapsulaDetectada()  { return AppState.opacidadeCapsulaDetectada; },
+  set opacidadeCapsulaDetectada(v) { AppState.opacidadeCapsulaDetectada = v; },
+  get lenteLimpaDetectada()        { return AppState.lenteLimpaDetectada; },
+  set lenteLimpaDetectada(v)       { AppState.lenteLimpaDetectada = v; },
   SESSION_FLAG_DEFAULTS: SESSION_FLAG_DEFAULTS,
   StateManager: StateManager,
   HOOK_STATE: HOOK_STATE,

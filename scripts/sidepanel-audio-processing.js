@@ -68,9 +68,9 @@ async function processAudioInBackground(audioBlob, capturedText) {
     //  mas não chegam a finalTranscript se a sessão for interrompida bruscamente)
     let textToProcess = capturedText;
     if (!textToProcess || textToProcess.trim().length === 0) {
-      if (recentTextBuffer && recentTextBuffer.trim().length >= 20) {
-        console.warn('[Audio] capturedText vazio — usando recentTextBuffer como fallback:', recentTextBuffer.substring(0, 80));
-        textToProcess = recentTextBuffer;
+      if (AppState.recentTextBuffer && AppState.recentTextBuffer.trim().length >= 20) {
+        console.warn('[Audio] capturedText vazio — usando recentTextBuffer como fallback:', AppState.recentTextBuffer.substring(0, 80));
+        textToProcess = AppState.recentTextBuffer;
         processingStatus.textContent = 'Transcrição parcial — verifique o resultado';
         statusText.textContent = 'Áudio incompleto — revise os dados';
         statusText.style.color = '#eab308';
@@ -124,7 +124,7 @@ async function processAudioInBackground(audioBlob, capturedText) {
     // Exceção: dilatacaoDetectada=true indica pausa clínica (exame concluído) — o guard
     // não se aplica porque o downstream já bloqueia auto-injeção e exibe dados para revisão.
     // Exceção 2: se a consulta foi explicitamente encerrada (STOP detectado ou manual), bypassar o guard.
-    if (!dilatacaoDetectada && !consultaEncerradaDetectada && ClinicalTriggers.detectaExameEmAndamento(textToProcess)) {
+    if (!AppState.dilatacaoDetectada && !AppState.consultaEncerradaDetectada && ClinicalTriggers.detectaExameEmAndamento(textToProcess)) {
       // Persistir a transcrição ANTES de adiar: a próxima gravação chama
       // resetSession() e apaga recognizedText — sem isso, a entrevista de uma
       // pausa manual (ex.: gatilho de dilatação não reconhecido) era destruída
@@ -173,13 +173,13 @@ async function processAudioInBackground(audioBlob, capturedText) {
 
       // Fallback: varrer o texto processado + buffer recente por comandos de dilatação
       // (o hook de dilatação pode não ter disparado se o Speech API reiniciou nesse momento)
-      if (!dilatacaoDetectada) {
+      if (!AppState.dilatacaoDetectada) {
         if (data.dilatacaoDetectada) {
           StateManager.setHookFlag('dilatacaoDetectada', true);
         } else {
-          const finalNorm = normalizeText(textToProcess) || normalizeText(recentTextBuffer);
+          const finalNorm = normalizeText(textToProcess) || normalizeText(AppState.recentTextBuffer);
           // Fase 2: só a cauda conta (narração retrospectiva não é nova pausa)
-          const scanDil = fase2DilatacaoAtiva ? finalNorm.slice(-300) : finalNorm;
+          const scanDil = AppState.fase2DilatacaoAtiva ? finalNorm.slice(-300) : finalNorm;
           if (ClinicalTriggers.detectaDilatacaoNaFala(scanDil)) {
             StateManager.setHookFlag('dilatacaoDetectada', true);
           }
@@ -194,9 +194,9 @@ async function processAudioInBackground(audioBlob, capturedText) {
           const decision = DecisionEngine.buildDecision(data, {
             transcribedText: analysisText,
             hookFlags: {
-              blefariteInjetada,
-              examesNormaisInjetados,
-              dilatacaoDetectada,
+              blefariteInjetada: AppState.blefariteInjetada,
+              examesNormaisInjetados: AppState.examesNormaisInjetados,
+              dilatacaoDetectada: AppState.dilatacaoDetectada,
             },
             tipoConsulta: data.tipo_consulta,
           });
@@ -221,7 +221,7 @@ async function processAudioInBackground(audioBlob, capturedText) {
       // Dilatação detectada: finalizar e injetar os dados coletados.
       // O médico atenderá outro paciente enquanto o colírio faz efeito,
       // por isso a consulta deve ser encerrada normalmente com injeção.
-      if (dilatacaoDetectada) {
+      if (AppState.dilatacaoDetectada) {
         workingData.dilatacaoDetectada = true;
 
         // Persistir a transcrição da fase 1 ANTES de qualquer injeção/supressão.
@@ -258,7 +258,7 @@ async function processAudioInBackground(audioBlob, capturedText) {
 
         await new Promise(r => setTimeout(r, 800));
 
-        if (audioDataInjected) {
+        if (AppState.audioDataInjected) {
           processingStatus.textContent = 'Dados injetados (junto com exames)!';
         } else {
           try {
@@ -292,7 +292,7 @@ async function processAudioInBackground(audioBlob, capturedText) {
       // Se audioDataInjected já está setado, os dados de áudio foram injetados
       // em conjunto com os exames OCR por uma chamada anterior de injectAll().
       // Tratar como sucesso silencioso — não tentar reinjetar.
-      if (audioDataInjected) {
+      if (AppState.audioDataInjected) {
         processingStatus.textContent = 'Dados injetados (junto com exames)!';
       } else {
         try {
@@ -318,7 +318,7 @@ async function processAudioInBackground(audioBlob, capturedText) {
     statusText.style.color = '#dc2626';
   } finally {
     processingIndicator.classList.add('hidden');
-    seconds = 0;
+    AppState.seconds = 0;
     updateTimerDisplay();
   }
 }
@@ -371,8 +371,8 @@ async function cancelarDilatacao() {
   try {
     // Zera o estado de dilatação e permite reinjeção (a fase 1 já injetou a entrevista).
     StateManager.setHookFlag('dilatacaoDetectada', false);
-    audioDataInjected = false;
-    cameraDataInjected = false;
+    AppState.audioDataInjected = false;
+    AppState.cameraDataInjected = false;
 
     const analysisText = store.transcript;
     const data = await window.GeminiService.analyzeConsultation(analysisText, { forceComplete: true });
@@ -384,7 +384,7 @@ async function cancelarDilatacao() {
       if (typeof DecisionEngine !== 'undefined' && DecisionEngine.buildDecision) {
         const decision = DecisionEngine.buildDecision(data, {
           transcribedText: analysisText,
-          hookFlags: { blefariteInjetada, examesNormaisInjetados, dilatacaoDetectada: false },
+          hookFlags: { blefariteInjetada: AppState.blefariteInjetada, examesNormaisInjetados: AppState.examesNormaisInjetados, dilatacaoDetectada: false },
           tipoConsulta: data.tipo_consulta,
         });
         if (decision.guardsApplied.length > 0) {

@@ -29,7 +29,7 @@
   "content_scripts": [
     {
       "matches": ["https://*.shosp.com.br/*"],
-      "js": ["src/content.js"],
+      "js": ["src/content/core.js", "src/content/field-detector.js", "src/content/injector.js", "src/content.js"],
       "css": ["styles/content.css"],
       "run_at": "document_idle"
     }

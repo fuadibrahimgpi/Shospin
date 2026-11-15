@@ -1,9 +1,8 @@
 /**
  * STATE MANAGER v6 — API limpa sobre as variáveis de sessão
  * ============================================================================
- * Carregado APÓS sidepanel-constants.js (que define as let vars).
- * As let vars continuam sendo a fonte da verdade; StateManager é a fachada
- * de escrita autorizada. HOOK_STATE continua funcionando para leitura.
+ * Carregado APÓS sidepanel-constants.js (que define AppState, a fonte única
+ * do estado). StateManager é a fachada de escrita autorizada das flags. HOOK_STATE continua funcionando para leitura.
  *
  * API pública:
  *   resetSession()                  — zera flags + transcripts para nova consulta
@@ -18,41 +17,13 @@
 
 'use strict';
 
-// Mapa canônico: nome externo → variável de sessão (let) definida em constants.js
-// As chaves são os nomes usados em setHookFlag/getHookFlag.
-const _FLAG_MAP = {
-  examesNormaisInjetados:    () => examesNormaisInjetados,
-  blefariteInjetada:         () => blefariteInjetada,
-  receitaOlhoIrritadoInjetada: () => receitaOlhoIrritadoInjetada,
-  catarataDetectada:         () => catarataDetectada,
-  catarataGrau:              () => catarataGrau,
-  lioDetectada:              () => lioDetectada,
-  opacidadeCapsulaDetectada: () => opacidadeCapsulaDetectada,
-  lenteLimpaDetectada:       () => lenteLimpaDetectada,
-  dilatacaoDetectada:        () => dilatacaoDetectada,
-  fundoscopiaDetectada:      () => fundoscopiaDetectada,
-  consultaEncerradaDetectada: () => consultaEncerradaDetectada,
-  despedidaNaSessao:         () => despedidaNaSessao,
-  fase2DilatacaoAtiva:       () => fase2DilatacaoAtiva,
-};
-
-// Setters separados porque JS não permite `eval` em strict mode sem wrapper.
-// Cada setter recebe o novo valor e escreve na let var correta do escopo global.
-const _FLAG_SETTERS = {
-  examesNormaisInjetados:      v => { examesNormaisInjetados = v; },
-  blefariteInjetada:           v => { blefariteInjetada = v; },
-  receitaOlhoIrritadoInjetada: v => { receitaOlhoIrritadoInjetada = v; },
-  catarataDetectada:           v => { catarataDetectada = v; },
-  catarataGrau:                v => { catarataGrau = v; },
-  lioDetectada:                v => { lioDetectada = v; },
-  opacidadeCapsulaDetectada:   v => { opacidadeCapsulaDetectada = v; },
-  lenteLimpaDetectada:         v => { lenteLimpaDetectada = v; },
-  dilatacaoDetectada:          v => { dilatacaoDetectada = v; },
-  fundoscopiaDetectada:        v => { fundoscopiaDetectada = v; },
-  consultaEncerradaDetectada:  v => { consultaEncerradaDetectada = v; },
-  despedidaNaSessao:           v => { despedidaNaSessao = v; },
-  fase2DilatacaoAtiva:         v => { fase2DilatacaoAtiva = v; },
-};
+// As flags de detecção vivem em AppState (constants.js); os nomes válidos são
+// exatamente as chaves de SESSION_FLAG_DEFAULTS. Nome desconhecido lança erro.
+function _assertFlag(method, name) {
+  if (!Object.prototype.hasOwnProperty.call(SESSION_FLAG_DEFAULTS, name)) {
+    throw new Error(`StateManager.${method}: flag desconhecida '${name}'`);
+  }
+}
 
 const StateManager = {
   /**
@@ -66,43 +37,41 @@ const StateManager = {
     // para não bloquear o hook de opacidade de cápsula no próximo paciente.
     // Falha alto se uma flag nova no registro canônico não tiver setter aqui.
     for (const [name, defaultValue] of Object.entries(SESSION_FLAG_DEFAULTS)) {
-      const setter = _FLAG_SETTERS[name];
-      if (!setter) throw new Error(`StateManager.resetSession: flag '${name}' sem setter em _FLAG_SETTERS`);
-      setter(defaultValue);
+      AppState[name] = defaultValue;
     }
 
     // Transcript e buffer de voz
-    recognizedText   = '';
-    recentTextBuffer = '';
-    if (recentTextTimeout) { clearTimeout(recentTextTimeout); recentTextTimeout = null; }
+    AppState.recognizedText   = '';
+    AppState.recentTextBuffer = '';
+    if (AppState.recentTextTimeout) { clearTimeout(AppState.recentTextTimeout); AppState.recentTextTimeout = null; }
 
     // Controles de injeção
-    audioData          = null;
-    cameraData         = null;
-    audioDataInjected  = false;
-    cameraDataInjected = false;
+    AppState.audioData          = null;
+    AppState.cameraData         = null;
+    AppState.audioDataInjected  = false;
+    AppState.cameraDataInjected = false;
 
     // Confirmação de refração pendente
-    pendingRefractionConfirmation = false;
+    AppState.pendingRefractionConfirmation = false;
 
     // Cooldown e debounce de parada
-    lastTriggerTime = 0;
-    if (stopCommandTimeout) { clearTimeout(stopCommandTimeout); stopCommandTimeout = null; }
-    stopPendingInfo = null;
-    stopGateOffset = 0;
-    stopGateBlockCount = 0;
+    AppState.lastTriggerTime = 0;
+    if (AppState.stopCommandTimeout) { clearTimeout(AppState.stopCommandTimeout); AppState.stopCommandTimeout = null; }
+    AppState.stopPendingInfo = null;
+    AppState.stopGateOffset = 0;
+    AppState.stopGateBlockCount = 0;
 
     // Contador de erros no-speech
-    noSpeechCount = 0;
-    isSpeechBackingOff = false;
+    AppState.noSpeechCount = 0;
+    AppState.isSpeechBackingOff = false;
 
     // Timer de auto-recuperação do Speech (pode ter ficado pendente da sessão anterior)
-    if (speechRecoveryTimer) { clearTimeout(speechRecoveryTimer); speechRecoveryTimer = null; }
+    if (AppState.speechRecoveryTimer) { clearTimeout(AppState.speechRecoveryTimer); AppState.speechRecoveryTimer = null; }
 
     // Auto-stop por silêncio — cancelar timers da sessão anterior
-    lastSpeechTime = 0;
-    if (silenceCheckInterval) { clearInterval(silenceCheckInterval); silenceCheckInterval = null; }
-    if (silencePendingStop) { clearTimeout(silencePendingStop); silencePendingStop = null; }
+    AppState.lastSpeechTime = 0;
+    if (AppState.silenceCheckInterval) { clearInterval(AppState.silenceCheckInterval); AppState.silenceCheckInterval = null; }
+    if (AppState.silencePendingStop) { clearTimeout(AppState.silencePendingStop); AppState.silencePendingStop = null; }
   },
 
   /** Delega ao snapshot serializável do __shospState bridge. */
@@ -116,9 +85,8 @@ const StateManager = {
    * @param {*}      value — novo valor
    */
   setHookFlag(name, value) {
-    const setter = _FLAG_SETTERS[name];
-    if (!setter) throw new Error(`StateManager.setHookFlag: flag desconhecida '${name}'`);
-    setter(value);
+    _assertFlag('setHookFlag', name);
+    AppState[name] = value;
   },
 
   /**
@@ -127,9 +95,8 @@ const StateManager = {
    * @returns {*}
    */
   getHookFlag(name) {
-    const getter = _FLAG_MAP[name];
-    if (!getter) throw new Error(`StateManager.getHookFlag: flag desconhecida '${name}'`);
-    return getter();
+    _assertFlag('getHookFlag', name);
+    return AppState[name];
   },
 
   /**
@@ -137,8 +104,8 @@ const StateManager = {
    * @param {'audio'|'camera'} type
    */
   markInjectionPerformed(type) {
-    if (type === 'audio')  { audioDataInjected  = true; return; }
-    if (type === 'camera') { cameraDataInjected = true; return; }
+    if (type === 'audio')  { AppState.audioDataInjected  = true; return; }
+    if (type === 'camera') { AppState.cameraDataInjected = true; return; }
     throw new Error(`StateManager.markInjectionPerformed: tipo inválido '${type}'`);
   },
 
@@ -147,19 +114,19 @@ const StateManager = {
    * @returns {boolean}
    */
   wasInjectionPerformed(type) {
-    if (type === 'audio')  return audioDataInjected;
-    if (type === 'camera') return cameraDataInjected;
+    if (type === 'audio')  return AppState.audioDataInjected;
+    if (type === 'camera') return AppState.cameraDataInjected;
     throw new Error(`StateManager.wasInjectionPerformed: tipo inválido '${type}'`);
   },
 
   /** Armazena o texto reconhecido pela Web Speech API. */
   setTranscript(text) {
-    recognizedText = typeof text === 'string' ? text : '';
+    AppState.recognizedText = typeof text === 'string' ? text : '';
   },
 
   /** @returns {string} */
   getTranscript() {
-    return recognizedText;
+    return AppState.recognizedText;
   },
 };
 

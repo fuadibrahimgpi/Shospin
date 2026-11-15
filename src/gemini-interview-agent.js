@@ -685,6 +685,16 @@ CAMPOS:
      marido, filho, amigo etc. ("minha mãe pinga Xalatan") não vai em medicacoes_em_uso, nem em
      tratamento, nem em lugar nenhum da consulta. A DOENÇA de um familiar continua indo em
      antecedentes_familiares ("Mãe com glaucoma"), sem o remédio.
+  ★ LUBRIFICANTE — DOIS MOMENTOS (regra do médico, 2026-11-15; o médico NÃO prescreve nome comercial):
+     (1) ATENDIMENTO = o que o PACIENTE diz usar → medicacoes_em_uso. Termos leigos do paciente —
+         "lágrima artificial", "lágrima" usada como produto ("uso lágrima"), "colírio para limpar o olho",
+         "colírio para hidratar/umedecer/lubrificar o olho" — são LUBRIFICANTE: registre "Lubrificante ocular"
+         (com a marca entre parênteses só se o paciente a disse). Nunca escreva princípio ativo nem o
+         registro padrão aqui: o paciente não sabe qual é. "Lágrima" como sintoma ("muita lágrima",
+         "olho lacrimejando") NÃO é produto.
+     (2) CONDUTA/TRATAMENTO = o que o MÉDICO prescreve → tratamento. Termo leigo dito pelo paciente NÃO cria
+         nem nomeia prescrição. Marca de lubrificante NUNCA vai em tratamento. Quando o MÉDICO diz
+         "lubrificante", o registro é "Carmelose sódica ou hialuronato de sódio".
   ★ MEDICAÇÃO ANTERIOR (já abandonada): só se for OFTALMOLÓGICA, e vai em antecedentes_oftalmologicos
      ("Uso prévio de tobramicina (Tobrex)"), NUNCA em medicacoes_em_uso nem em tratamento. Remédio
      anterior NÃO oftalmológico (oral, sistêmico) não é registrado.

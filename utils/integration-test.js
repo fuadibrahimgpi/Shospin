@@ -2468,10 +2468,41 @@ test('[LEXICO-UNICO-6] colírio de glaucoma dito pela MARCA conta como evidênci
   expect(ruido.clonedAIResponse.noiseDetected === true).toBe(false);
 });
 
-test('[LUB-4] marca dita vence: "Lubrificante ocular (Systane)" não é tocado', () => {
+test('[LUB-4] o médico não prescreve nome comercial: marca sai do tratamento; "lubrificante" dito vira o padrão', () => {
   const d = _lubDecision('Lubrificante ocular (Systane) 4x/dia', 'usa o systane que e um lubrificante 4x ao dia');
-  expect(d.clonedAIResponse.dados.tratamento).toBe('Lubrificante ocular (Systane) 4x/dia');
-  expect(d.guardsApplied.some(g => g.includes('Guard 2f'))).toBe(false);
+  expect(d.clonedAIResponse.dados.tratamento).toBe('Carmelose sódica ou hialuronato de sódio 4x/dia');
+  // sem a palavra "lubrificante" do médico: só a marca sai, a classe fica
+  const e = _lubDecision('Lubrificante ocular (Systane) 4x/dia', 'usa o systane 4x ao dia');
+  expect(e.clonedAIResponse.dados.tratamento).toBe('Lubrificante ocular 4x/dia');
+});
+
+test('[LUB-11] MOMENTO 1 (atendimento): a marca dita pelo paciente continua em medicacoes_em_uso', () => {
+  const d = DecisionEngine.buildDecision({
+    tipo_consulta: 'primeira_consulta',
+    dados: { hda: 'queixa', conduta: 'Retorno 1 ano', medicacoes_em_uso: 'Lubrificante ocular (Systane) 4x/dia', tratamento: 'Lubrificante ocular (Systane) 4x/dia' },
+  }, { transcribedText: 'eu uso o systane quatro vezes ao dia, o senhor mantem o lubrificante', hookFlags: {} });
+  expect(d.clonedAIResponse.dados.medicacoes_em_uso).toBe('Lubrificante ocular (Systane) 4x/dia');
+  expect(d.clonedAIResponse.dados.tratamento.includes('Systane')).toBe(false);
+});
+
+test('[LUB-12] termos leigos do paciente são reconhecidos como lubrificante (léxico), mas não são a palavra do médico', () => {
+  const L = require('../config/medicamentos-lexico.js');
+  for (const f of ['eu uso lagrima artificial', 'uso um colirio para limpar o olho', 'passo um colirio pra hidratar']) {
+    expect([f, L.encontrarMedicamentos(f).some(a => a.classe === 'lubrificante')]).toEqual([f, true]);
+  }
+  // "lágrima" solta é sintoma, não produto
+  expect(L.encontrarMedicamentos('o olho esta com muita lagrima').some(a => a.classe === 'lubrificante')).toBe(false);
+  // e não dispara o registro padrão do tratamento
+  const d = _lubDecision('Lubrificante ocular 4x/dia', 'eu uso um colirio para limpar o olho 4x ao dia');
+  expect(d.clonedAIResponse.dados.tratamento).toBe('Lubrificante ocular 4x/dia');
+});
+
+test('[LUB-13] o prompt descreve os DOIS momentos do lubrificante', () => {
+  const L = require('../config/medicamentos-lexico.js');
+  const base = L.montarBaseDoPrompt();
+  expect(base).toContain('DOIS MOMENTOS');
+  expect(base).toContain('ATENDIMENTO');
+  expect(base).toContain('CONDUTA/TRATAMENTO');
 });
 
 test('[LUB-5] princípio dito vence: "Hialuronato" / "Carmelose" não são tocados', () => {

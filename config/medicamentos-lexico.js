@@ -117,7 +117,10 @@ const MEDICAMENTOS_LEXICO = [
   { id: 'lubrificante_padrao', principio: LUBRIFICANTE_PADRAO, classe: 'lubrificante',
     nomes: ['lubrificante', 'lubrificantes'], marcas: [], asr: [] },
   { id: 'lubrificante', principio: 'Lubrificante ocular', classe: 'lubrificante',
-    nomes: ['systane', 'hylo', 'hyabak', 'artelac', 'optive fusion', 'optive', 'refresh', 'lacrifilm', 'lagrima artificial'],
+    nomes: ['systane', 'hylo', 'hyabak', 'artelac', 'optive fusion', 'optive', 'refresh', 'lacrifilm', 'lagrima artificial', 'lagrimas artificiais',
+      // Termos LEIGOS do paciente (2026-11-15): só frases com o produto; "lágrima" solta é sintoma (lacrimejamento) e NÃO entra.
+      'colirio de lagrima', 'colirio para limpar o olho', 'colirio pra limpar o olho', 'colirio para limpar', 'colirio pra limpar',
+      'colirio para hidratar', 'colirio pra hidratar', 'colirio para lubrificar', 'colirio pra lubrificar'],
     marcas: ['Systane', 'Hylo', 'Hyabak', 'Artelac', 'Optive Fusion', 'Optive', 'Refresh', 'Lacrifilm'], asr: [] },
 
   // ── Antivirais ──
@@ -378,7 +381,10 @@ function montarBaseDoPrompt() {
       const principios = entradas
         .filter(e => e.nomes.map(normalizarLexico).includes(normalizarLexico(e.principio)))
         .map(e => normalizarLexico(e.principio));
-      linhas.push('LUBRIFICANTES (a MARCA NÃO identifica um princípio único — registre "Lubrificante ocular (Marca)"):');
+      linhas.push('LUBRIFICANTES — DOIS MOMENTOS DISTINTOS (a MARCA NÃO identifica um princípio único):');
+      linhas.push('  (1) ATENDIMENTO — o que o PACIENTE diz que usa (medicacoes_em_uso): marca ou termo leigo ("lágrima artificial", "colírio para limpar/hidratar o olho") → "Lubrificante ocular"; marca entre parênteses só se o paciente a disse: "Lubrificante ocular (Marca)". Nunca princípio, nunca o registro padrão.');
+      linhas.push('  (2) CONDUTA/TRATAMENTO — o que o MÉDICO prescreve: NUNCA marca (o médico não prescreve nome comercial); termo leigo do paciente não cria nem nomeia prescrição; o médico dizendo "lubrificante" vale o registro padrão abaixo.');
+      linhas.push('  Marcas conhecidas (reconhecer na fala do paciente):');
       linhas.push('  ' + marcas.join(', '));
       linhas.push(`  (princípio só se o médico o DISSE: ${principios.join(', ')})`);
       linhas.push(`  Médico disse só "lubrificante(s)", sem marca nem princípio → "${LUBRIFICANTE_PADRAO}"`);

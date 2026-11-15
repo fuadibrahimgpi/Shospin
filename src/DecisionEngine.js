@@ -1299,27 +1299,52 @@
   // O lookahead recusa "(Marca)" colada ao nome.
   const _LINHA_LUBRIFICANTE_RE = /^(\s*(?:[-•*]\s*)?)(?:col[íi]rio\s+)?lubrificantes?(?:\s+ocular(?:es)?)?(?![A-Za-zÀ-ÿ])(?!\s*\()/i;
 
+  // Linha de lubrificante (com marca entre parênteses) — só para o MOMENTO 2 do Guard 2f.
+  const _LINHA_LUBRIFICANTE_COM_MARCA_RE = /^\s*(?:[-•*]\s*)?(?:col[íi]rio\s+)?lubrificantes?(?:\s+ocular(?:es)?)?\s*\(/i;
+
   function _guardLubrificanteGenerico(cloned, ctx, log) {
     const d = cloned.dados;
     if (!d || !d.tratamento) return;
-    const fala = _normalizeForGuard(ctx.transcribedText);
-    if (!_LUBRIFICANTE_FALA_RE.test(fala)) return;
-    const nomeado = _listasDoLexico().lubrificanteNomeado;
-    const LUBRIFICANTE_PADRAO = _lexico().LUBRIFICANTE_PADRAO;
-    if (nomeado.test(fala)) return;
+    const Lex = _lexico();
+    const LUBRIFICANTE_PADRAO = Lex.LUBRIFICANTE_PADRAO;
 
+    // MOMENTO 2 — conduta/tratamento: o médico NÃO prescreve nome comercial. Marca de lubrificante
+    // (que veio do paciente: "Lubrificante ocular (Systane)") sai do tratamento; a classe fica.
+    // A marca continua valendo em medicacoes_em_uso (MOMENTO 1, o que o paciente diz usar).
+    const entradaLub = Lex.entradaPorId && Lex.entradaPorId('lubrificante');
+    const marcas = (entradaLub && entradaLub.marcas) || [];
+    let semMarca = 0;
+    let linhas = String(d.tratamento).split('\n');
+    if (marcas.length) {
+      const reMarca = new RegExp('\\s*\\(\\s*(?:' + marcas.map(m => m.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|') + ')\\s*\\)', 'i');
+      linhas = linhas.map(l => {
+        if (!_LINHA_LUBRIFICANTE_COM_MARCA_RE.test(l) || !reMarca.test(l)) return l;
+        semMarca++;
+        return l.replace(reMarca, '');
+      });
+    }
+
+    // O registro padrão é do MÉDICO dizendo "lubrificante". Marca dita (pelo paciente) não impede;
+    // só princípio dito (hialuronato, carmelose…) vence o padrão. Termo leigo ("lágrima artificial",
+    // "colírio para limpar o olho") nunca dispara o padrão: não é a palavra do médico.
+    const fala = _normalizeForGuard(ctx.transcribedText);
+    const principioNomeado = new RegExp(Lex.fonteDoRemedio('carmelose') + '|' + Lex.fonteDoRemedio('hialuronato') + '|' +
+      ((Lex.EXTRAS_DE_CLASSE && Lex.EXTRAS_DE_CLASSE.lubrificante) || []).map(x => x + '\\w*').join('|'));
     let trocadas = 0;
-    const linhas = String(d.tratamento).split('\n').map(linha => {
-      if (nomeado.test(_normalizeForGuard(linha))) return linha;
-      const m = linha.match(_LINHA_LUBRIFICANTE_RE);
-      if (!m) return linha;
-      trocadas++;
-      return m[1] + LUBRIFICANTE_PADRAO + linha.slice(m[0].length);
-    });
-    if (!trocadas) return;
+    if (_LUBRIFICANTE_FALA_RE.test(fala) && !principioNomeado.test(fala)) {
+      linhas = linhas.map(linha => {
+        if (principioNomeado.test(_normalizeForGuard(linha))) return linha;
+        const m = linha.match(_LINHA_LUBRIFICANTE_RE);
+        if (!m) return linha;
+        trocadas++;
+        return m[1] + LUBRIFICANTE_PADRAO + linha.slice(m[0].length);
+      });
+    }
+    if (!trocadas && !semMarca) return;
 
     d.tratamento = linhas.join('\n');
-    log.push(`Guard 2f: lubrificante dito → "${LUBRIFICANTE_PADRAO}" (${trocadas} linha(s))`);
+    if (semMarca) log.push(`Guard 2f: marca de lubrificante removida do tratamento — o médico não prescreve nome comercial (${semMarca} linha(s))`);
+    if (trocadas) log.push(`Guard 2f: lubrificante dito → "${LUBRIFICANTE_PADRAO}" (${trocadas} linha(s))`);
   }
 
   /**

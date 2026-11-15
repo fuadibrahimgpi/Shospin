@@ -213,13 +213,16 @@ Quando `injectBlefarite = true`:
 
 1. Injeta `BIOMICROSCOPIA_BLEFARITE` no campo de biomicroscopia
 2. Injeta `FUNDOSCOPIA_NORMAL` no campo de fundoscopia
-3. **NÃO** injeta `BLEFARITE_TRATAMENTO_PADRAO` automaticamente
-4. **NÃO** injeta `BLEFARITE_CONDUTA_PADRAO` automaticamente
-5. Preenche conduta e tratamento **APENAS** com o que o Gemini extraiu da consulta
+3. Preenche conduta e tratamento **APENAS** com o que o Gemini extraiu da consulta, depois
+   de conferido pelos guards do `src/DecisionEngine.js`
 
-> ⚠️ O tratamento padrão de blefarite (ATB+corticoide, lubrificante, Ômega 3)
-> **nunca é injetado automaticamente** — só vai para tratamento se o médico
-> mencionou explicitamente na consulta.
+> ⚠️ Nenhum gatilho de voz injeta tratamento de blefarite. O pacote padrão (compressa morna,
+> higiene palpebral, `Tobramicina + dexametasona`, lubrificante, ômega 3) só aparece no
+> tratamento item a item, conforme o médico **orientou na fala**: o guard
+> `_guardBlefaritePadrao` padroniza o texto dos itens orientados e nunca cria item. A única
+> exceção é a sequência dita compressas → higiene → colírio 3x/dia, que recebe o pacote com o
+> colírio (`_guardBlefariteSequenciaPadrao`). Regras, textos e frequências:
+> `skills/user/conduta-tratamento-oftalmologia/TRATAMENTO.md`, seção 7.
 
 ---
 
@@ -539,9 +542,9 @@ o encerramento (provável marcador faltando). `encerrar consulta` ignora o gate.
 **Exemplo resolvido:** `"tudo normal"` removido pois aparecia fora de contexto
 
 ### Caso 3 — Blefarite injeta tratamento padrão sem prescrição
-**Sintoma:** `BLEFARITE_TRATAMENTO_PADRAO` aparece mesmo sem o médico prescrever
-**Causa:** lógica antiga usava `if (!campoTratamento.value)` sem verificar o Gemini
-**Solução atual:** só preenche se `audioData?.dados?.tratamento` existir
+**Sintoma:** o tratamento padrão da blefarite aparecia mesmo sem o médico prescrever
+**Causa:** lógica antiga preenchia o campo vazio com um texto fixo, sem olhar a resposta do Gemini
+**Solução atual:** o texto fixo não existe mais (as constantes foram removidas em 2026-11-15); o tratamento vem só da fala, conferido pelos guards. Se um colírio aparecer sem ter sido prescrito, o problema é da skill de conduta (`TRATAMENTO.md`, seção 7), não dos gatilhos
 
 ### Caso 4 — STOP não dispara em consultas após a primeira da sessão ⭐
 **Sintoma:** gatilho de encerramento não dispara a partir da 2ª consulta, médico precisa clicar manualmente

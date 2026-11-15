@@ -46,7 +46,7 @@ Ler de novo, da skill que produziu o resultado (não de memória):
 1. As seções de regra crítica / "Princípios" / "Regras invioláveis".
 2. A **lista de checagem final** ou "Validação final obrigatória", quando existir — ela entra inteira.
 3. O **formato de saída** (campos, ordem, o que é proibido no campo).
-4. O **histórico de erros** da skill: cada linha vira uma pergunta "este erro se repetiu aqui?".
+4. O **histórico de erros** da skill (no próprio `SKILL.md` ou no `HISTORICO.md` da pasta dela): cada linha vira uma pergunta "este erro se repetiu aqui?".
 5. As regras do médico na memória do projeto (`MEMORY.md`, entradas de feedback) que tocam o resultado — por exemplo OD antes de OE, negativa de sintoma fora da queixa, exame só com o nome dito pelo médico, normalidade fora da conduta, tempo relativo na HDA.
 
 Se o resultado passou por mais de uma skill (ex.: transcrição que usa conduta,
@@ -70,7 +70,8 @@ Perguntas que valem para toda skill:
 - **Consistência interna**: diagnóstico × exame × conduta × tratamento não se contradizem.
 - **Campo certo**: cada informação está no campo que a skill manda (ex.: conduta × tratamento, HDA × antecedentes).
 - **Formato**: o formato de saída da skill foi seguido à risca (campos, ordem, códigos, sem texto extra).
-- **Tratamento vazio**: sem nenhum medicamento mencionado, o campo é `Nega uso de tratamentos`; se a fala prescreve ou mantém medicação e o campo está vazio, **não** escrever o texto — avisar o médico (regra de 2026-11-12, skill de conduta).
+- **Tratamento vazio**: sem nenhum medicamento mencionado, o campo é `Nega uso de tratamentos`; se a fala prescreve ou mantém medicação e o campo está vazio, **não** escrever o texto — o campo fica vazio e o médico é avisado. Regra completa em `skills/user/conduta-tratamento-oftalmologia/TRATAMENTO.md`, seção 8.
+- **Medicação**: havendo colírio, pomada, lubrificante, compressa, higiene ou ômega 3, a "Checagem do tratamento" do mesmo arquivo entra inteira (nome só se foi dito, nada de associação ou marca não pronunciada, blefarite só com os itens orientados, remédio de outra pessoa fora).
 - **Verificação automática**: se a verificação do `DecisionEngine` não rodou por inteiro (injeção suspensa), o passo final automático **não** é liberado; o médico decide pelo botão.
 
 ## Passo 3 — Decidir

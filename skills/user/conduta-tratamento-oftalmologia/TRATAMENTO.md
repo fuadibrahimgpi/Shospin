@@ -322,7 +322,6 @@ tratamento_sugerido: null      ← o campo fica vazio e o médico é avisado
 ## Pendências que dependem do médico
 
 - Confirmar as frequências padrão da blefarite e o xampu infantil como produto padrão (seção 7.1).
-- A exceção do tratamento vazio (seção 8) é leitura nossa da regra dele; falta ele conferir.
 - "O médico não prescreve nome comercial" foi aplicado só ao lubrificante. Os outros colírios ainda
   levam a marca dita entre parênteses no tratamento (`Latanoprosta (Xalatan)`).
 - Calázio e terçol: têm pacote próprio?

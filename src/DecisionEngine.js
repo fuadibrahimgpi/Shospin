@@ -94,6 +94,8 @@
       colirioNomeado: new RegExp(L.fonteDeClasse(['antibiotico', 'corticoide', 'associacao_atb_cortic'])),
       // A fala cita antibiótico: a classe dita ou qualquer antibiótico/associação.
       falaAntibiotico: new RegExp(L.PALAVRAS_DE_CLASSE.antibiotico + '|' + L.fonteDeClasse(['antibiotico', 'associacao_atb_cortic'])),
+      // A fala cita corticoide: a classe dita, qualquer corticoide ou uma associação ATB+corticoide.
+      falaCorticoide: new RegExp(L.PALAVRAS_DE_CLASSE.corticoide + '|' + L.fonteDeClasse(['corticoide', 'associacao_atb_cortic'])),
       // Remédio de uso contínuo: hipotensor ou lubrificante (inclusive a palavra "lubrificante").
       remedioCronico: new RegExp(L.fonteDeClasse(['hipotensor', 'lubrificante'], { genericos: true })),
       // Lubrificante NOMEADO: marca ou princípio (a palavra "lubrificante" sozinha não conta).
@@ -290,20 +292,27 @@
     if (!tratamento) return;
     const hasAssocLine = /associa[çc][ãa]o.*atb|atb.*corticoide/i.test(tratamento);
     if (!hasAssocLine) return;
-    const hasMention = _listasDoLexico().classeOuPrincipioDoProtocolo.test(_normalizeForGuard(ctx.transcribedText || ''));
-    if (hasMention) return;
-    // Rebaixa "Associação (ATB + corticoide ocular) <posologia>" → "Medicação ocular
-    // prescrita <posologia>". Remove o descritor de classe (tudo de "Associação" até o
-    // início da posologia, isto é, o primeiro dígito), preservando gota/frequência/olho.
+    // TRÊS situações (regra do médico, 2026-11-15): a fala diz (1) antibiótico E corticoide,
+    // (2) só antibiótico ou (3) só corticoide. A associação só vale na (1); nas outras
+    // a linha cai para a classe que FOI dita. Nada dito → genérico (nível 3).
+    const listas = _listasDoLexico();
+    const fala = _normalizeForGuard(ctx.transcribedText || '');
+    const temATB = listas.falaAntibiotico.test(fala);
+    const temCort = listas.falaCorticoide.test(fala);
+    if (temATB && temCort) return;
+    const novoDescritor = temATB ? 'Colírio antibiótico ' : temCort ? 'Colírio corticoide ' : 'Medicação ocular prescrita ';
+    // Remove o descritor de classe (tudo de "Associação" até o início da posologia, isto é,
+    // o primeiro dígito), preservando gota/frequência/olho.
     const downgraded = tratamento
       .split('\n')
       .map(line => /associa[çc][ãa]o/i.test(line)
-        ? line.replace(/associa[çc][ãa]o[^0-9]*/i, 'Medicação ocular prescrita ').trim()
+        ? line.replace(/associa[çc][ãa]o[^0-9]*/i, novoDescritor).trim()
         : line)
       .join('\n')
       .trim();
     cloned.dados.tratamento = downgraded || null;
-    log.push('Linha "Associação" rebaixada para "Medicação ocular prescrita" — classe ATB+corticoide não mencionada na transcrição');
+    log.push('Linha "Associação" rebaixada para "' + novoDescritor.trim() + '" — ' +
+      (temATB ? 'só antibiótico' : temCort ? 'só corticoide' : 'nenhuma classe') + ' mencionado na transcrição');
   }
 
   /**

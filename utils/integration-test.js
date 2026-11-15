@@ -772,6 +772,34 @@ test('[DE-3b] Guard preserva "Associação ATB+corticoide" quando a classe É me
   expect(trat.includes('Tobramicina')).toBe(false);
 });
 
+function _deAssoc(fala) {
+  return DecisionEngine.buildDecision({
+    tipo_consulta: 'primeira_consulta',
+    dados: { hda: 'queixa', conduta: 'Retorno 1 semana', tratamento: 'Associação (ATB + corticoide ocular) 1 gota 3x/dia' },
+  }, { transcribedText: fala, hookFlags: {} }).clonedAIResponse.dados.tratamento;
+}
+
+test('[DE-3e] Só antibiótico dito → "Colírio antibiótico" (não afirma corticoide)', () => {
+  const trat = _deAssoc('conjuntivite bacteriana, vou passar um colírio de antibiótico 3 vezes ao dia');
+  expect(trat).toContain('Colírio antibiótico');
+  expect(trat).toContain('1 gota 3x/dia');
+  expect(trat.includes('Associação')).toBe(false);
+  expect(trat.includes('corticoide')).toBe(false);
+});
+
+test('[DE-3f] Só corticoide dito → "Colírio corticoide" (não afirma antibiótico)', () => {
+  const trat = _deAssoc('uveíte anterior, vou passar um colírio de corticoide 3 vezes ao dia');
+  expect(trat).toContain('Colírio corticoide');
+  expect(trat).toContain('1 gota 3x/dia');
+  expect(trat.includes('Associação')).toBe(false);
+  expect(trat.includes('antibiótico')).toBe(false);
+});
+
+test('[DE-3g] Antibiótico E corticoide ditos → associação mantida', () => {
+  const trat = _deAssoc('vou passar um colírio com antibiótico e corticoide 3 vezes ao dia');
+  expect(trat).toContain('Associação (ATB + corticoide ocular)');
+});
+
 test('[DE-3b2] Na blefarite, "Associação ATB+corticoide" é PROMOVIDA ao protocolo declarado', () => {
   const raw = {
     tipo_consulta: 'primeira_consulta',

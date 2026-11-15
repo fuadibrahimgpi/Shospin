@@ -135,6 +135,18 @@ Ao registrar um medicamento que o médico **prescreve**, use o nível mais espec
 
 **Nível 2 — Grupo / classe.** Quando o remédio não foi nomeado, nenhum protocolo declarado se aplica, mas a classe é identificável pela fala (finalidade dita ou tratamento inequívoco). Ex.: "colírio para pressão" → `Colírio hipotensor ocular`; "colírio de alergia" → `Colírio antialérgico`; "colírio de antibiótico" (sem marca nem princípio) → `Colírio antibiótico`.
 
+**Antibiótico, corticoide ou os dois — três situações distintas (regra do médico, 2026-11-15).**
+
+| Situação | O que a fala traz | Registro |
+|---|---|---|
+| 1. Blefarite | compressa e/ou higiene + colírio, sem nome | `Tobramicina + dexametasona` (nível 1.5) |
+| 2. Só antibiótico | "colírio de antibiótico", sem corticoide e sem nome | `Colírio antibiótico` |
+| 3. Só corticoide | "colírio de corticoide", sem antibiótico e sem nome | `Colírio corticoide` |
+
+- ⚠️ Nunca complete uma classe com a outra: "antibiótico" dito sozinho **não** vira "antibiótico + corticoide", e "corticoide" dito sozinho **não** vira "antibiótico + corticoide".
+- `Associação (ATB + corticoide ocular)` só vale **fora da blefarite** e só quando a fala diz **os dois** (antibiótico e corticoide). O guard `_guardAssociacaoATB` rebaixa a linha: só antibiótico dito → `Colírio antibiótico`; só corticoide dito → `Colírio corticoide`; nenhum dos dois → `Medicação ocular prescrita`. A posologia é sempre preservada.
+- Nome dito (marca ou princípio) vence tudo: nível 1.
+
 **Nível 3 — Genérico.** Quando nem o nome, nem um protocolo, nem a classe podem ser identificados, mas houve prescrição. Ex.: "usa o colírio, 3x/dia" → `Medicação ocular prescrita`.
 
 ⚠️ **Nunca omita uma prescrição** porque o nome não foi dito — desça de nível, mas registre. A posologia (frequência, olho, duração) é preservada em qualquer nível quando mencionada.
@@ -893,3 +905,10 @@ Antes de finalizar a conduta, confirme:
 **Passo final desta skill:** entregar os campos `conduta` e `tratamento` prontos (a "Lista de checagem final" desta skill entra inteira na revisão).
 
 Antes de executá-lo, rodar a skill `revisao-final` sobre o resultado pronto: ela relê os parâmetros desta skill (regras críticas, checagem final, formato de saída, histórico de erros) e as regras do médico na memória, confere item por item e só então libera o passo final. Com algum item violado, corrige e revisa de novo (no máximo 3 rodadas); se ainda falhar, o passo final não é executado e o problema vai para o Fuad.
+
+### 2026-11-15 — Antibiótico, corticoide ou os dois: três situações (limitação do `hasMention` resolvida)
+
+- **Pedido do usuário**: blefarite usa a associação tobramicina + dexametasona; outras patologias usam **só** corticoide ou **só** antibiótico. São três situações diferentes.
+- **Comportamento anterior**: o `hasMention` do `_guardAssociacaoATB` era um OR — bastava a fala citar antibiótico **ou** corticoide para a linha `Associação (ATB + corticoide ocular)` sobreviver, afirmando a classe que não foi dita.
+- **Correção aplicada**: o guard agora separa a fala em `falaAntibiotico` e `falaCorticoide` (novo, em `_listasDoLexico`). Os dois ditos → mantém a associação; só antibiótico → `Colírio antibiótico`; só corticoide → `Colírio corticoide`; nenhum → `Medicação ocular prescrita`. Posologia preservada. Prompt (`gemini-interview-agent.js`) e esta skill ganharam a tabela das três situações.
+- **Testes**: `[DE-3e]` (só antibiótico), `[DE-3f]` (só corticoide) e `[DE-3g]` (os dois mantêm a associação) em `utils/integration-test.js`.

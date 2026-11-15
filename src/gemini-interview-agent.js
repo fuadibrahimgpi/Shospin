@@ -1313,6 +1313,11 @@ CAMPOS:
         mas a classe é identificável pela fala (finalidade dita ou tratamento inequívoco).
         Ex.: "colírio para pressão" → "Colírio hipotensor ocular"; "colírio de alergia" → "Colírio antialérgico";
         "colírio de antibiótico" (sem marca/princípio) → "Colírio antibiótico".
+        ★ ANTIBIÓTICO × CORTICOIDE (regra do médico, 2026-11-15) — são TRÊS situações, nunca misture:
+          (a) Blefarite (compressa/higiene + colírio) sem nome → protocolo "Tobramicina + dexametasona" (nível 1.5).
+          (b) A fala diz SÓ antibiótico (sem corticoide) → "Colírio antibiótico". NUNCA acrescente corticoide.
+          (c) A fala diz SÓ corticoide (sem antibiótico) → "Colírio corticoide". NUNCA acrescente antibiótico.
+          "Associação (ATB + corticoide ocular)" só quando a fala diz os DOIS (fora da blefarite).
      3) GENÉRICO — quando NEM o nome, NEM um protocolo declarado, NEM a classe podem ser identificados,
         mas houve prescrição. Ex.: médico diz só "usa o colírio 3x/dia", fora de qualquer protocolo
         → "Medicação ocular prescrita".

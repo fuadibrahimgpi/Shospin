@@ -1529,13 +1529,15 @@ window.__shospMessageListener = (message, _sender, sendResponse) => {
           const tab = document.getElementById(tabId);
           if (tab) {
             tab.click();
-            await new Promise(r => setTimeout(r, 500));
-            
-            const btnTextoPadrao = document.querySelector('button[id^="texto_padrao-"]');
+            // Espera ativa (até 3s) em vez de 500ms fixos; 150ms de acomodação evitam
+            // pegar o botão de outra aba antes da troca de aba terminar.
+            await new Promise(r => setTimeout(r, 150));
+            const btnTextoPadrao = await waitForElement('button[id^="texto_padrao-"]', 3000);
             if (btnTextoPadrao) {
               btnTextoPadrao.click();
-              await new Promise(r => setTimeout(r, 300));
-              
+              await new Promise(r => setTimeout(r, 100));
+              await waitForElement(() => document.querySelector('.fr-dropdown-content a, .fr-dropdown-menu a'), 3000);
+
               const dropdownItems = document.querySelectorAll('.fr-dropdown-content a, .fr-dropdown-menu a');
               for (const item of dropdownItems) {
                 const text = item.textContent || '';

@@ -10,7 +10,6 @@
     "tabs"
   ],
   "host_permissions": [
-    "https://sistema.shosp.com.br/*",
     "https://*.shosp.com.br/*",
     "https://generativelanguage.googleapis.com/*"
   ],

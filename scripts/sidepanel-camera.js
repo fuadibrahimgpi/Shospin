@@ -53,7 +53,7 @@ async function checkCameraPermission() {
       }
     };
   } catch (e) {
-    console.log('[Camera] Não foi possível verificar permissão:', e);
+    dbg('[Camera] Não foi possível verificar permissão:', e);
     cameraStatusText.textContent = 'Clique para liberar câmera';
   }
 }
@@ -428,7 +428,7 @@ function showCaptureFailedMessage(reason) {
   banner.innerHTML = `
     <div style="background:#7c2d12;border:1px solid #dc2626;border-radius:8px;padding:12px 14px;margin:10px 0;color:#fef2f2">
       <div style="font-weight:700;font-size:13px;margin-bottom:6px">Captura inválida</div>
-      <div style="font-size:12px;opacity:0.95;margin-bottom:8px">${reason}</div>
+      <div style="font-size:12px;opacity:0.95;margin-bottom:8px">${String(reason).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}</div>
       <div style="font-size:11px;opacity:0.75;margin-bottom:10px">
         Dicas: aproxime a câmera até o ticket ocupar ~70% do enquadramento,
         evite reflexos no papel térmico e verifique se o ticket está plano.

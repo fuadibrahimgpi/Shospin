@@ -124,6 +124,7 @@ let _timeoutCallbackQueue = [];
 
 const ctx = vm.createContext({
   console,
+  dbg: () => {},
   document: {
     getElementById: (id) => ({
       id, offsetParent: true,

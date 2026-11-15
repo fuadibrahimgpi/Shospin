@@ -24,12 +24,15 @@
 // LOGGER
 // ============================================================================
 
+// Logs informativos desligados por padrão (evitam expor dados de paciente no console da página).
+const CONTENT_DEBUG = false;
+
 const contentLogger = {
-  info: (msg, data) => console.log(`[Content] ℹ️ ${msg}`, data ?? ''),
+  info: (msg, data) => CONTENT_DEBUG && console.log(`[Content] ℹ️ ${msg}`, data ?? ''),
   warn: (msg, data) => console.warn(`[Content] ⚠️ ${msg}`, data ?? ''),
   error: (msg, data) => console.error(`[Content] ❌ ${msg}`, data ?? ''),
-  success: (msg, data) => console.log(`[Content] ✅ ${msg}`, data ?? ''),
-  debug: (msg, data) => console.log(`[Content] 🔍 ${msg}`, data ?? '')
+  success: (msg, data) => CONTENT_DEBUG && console.log(`[Content] ✅ ${msg}`, data ?? ''),
+  debug: (msg, data) => CONTENT_DEBUG && console.log(`[Content] 🔍 ${msg}`, data ?? '')
 };
 
 // ============================================================================
@@ -1526,13 +1529,15 @@ window.__shospMessageListener = (message, _sender, sendResponse) => {
           const tab = document.getElementById(tabId);
           if (tab) {
             tab.click();
-            await new Promise(r => setTimeout(r, 500));
-            
-            const btnTextoPadrao = document.querySelector('button[id^="texto_padrao-"]');
+            // Espera ativa (até 3s) em vez de 500ms fixos; 150ms de acomodação evitam
+            // pegar o botão de outra aba antes da troca de aba terminar.
+            await new Promise(r => setTimeout(r, 150));
+            const btnTextoPadrao = await waitForElement('button[id^="texto_padrao-"]', 3000);
             if (btnTextoPadrao) {
               btnTextoPadrao.click();
-              await new Promise(r => setTimeout(r, 300));
-              
+              await new Promise(r => setTimeout(r, 100));
+              await waitForElement(() => document.querySelector('.fr-dropdown-content a, .fr-dropdown-menu a'), 3000);
+
               const dropdownItems = document.querySelectorAll('.fr-dropdown-content a, .fr-dropdown-menu a');
               for (const item of dropdownItems) {
                 const text = item.textContent || '';

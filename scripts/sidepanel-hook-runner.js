@@ -216,14 +216,14 @@ function _stopGateBlocks(hook, normalizedCurrent, matchedCmd) {
   // Válvula de escape: já houve despedida distinta bloqueada nesta sessão →
   // esta 2ª despedida libera o encerramento (provável falso bloqueio do gate)
   if (stopGateBlockCount >= 1) {
-    console.log(`[HookRunner] STOP "${matchedCmd}" liberado pela válvula de escape — 2ª despedida distinta sem captura completa (provável marcador de conduta/tratamento faltando)`);
+    dbg(`[HookRunner] STOP "${matchedCmd}" liberado pela válvula de escape — 2ª despedida distinta sem captura completa (provável marcador de conduta/tratamento faltando)`);
     return false;
   }
   stopGateBlockCount++;
 
   const faltando = [!captura.conduta && 'CONDUTA', !captura.tratamento && 'TRATAMENTO']
     .filter(Boolean).join(' e ');
-  console.log(`[HookRunner] STOP "${matchedCmd}" bloqueado — falta ditar ${faltando}; gravação continua (diga "encerrar consulta" para forçar)`);
+  dbg(`[HookRunner] STOP "${matchedCmd}" bloqueado — falta ditar ${faltando}; gravação continua (diga "encerrar consulta" para forçar)`);
   if (typeof statusText !== 'undefined' && statusText) {
     statusText.textContent = `⚠️ Falta ditar ${faltando} — dite ou diga "encerrar consulta"`;
     statusText.style.color = '#eab308';
@@ -275,7 +275,7 @@ function _maybeCancelAnchoredStop(normalizedCurrent) {
   stopCommandTimeout = null;
   const info = stopPendingInfo;
   stopPendingInfo = null;
-  console.log(`[HookRunner] STOP "${info.cmd}" cancelado — a fala continuou após a despedida curta`);
+  dbg(`[HookRunner] STOP "${info.cmd}" cancelado — a fala continuou após a despedida curta`);
   if (info.onCancel) {
     try { info.onCancel(HOOK_STATE); } catch (e) { /* ignorar */ }
   }
@@ -326,7 +326,7 @@ function _runStopCheck(normalizedFinal, normalizedCurrent, recentTextBuffer) {
     // Gate de captura: sem conduta+tratamento ditados, não encerra a consulta
     if (_stopGateBlocks(hook, normalizedCurrent, matchedCmd)) continue;
 
-    console.log(`[HookRunner] STOP matched — hook "${hook.id}", cmd: "${matchedCmd}"`);
+    dbg(`[HookRunner] STOP matched — hook "${hook.id}", cmd: "${matchedCmd}"`);
     let stopResult = null;
     if (hook.onMatch) {
       try { stopResult = hook.onMatch(normalizedFinal, HOOK_STATE); } catch (e) { /* ignorar */ }
@@ -429,7 +429,7 @@ function runHooks(normalizedFinal, normalizedCurrent, recentTextBuffer) {
     }
 
     if (hook.type === 'stop') {
-      console.log(`[HookRunner] STOP matched — hook "${hook.id}", cmd: "${matchedCmd}"`);
+      dbg(`[HookRunner] STOP matched — hook "${hook.id}", cmd: "${matchedCmd}"`);
       _scheduleStop(hook, matchedCmd);
       injectedOrStopped = true;
       break;

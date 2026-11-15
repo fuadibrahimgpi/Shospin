@@ -11,9 +11,18 @@ document.addEventListener('DOMContentLoaded', () => {
   // ── Carregar chave salva ──────────────────────────────────────────────
   async function loadSavedKey() {
     try {
-      const result = await chrome.storage.sync.get(['geminiApiKey']);
-      if (result.geminiApiKey) {
-        apiKeyInput.value = result.geminiApiKey;
+      let { geminiApiKey } = await chrome.storage.local.get(['geminiApiKey']);
+      if (!geminiApiKey) {
+        // Migração: chave antiga em storage.sync (replica para a conta Google) -> local.
+        const legacy = await chrome.storage.sync.get(['geminiApiKey']);
+        if (legacy.geminiApiKey) {
+          geminiApiKey = legacy.geminiApiKey;
+          await chrome.storage.local.set({ geminiApiKey });
+          await chrome.storage.sync.remove('geminiApiKey');
+        }
+      }
+      if (geminiApiKey) {
+        apiKeyInput.value = geminiApiKey;
         showStatus('✅ Chave API carregada do armazenamento.', 'success');
       } else {
         showStatus('ℹ️ Nenhuma chave configurada. Obtenha uma em aistudio.google.com/apikey e salve aqui.', 'error');
@@ -26,7 +35,8 @@ document.addEventListener('DOMContentLoaded', () => {
   // ── Salvar chave ──────────────────────────────────────────────────────
   async function saveApiKey(apiKey) {
     try {
-      await chrome.storage.sync.set({ geminiApiKey: apiKey });
+      await chrome.storage.local.set({ geminiApiKey: apiKey });
+      await chrome.storage.sync.remove('geminiApiKey');
       showStatus('✅ Chave API salva com sucesso!', 'success');
       return true;
     } catch (err) {
@@ -47,10 +57,10 @@ document.addEventListener('DOMContentLoaded', () => {
     testBtn.disabled = true;
 
     try {
-      const endpoint = `https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
+      const endpoint = GEMINI_API_ENDPOINT;
       const response = await fetch(endpoint, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
         body: JSON.stringify({
           contents: [{ parts: [{ text: 'Responda apenas: OK' }] }],
           generationConfig: { maxOutputTokens: 10 }

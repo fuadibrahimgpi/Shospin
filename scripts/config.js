@@ -57,7 +57,7 @@ document.addEventListener('DOMContentLoaded', () => {
     testBtn.disabled = true;
 
     try {
-      const endpoint = `https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent`;
+      const endpoint = GEMINI_API_ENDPOINT;
       const response = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },

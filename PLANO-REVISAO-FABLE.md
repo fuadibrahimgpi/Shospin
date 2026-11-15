@@ -55,3 +55,14 @@ Ordem recomendada: 1, 8, 2, 3, 4, 6, 5, 7. As etapas 5 e 7 por último, porque s
 
 - Testar no SHOSP real após as etapas 3, 5 e 7. Os testes automáticos não cobrem o site de verdade.
 - Manter a branch `perf/paralelizar-injecao` sincronizada, para não perder alterações.
+
+## 6. Andamento da reescrita
+
+**Feito (testes 152/152 e sintaxe OK):**
+- Etapa 1 (segurança): chave em `storage.local` com migração automática da chave antiga, cabeçalho `x-goog-api-key`, `innerHTML` trocado por `textContent`, banner da câmera com texto escapado, logs de depuração desligados por padrão.
+- Etapa 2 (parcial): modelo e endpoints do Gemini centralizados em `src/gemini-config.js`.
+- Etapa 3 (parcial): removida a permissão de host duplicada. A permissão `tabs` foi mantida porque o código lê a URL das abas.
+- Etapa 8 (parcial): README reescrito.
+
+**Não feito (precisa de teste no SHOSP real, por isso ficou para depois):**
+- Dividir arquivos grandes, trocar esperas fixas (`setTimeout`), terminar a migração do estado, extrair prompts, ESLint/Prettier e versão única.

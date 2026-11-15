@@ -2,8 +2,7 @@
  * API SERVICE v5.0 — Retry Exponencial + Rate Limiting
  */
 
-const GEMINI_API_ENDPOINT    = 'https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent';
-const GEMINI_API_ENDPOINT_BETA = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent';
+// GEMINI_API_ENDPOINT / GEMINI_API_ENDPOINT_BETA vêm de src/gemini-config.js
 
 const DEFAULT_GEMINI_CONFIG = {
   temperature: 0,

@@ -365,13 +365,88 @@
   // do pacote compressa + higiene + lubrificante (2026-09-15).
   const _INTENCAO_COLIRIO_BLEFARITE_RE = /mais\s+forte|desinflam|anti-?\s?inflamat|antibiotic|corticoid/;
 
+  /**
+   * Guard 2b0 (regra do médico, 2026-11-15): SEQUÊNCIA PADRÃO DA BLEFARITE.
+   *
+   * Toda vez que a fala traz, NESTA ORDEM, compressa(s) → higiene → pingar/usar "este colírio"
+   * com frequência de 3 vezes ao dia, o colírio é NECESSARIAMENTE Tobramicina + dexametasona
+   * (o médico não precisa nomeá-lo). É a injeção padrão da blefarite: o pacote inteiro entra
+   * no tratamento — compressa, higiene e `Tobramicina + dexametasona 3x/dia após higiene
+   * palpebral` — mesmo que o modelo tenha esquecido uma das linhas (o lastro é a própria
+   * sequência dita; ao contrário do protocolo 1.5, aqui a prescrição é confirmada pela fala).
+   *
+   * Limites: (1) o colírio da sequência não pode ser lubrificante/lágrima/hipotensor/etc.;
+   * (2) remédio NOMEADO na fala que não seja tobramicina/dexametasona vence (nível 1);
+   * (3) classe restrita ("só antibiótico", "sem corticoide") não é a sequência padrão.
+   * O texto de cada linha é padronizado depois por _guardBlefaritePadrao.
+   */
+  const _NAO_E_COLIRIO_DA_SEQUENCIA_RE = /lubrific|lagrima|hidrat|dilat|pressao|glaucoma|alergi/;
+  function _sequenciaPadraoBlefarite(rawText) {
+    const f = _normalizeForGuard(rawText);
+    const comp = f.search(/compressa/);
+    if (comp < 0) return false;
+    const resto1 = f.slice(comp);
+    const hig = resto1.search(/higiene|lav\w*\s+(?:\w+\s+){0,3}(?:cilio|palpebra|xampu|shampoo|sabonete)|xampu|shampoo|sabonete|\bgel\b|blephagel|hialurop/);
+    if (hig < 0) return false;
+    const resto2 = resto1.slice(hig);
+    const m = resto2.match(/(?:ping\w*|colirio|gotas?)\b[^.?!]{0,60}?\b(?:3|tres)\s*(?:x|vezes)\b|\b(?:3|tres)\s*(?:x|vezes)\b[^.?!]{0,40}?(?:ping\w*|colirio|gotas?)\b/);
+    if (!m) return false;
+    return !_NAO_E_COLIRIO_DA_SEQUENCIA_RE.test(m[0]);
+  }
+
+  function _guardBlefariteSequenciaPadrao(cloned, ctx, log) {
+    if (!cloned.dados) return;
+    if (!_sequenciaPadraoBlefarite(ctx.transcribedText)) return;
+    const Lexico = typeof globalThis !== 'undefined' ? globalThis.MedicamentosLexico : null;
+    const fala = _normalizeForGuard(ctx.transcribedText);
+    // Nível 1 vence: outro remédio NOMEADO na fala (que não seja o do protocolo) → não é a sequência.
+    if (Lexico) {
+      const outros = Lexico.encontrarMedicamentos(ctx.transcribedText)
+        .filter(a => !['lubrificante', 'ciclopegico'].includes(a.classe) && !/tobramicin|dexametason/.test(Lexico.normalizarLexico(a.principio)));
+      if (outros.length) return;
+    }
+    // Classe restrita ou negada não é a sequência padrão (regra das três situações).
+    const L = _listasDoLexico();
+    const atb = L.falaAntibiotico.test(fala), cort = L.falaCorticoide.test(fala);
+    const negou = /(?:sem|nao\s+(?:pode|usa|usar|quero|precisa(?:\s+de)?)|nada\s+de)\s+(?:\w+\s+){0,2}(?:corticoid|cortison|antibiotic)/.test(fala);
+    if (negou || (atb !== cort && (atb || cort))) return;
+
+    const atual = typeof cloned.dados.tratamento === 'string' ? cloned.dados.tratamento : '';
+    const linhas = atual.split('\n').map(l => l.trim()).filter(Boolean);
+    const tem = (re) => linhas.some(l => re.test(_normalizeForGuard(l)));
+    // Algum remédio de colírio já nomeado (que não seja o do protocolo): não mexe.
+    if (linhas.some(l => L.colirioNomeado.test(_normalizeForGuard(l)) && !/tobramicin\w*\s*\+\s*dexametason/.test(_normalizeForGuard(l)))) return;
+
+    const add = [];
+    if (!tem(/^(?:[-•*]\s*)?compressa/)) add.push('Compressa morna');
+    if (!tem(/^(?:[-•*]\s*)?higiene/)) add.push('Higiene palpebral');
+    const temTobra = tem(/^(?:[-•*]\s*)?tobramicina\s*\+\s*dexametasona/);
+    // Linha genérica de colírio (nível 2/3): vira o protocolo; sem linha de colírio: entra.
+    let novas = linhas;
+    if (!temTobra) {
+      let promovidas = 0;
+      novas = linhas.map(l => {
+        if (_NAO_E_COLIRIO_BLEFARITE_RE.test(l)) return l;
+        const m = l.match(_COLIRIO_GENERICO_RE);
+        if (!m) return l;
+        promovidas++;
+        return l.replace(m[1], _listasDoLexico().protocoloNome).trim();
+      });
+      if (!promovidas) add.push(_listasDoLexico().protocoloNome);
+    }
+    const final = novas.concat(add);
+    if (!add.length && final.join('\n') === linhas.join('\n')) return;
+    cloned.dados.tratamento = final.join('\n');
+    log.push('Sequência padrão da blefarite (compressa → higiene → colírio 3x/dia): pacote completo com Tobramicina + dexametasona');
+  }
+
   // Cuidado palpebral REALMENTE orientado: higiene/lavagem da pálpebra ou dos cílios (a palavra
   // "shampoo" ou "pálpebra" sozinha não basta: "caiu shampoo no olho da criança"). Calázio/terçol
   // sem a palavra blefarite não usam o pacote (revisão 2026-11-15).
   function _orientouCuidadoPalpebral(rawText) {
     const f = _normalizeForGuard(rawText);
     if (/calazio|tercol|hordeolo/.test(f) && !/blefarit|meibomit|disfuncao\s+de\s+meibom/.test(f)) return false;
-    if (/compressa/.test(f) && /xampu|shampoo|sabonete/.test(f)) return true;
+    if (/compressa/.test(f) && /xampu|shampoo|sabonete|higiene|blephagel|blefagel|hialurop|\bgel\b/.test(f)) return true;
     return /higiene\s+(?:\w+\s+){0,2}(?:palpebr|cilio)|lav\w*\s+(?:\w+\s+){0,3}(?:cilio|palpebra|bordo)|limp\w*\s+(?:\w+\s+){0,3}(?:cilio|palpebra|bordo)|lav\w*\s+(?:\w+\s+){0,3}(?:xampu|shampoo|sabonete)|(?:xampu|shampoo|sabonete|gel)\s+(?:\w+\s+){0,4}(?:cilio|palpebra)|(?:cilio|palpebra)\w*\s+(?:\w+\s+){0,4}(?:xampu|shampoo|sabonete)|higiene\s+palpebral|blefarit/.test(f);
   }
 
@@ -489,7 +564,7 @@
   function _guardBlefaritePadrao(cloned, ctx, log) {
     const tratamento = cloned.dados && cloned.dados.tratamento;
     if (!tratamento) return;
-    if (!_detectBlefariteEvidencia(ctx.transcribedText).qualquer) return;
+    if (!_detectBlefariteEvidencia(ctx.transcribedText).qualquer && !_sequenciaPadraoBlefarite(ctx.transcribedText)) return;
     if (!_orientouCuidadoPalpebral(ctx.transcribedText)) return;
     const fala = _normalizeForGuard(ctx.transcribedText || '');
 
@@ -2599,6 +2674,7 @@
       rodar('_guardColirioMantidoSemTratamento', () => _guardColirioMantidoSemTratamento(cloned, ctx, guardsApplied));
       // Depois do rebaixamento da "Associação": promove o colírio genérico da
       // blefarite ao protocolo declarado (Tobramicina + dexametasona).
+      rodar('_guardBlefariteSequenciaPadrao', () => _guardBlefariteSequenciaPadrao(cloned, ctx, guardsApplied));
       rodar('_guardColirioBlefariteProtocolo', () => _guardColirioBlefariteProtocolo(cloned, ctx, guardsApplied));
       // O inverso: a linha do protocolo que o modelo escreveu sem colírio na fala sai.
       rodar('_guardColirioBlefariteSemPrescricao', () => _guardColirioBlefariteSemPrescricao(cloned, ctx, guardsApplied));

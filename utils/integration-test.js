@@ -977,6 +977,41 @@ test('[OUTRA-4] retorno: medicação anterior sai de uso, mas não cria antecede
   expect(d.clonedAIResponse.dados.medicacoes_em_uso).toBe('Nega uso de medicações oculares');
 });
 
+test('[SEQ-1] compressas → higiene → "pinga este colírio 3x ao dia" = pacote com Tobramicina + dexametasona', () => {
+  const fala = 'blefarite. vai fazer compressas mornas, depois a higiene com xampu infantil, e pingar este colirio tres vezes ao dia';
+  // modelo devolveu só o genérico
+  const a = _decTrat(fala, 'Medicação ocular prescrita 3x/dia').clonedAIResponse.dados.tratamento;
+  expect(a).toContain('Tobramicina + dexametasona 3x/dia');
+  expect(a).toContain('Compressa morna por 2 min antes da higiene palpebral');
+  expect(a).toContain('Higiene palpebral com xampu infantil');
+  expect(a.includes('Medicação ocular prescrita')).toBe(false);
+  // modelo esqueceu o colírio e as linhas: o pacote inteiro entra
+  const b = _decTrat(fala, null).clonedAIResponse.dados.tratamento;
+  expect(b).toContain('Tobramicina + dexametasona 3x/dia após higiene palpebral');
+  expect(b).toContain('Compressa morna');
+  expect(b).toContain('Higiene palpebral com xampu infantil');
+});
+
+test('[SEQ-2] a sequência vale para gel (Blephagel/Hialurop)', () => {
+  const t = _decTrat('compressas mornas, higiene com o blephagel e pingar este colirio 3 vezes ao dia', null).clonedAIResponse.dados.tratamento;
+  expect(t).toContain('gel de higiene palpebral (Blephagel)');
+  expect(t).toContain('Tobramicina + dexametasona');
+});
+
+test('[SEQ-3] a sequência NÃO dispara com lubrificante, outro remédio nomeado ou fora de ordem', () => {
+  const casos = [
+    'compressas mornas, higiene com xampu e pingar o lubrificante tres vezes ao dia',
+    'compressas mornas, higiene com xampu e pingar o vigamox tres vezes ao dia',
+    'pingar este colirio tres vezes ao dia, depois a higiene e as compressas',
+    'compressas mornas e higiene com xampu, sem colirio nenhum',
+    'compressas mornas, higiene, e pingar este colirio de antibiotico tres vezes ao dia, sem corticoide',
+  ];
+  for (const f of casos) {
+    const t = String(_decTrat(f, null).clonedAIResponse.dados.tratamento || '');
+    expect([f, /Tobramicina \+ dexametasona/.test(t)]).toEqual([f, false]);
+  }
+});
+
 test('[REV-I5] "o colírio continua normal" não sustenta a Tobramicina inventada', () => {
   const t = _decTrat('blefarite, faz compressa e lava os cilios com shampoo. o colirio continua normal', 'Compressa morna\nHigiene palpebral\nTobramicina + dexametasona')
     .clonedAIResponse.dados.tratamento;

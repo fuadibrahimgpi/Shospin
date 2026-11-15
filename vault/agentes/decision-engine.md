@@ -14,7 +14,7 @@ Guards pós-LLM centralizados (v6): recebem a resposta JSON do [Agente de entrev
 
 ## Passos do pipeline (ordem de execução)
 
-Lista tirada do código em 2026-11-11. Inclui a normalização de tipos, os guards, a reconciliação das flags e os avisos.
+Lista conferida com o código em 2026-11-15 (o teste `[VAULT-3]` compara nome e ordem a cada execução). Inclui a normalização de tipos, os guards, a reconciliação das flags e os avisos. O texto abaixo cita cada passo pelo **nome**, não pelo número: o número muda sempre que um passo entra na lista.
 
 1. `_normalizarTiposDados`
 2. `_guardTranscricaoIncoerente`
@@ -51,7 +51,7 @@ Lista tirada do código em 2026-11-11. Inclui a normalização de tipos, os guar
 
 ## Modo sombra dos itens de medicação (2026-11-11)
 
-O passo 25 não corrige nada. O modelo devolve, ao lado do texto de `tratamento`, uma lista `medicacoes_itens` (um item por colírio, pomada ou lubrificante: nome, nível, novo/mantido/suspenso, posologia e o trecho da fala que o sustenta). O passo valida os itens com o [Agente de medicamentos](medicamentos-agent.md) e compara, **por nome**, com o `tratamento` que os guards produziram. O resultado sai só no console: `[sombra:itens]` e a linha `[Med]` (`itens(sombra): CONCORDA` ou `DIVERGE`, com item sem linha, linha sem item e nome diferente).
+O passo `_sombraItensMedicamentos` não corrige nada. O modelo devolve, ao lado do texto de `tratamento`, uma lista `medicacoes_itens` (um item por colírio, pomada ou lubrificante: nome, nível, novo/mantido/suspenso, posologia e o trecho da fala que o sustenta). O passo valida os itens com o [Agente de medicamentos](medicamentos-agent.md) e compara, **por nome**, com o `tratamento` que os guards produziram. O resultado sai só no console: `[sombra:itens]` e a linha `[Med]` (`itens(sombra): CONCORDA` ou `DIVERGE`, com item sem linha, linha sem item e nome diferente).
 
 - **A lista fica no nível de cima da resposta, fora de `dados`.** Lista dentro de `dados` seria "formato inesperado" e seguraria a injeção.
 - **O passo nunca lança erro nem segura a injeção.** `rodar()` conta exceção como guard que falhou; por isso o corpo tem o próprio `try/catch`. Agente ausente, campo ausente ou formato estranho só viram uma linha de log.
@@ -62,11 +62,11 @@ Para que serve: medir, em consultas reais, quantas vezes o item estruturado disc
 
 ## Texto padrão do tratamento (2026-11-12)
 
-Regra do médico: quando **nenhum medicamento foi mencionado na conduta**, o campo tratamento recebe "Sem prescrição de medicação". O painel escreve o texto; um ponto só decide (`tratamentoPadrao`, em `scripts/sidepanel-constants.js`), usado pela tela (primeira consulta e retorno) e pela injeção.
+Regra do médico: quando **nenhum medicamento foi mencionado na conduta**, o campo tratamento recebe "Nega uso de tratamentos". O painel escreve o texto; um ponto só decide (`tratamentoPadrao`, em `scripts/sidepanel-constants.js`), usado pela tela (primeira consulta e retorno) e pela injeção.
 
-O passo 24 (`_guardTratamentoVazioComMedicacao`) trata a exceção: o tratamento ficou vazio, mas a fala **prescreve ou mantém** uma medicação ("vou passar um colírio", "continua com o colírio da pressão", "pode usar um lubrificante"). Escrever "Sem prescrição" aí seria o oposto da fala. O campo fica vazio, o médico recebe um aviso para preencher, e a flag `suprimirTextoPadraoTratamento` (no nível de cima da resposta, fora de `dados`) impede que a injeção reponha o texto.
+O passo `_guardTratamentoVazioComMedicacao` trata a exceção: o tratamento ficou vazio, mas a fala **prescreve ou mantém** uma medicação ("vou passar um colírio", "continua com o colírio da pressão", "pode usar um lubrificante"). Escrever o texto padrão aí seria o oposto da fala. O campo fica vazio, o médico recebe um aviso para preencher, e a flag `suprimirTextoPadraoTratamento` (no nível de cima da resposta, fora de `dados`) impede que a injeção reponha o texto.
 
-- **Esta exceção é leitura nossa da regra.** A instrução dizia só "quando não houver medicamento, escreva…"; a exceção é a metade que falta, e deve ser conferida pelo médico.
+- **A exceção foi confirmada pelo médico.** A instrução original dizia só "quando não houver medicamento, escreva…"; a exceção (fala prescreve ou mantém, campo vazio → fica vazio e avisa) é a metade que faltava.
 - **O que conta:** remédio do léxico ou palavra genérica (colírio, pomada, gota, remédio…) perto de um verbo de prescrição ou manutenção. **O que não conta:** histórico ("o senhor usa o Xalatan"), negação ("não vou passar colírio"), remédio negado ou suspenso, e colírio de exame (dilatar, anestesiar, corar). Os últimos são frequentes e voltam junto na fase 2 da dilatação.
 - **Erro para o lado seguro:** falso positivo = campo vazio com aviso (o médico escreve); falso negativo = o comportamento de antes. Nenhum inventa prescrição.
 - **Tratamento com só compressa, higiene ou ômega 3 não é vazio:** nada é acrescentado nem suprimido.
@@ -75,13 +75,32 @@ O passo 24 (`_guardTratamentoVazioComMedicacao`) trata a exceção: o tratamento
 
 Testes `[TRAT-1]` a `[TRAT-9]`.
 
+## Tratamento e medicamentos: o que cada passo faz (2026-11-15)
+
+As regras, com exemplos, estão em `skills/user/conduta-tratamento-oftalmologia/TRATAMENTO.md`. Aqui fica só o mapa passo → regra.
+
+| Passo | Regra do médico que ele garante |
+|---|---|
+| `_guardAssociacaoATB` | Antibiótico, corticoide ou associação são três situações: a linha de associação só fica se a fala disse os dois; senão vira a classe dita |
+| `_guardClasseAntibioticoSemFala` | Classe que a fala não disse vira "Medicação ocular prescrita" |
+| `_guardMedicacaoDeOutraPessoa` | Remédio de outra pessoa não entra; remédio oftalmológico anterior vai para os antecedentes ("Uso prévio de …") |
+| `_guardMedicamentoNomeadoNaFala` | Nome dito vence a classe; associação ou marca não pronunciada é corrigida |
+| `_guardColirioMantidoSemTratamento` | Colírio mantido é tratamento |
+| `_guardBlefariteSequenciaPadrao` | Compressas → higiene → colírio 3x/dia, nesta ordem: pacote completo com Tobramicina + dexametasona |
+| `_guardColirioBlefariteProtocolo` | Na blefarite, colírio sem nome vira Tobramicina + dexametasona (promove, nunca cria) |
+| `_guardColirioBlefariteSemPrescricao` | Tobramicina + dexametasona sem colírio na fala é removida, com aviso |
+| `_guardCondutaContaminada` | Compressa, higiene, lubrificante e ômega 3 saem da conduta e vão para o tratamento |
+| `_guardLubrificanteGenerico` | Lubrificante em dois momentos: marca sai do tratamento; "lubrificante" dito pelo médico vira "Carmelose sódica ou hialuronato de sódio" |
+| `_guardBlefaritePadrao` | Texto padrão de cada item da blefarite que o médico orientou (fonte única dos textos e das frequências: `_BLEF_PAD`, no próprio arquivo). As frequências ainda não foram confirmadas pelo médico |
+| `_guardTratamentoVazioComMedicacao` | Sem medicamento mencionado, "Nega uso de tratamentos"; fala que prescreve com campo vazio fica vazio e avisa |
+
 ## Remédio em uso não nomeia colírio novo (2026-11-11)
 
-O passo 8 (`_guardMedicamentoNomeadoNaFala`) troca classe ou genérico pelo nome dito na fala. Ele trocava também quando o nome era só o do colírio que o paciente já usava e a linha do tratamento era um colírio novo, sem nome: "uso o Xalatan… vou passar um colírio 4x/dia por 7 dias" virava "Latanoprosta (Xalatan) 4x/dia por 7 dias", e o colírio da blefarite de quem usa timolol virava "Timolol 3x/dia".
+O passo `_guardMedicamentoNomeadoNaFala` troca classe ou genérico pelo nome dito na fala. Ele trocava também quando o nome era só o do colírio que o paciente já usava e a linha do tratamento era um colírio novo, sem nome: "uso o Xalatan… vou passar um colírio 4x/dia por 7 dias" virava "Latanoprosta (Xalatan) 4x/dia por 7 dias", e o colírio da blefarite de quem usa timolol virava "Timolol 3x/dia".
 
 - **No tratamento, remédio que já consta em `medicacoes_em_uso` só nomeia a linha idêntica** à de `medicacoes_em_uso` (a classe repetida nos dois campos). Linha diferente fica como o modelo escreveu.
-- **O protocolo da blefarite volta a alcançar a linha**, porque ela chega genérica ao passo 10.
-- **O passo 14 avisa o médico** quando a linha termina sem nome por esse motivo. Só avisa.
+- **O protocolo da blefarite volta a alcançar a linha**, porque ela chega genérica ao passo `_guardColirioBlefariteProtocolo`.
+- **O passo `_avisoTratamentoSemNomeRemedioEmUso` avisa o médico** quando a linha termina sem nome por esse motivo. Só avisa.
 
 Testes `[MED-USO-1]` a `[MED-USO-5]`.
 
@@ -96,7 +115,7 @@ Antes, os guards rodavam em fila sem isolamento: uma exceção em qualquer um de
 
 Testes `[DE-ABERTO-1]` a `[DE-ABERTO-9]`.
 
-O histórico de cada falha que gerou um guard está nas memórias relacionadas abaixo e na [linha do tempo](../historico/linha-do-tempo.md). O primeiro "modo sombra" de medicamentos (passo 24) usa só o [Léxico](../modulos/medicamentos-lexico.md); o segundo (passo 25) usa também o [Agente de medicamentos](medicamentos-agent.md), em sombra desde 2026-11-11.
+O histórico de cada falha que gerou um guard está nas memórias relacionadas abaixo e na [linha do tempo](../historico/linha-do-tempo.md). O primeiro "modo sombra" de medicamentos (`_sombraMedicamentos`) usa só o [Léxico](../modulos/medicamentos-lexico.md); o segundo (`_sombraItensMedicamentos`) usa também o [Agente de medicamentos](medicamentos-agent.md), em sombra desde 2026-11-11.
 
 ## Memórias relacionadas
 

@@ -821,7 +821,7 @@ async function injectAll(force = false) {
     // displayAudioResults) — o prontuário não fica com tratamento em branco. Quem decide é
     // tratamentoPadrao(audioData), e NÃO só o valor do campo: se a fala prescreve ou mantém uma
     // medicação e o tratamento ficou vazio, o painel mostra o campo vazio com aviso, e injetar
-    // não pode devolver o texto "Sem prescrição" (retorna null e o campo não é escrito).
+    // não pode devolver o texto padrão (retorna null e o campo não é escrito).
     // Na dilatação (fase 1) permanece null: pertence ao pós-dilatação.
     const _trat = (v) => _dilatacao ? null : (v || tratamentoPadrao(audioData));
     if (tipo === 'conclusao') {

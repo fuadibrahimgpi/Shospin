@@ -1280,12 +1280,13 @@
    * prontuário registra "Carmelose sódica ou hialuronato de sódio" — são os dois
    * genéricos equivalentes que ele prescreve, escolha dele, não inferência.
    *
-   * Limites deliberados:
+   * Limites deliberados (revistos em 2026-11-15, regra dos DOIS MOMENTOS do lubrificante):
    *  1) Só RENOMEIA linha que o modelo já escreveu ("Lubrificante ocular …"); nunca cria
    *     prescrição (a REGRA ANTI-INVENÇÃO governa o *se*, este guard governa o *nome*).
-   *  2) Marca dita (Systane…) ou princípio dito (hialuronato, carmelose) vence: a fala
-   *     já nomeou o produto, então o guard não toca em nada.
-   *  3) Marca entre parênteses na própria linha também o inibe.
+   *  2) Princípio dito (hialuronato, carmelose) vence o registro padrão. Marca dita NÃO
+   *     impede mais: o médico não prescreve nome comercial.
+   *  3) Marca de lubrificante entre parênteses na linha do tratamento é REMOVIDA (momento 2);
+   *     ela continua valendo em medicacoes_em_uso (momento 1, o que o paciente diz usar).
    *  4) Exige a palavra "lubrificante(s)" na fala — "lágrima artificial" não dispara.
    * A posologia da linha ("AO ao longo do dia", "6/6h") sobrevive intacta.
    *
@@ -2439,7 +2440,7 @@
    * mencionado na conduta, o campo tratamento recebe "Nega uso de tratamentos". Quem
    * escreve o texto é o painel (`tratamentoPadrao`, em sidepanel-constants.js); este guard
    * decide só a EXCEÇÃO: o tratamento ficou vazio, mas a fala PRESCREVE ou MANTÉM uma
-   * medicação. Escrever "Sem prescrição" aí seria o oposto da fala; o campo fica vazio e o
+   * medicação. Escrever o texto padrão aí seria o oposto da fala; o campo fica vazio e o
    * médico é avisado para preencher (flag `suprimirTextoPadraoTratamento`, no nível de cima
    * da resposta: dentro de `dados` seria "formato inesperado" e seguraria a injeção).
    *
@@ -2733,7 +2734,7 @@
       // Reordenar antes deixaria a reescrita pousando na ordem antiga.
       rodar('_ordenaOlhosODPrimeiro', () => _ordenaOlhosODPrimeiro(cloned, guardsApplied));
       // Depois de TODO guard que pode esvaziar o tratamento (2c remove linha; dilatação zera):
-      // tratamento vazio + medicação prescrita/mantida na fala = o painel não escreve "Sem prescrição".
+      // tratamento vazio + medicação prescrita/mantida na fala = o painel não escreve o texto padrão.
       rodar('_guardTratamentoVazioComMedicacao', () => _guardTratamentoVazioComMedicacao(cloned, ctx, guardsApplied));
       rodar('_sombraMedicamentos', () => _sombraMedicamentos(cloned, ctx, guardsApplied));
       // Mede os itens estruturados do modelo contra o tratamento final. Nunca lança nem altera dado.

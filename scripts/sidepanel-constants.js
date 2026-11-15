@@ -271,9 +271,10 @@ const FUNDOSCOPIA_NORMAL = 'FUNDOSCOPIA INDIRETA: AO retina aplicada, mácula em
 // inflamação da margem, alinhado aos exemplos do prompt e das skills.
 const BIOMICROSCOPIA_BLEFARITE = 'AO: hiperemia e espessamento da margem palpebral, telangiectasias e disfunção de glândulas de meibômio; córnea transparente, câmara anterior formada, pupila regular e reagente, cristalino transparente';
 
-// Conduta e tratamento padrão para blefarite (auto-preenchidos quando injectBlefarite = true)
-const BLEFARITE_CONDUTA_PADRAO = 'Compressa morna por 2 min antes da higiene palpebral — 2x/dia\nHigiene palpebral com shampoo infantil (espuma na base dos cílios, ~20x, enxaguar) — 3x/dia';
-const BLEFARITE_TRATAMENTO_PADRAO = 'Tobramicina + dexametasona 3x/dia após higiene palpebral\nCarmelose sódica ou hialuronato de sódio em cada olho ao longo do dia\nÔmega 3 (EPA+DHA) 1000 mg — 1 comprimido no almoço e 1 no jantar por 30 dias';
+// Os textos padrão do TRATAMENTO da blefarite (compressa, higiene, colírio, lubrificante, ômega 3)
+// não ficam aqui: a fonte única é `_BLEF_PAD`, em src/DecisionEngine.js (_guardBlefaritePadrao).
+// As constantes BLEFARITE_CONDUTA_PADRAO e BLEFARITE_TRATAMENTO_PADRAO, sem uso desde 2026-08,
+// foram removidas em 2026-11-15 (a primeira ainda punha compressa e higiene na conduta).
 
 // Texto padrão do campo TRATAMENTO (regra do médico, 2026-11-12): quando nenhum medicamento foi
 // mencionado na conduta, o campo recebe "Nega uso de tratamentos". UM só lugar decide, e os três
@@ -282,7 +283,7 @@ const BLEFARITE_TRATAMENTO_PADRAO = 'Tobramicina + dexametasona 3x/dia após hig
 // na hora de injetar. Devolve null quando o texto NÃO deve ser escrito:
 //   • dilatação (fase 1): o tratamento pertence ao pós-dilatação;
 //   • `suprimirTextoPadraoTratamento` (DecisionEngine): o tratamento ficou vazio, mas a fala
-//     prescreve ou mantém uma medicação — "Sem prescrição" seria o oposto da fala; o médico foi avisado.
+//     prescreve ou mantém uma medicação — "Nega uso de tratamentos" seria o oposto da fala; o médico foi avisado.
 const TEXTO_SEM_PRESCRICAO = 'Nega uso de tratamentos';
 function tratamentoPadrao(data) {
   if (!data || data.dilatacaoDetectada || data.suprimirTextoPadraoTratamento) return null;

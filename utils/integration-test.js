@@ -1196,7 +1196,7 @@ test('[DE-PROT-5] Lubrificante e demais linhas não-colírio nunca são promovid
 
 test('[DE-PROT-7] A posologia canônica ("após higiene palpebral") não impede a promoção', () => {
   // A exclusão de linhas não-colírio é ANCORADA no início: "após higiene palpebral" e
-  // "após a compressa" são a posologia do PRÓPRIO colírio (ver BLEFARITE_TRATAMENTO_PADRAO).
+  // "após a compressa" são a posologia do PRÓPRIO colírio (ver _BLEF_PAD, em src/DecisionEngine.js).
   const raw = {
     tipo_consulta: 'primeira_consulta',
     dados: {

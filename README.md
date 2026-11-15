@@ -23,7 +23,9 @@ Extensão Chrome (Manifest V3, JavaScript puro, sem build) que automatiza o pron
 
 ## Desenvolvimento
 ```bash
-npm run check   # sintaxe de todos os .js
+npm install     # uma vez (instala o ESLint)
+npm run check   # sintaxe de todos os .js + versão do manifest = package.json
+npm run lint    # ESLint (0 erros; avisos de variáveis não usadas)
 npm test        # integração + hooks
 ```
 

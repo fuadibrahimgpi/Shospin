@@ -66,3 +66,5 @@ Ordem recomendada: 1, 8, 2, 3, 4, 6, 5, 7. As etapas 5 e 7 por último, porque s
 
 **Não feito (precisa de teste no SHOSP real, por isso ficou para depois):**
 - Dividir arquivos grandes, trocar esperas fixas (`setTimeout`), terminar a migração do estado, extrair prompts, ESLint/Prettier e versão única.
+
+**Etapa 8 concluída (qualidade):** ESLint configurado (`npm run lint`: 0 erros, 135 avisos de variáveis não usadas), conferência de versão entre `manifest.json` e `package.json` no `npm run check`. Prettier não foi adotado porque reformataria todos os arquivos de uma vez e esconderia mudanças reais.

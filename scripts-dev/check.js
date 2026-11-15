@@ -48,6 +48,14 @@ for (const sub of TARGET_DIRS) {
   }
 }
 
+// Versão única: manifest.json e package.json devem coincidir.
+const manifestVersion = JSON.parse(fs.readFileSync(path.join(ROOT, 'manifest.json'), 'utf8')).version;
+const packageVersion = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')).version;
+if (manifestVersion !== packageVersion) {
+  failed++;
+  console.error(`FAIL  versões divergentes: manifest ${manifestVersion} != package ${packageVersion}`);
+}
+
 console.log(`\n${total - failed}/${total} arquivos OK`);
 if (failed > 0) {
   console.error(`${failed} arquivo(s) com erro de sintaxe`);

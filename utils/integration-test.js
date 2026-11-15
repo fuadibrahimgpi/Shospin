@@ -229,6 +229,19 @@ function readSrcNormalized(...segments) {
   return fs.readFileSync(p, 'utf8').replace(/\r\n/g, '\n');
 }
 
+// 2026-11-15 — uma skill pode dividir as REGRAS em mais de um arquivo da própria pasta (a de
+// conduta tem SKILL.md para a conduta e TRATAMENTO.md para os medicamentos). Os testes de
+// sincronia leem os arquivos de regra juntos. HISTORICO.md fica de fora: é registro datado,
+// não regra vigente, e pode citar o que já saiu do código.
+const ARQUIVOS_DE_REGRA_DA_SKILL = ['SKILL.md', 'TRATAMENTO.md'];
+function readSkillCompleta(nome) {
+  const dir = require('path').join(__dirname, '..', 'skills', 'user', nome);
+  return ARQUIVOS_DE_REGRA_DA_SKILL
+    .filter(f => fs.existsSync(require('path').join(dir, f)))
+    .map(f => readSrcNormalized('skills', 'user', nome, f))
+    .join('\n');
+}
+
 const contentJsSource = readSrcNormalized('src', 'content.js');
 
 test('[C4] Comentário "// Biomicroscopia" não aparece duplicado consecutivamente', () => {
@@ -2318,7 +2331,7 @@ test('[MED-USO-5] linha repetida nos dois campos é o mesmo remédio: os dois ga
 
 test('[MED-USO-6] prompt e skill dizem que o colírio em uso não empresta o nome ao colírio novo', () => {
   expect(/JÁ USA não\s+empresta o nome a um colírio NOVO/.test(geminiJsSource)).toBe(true);
-  const skill = readSrcNormalized('skills', 'user', 'conduta-tratamento-oftalmologia', 'SKILL.md');
+  const skill = readSkillCompleta('conduta-tratamento-oftalmologia');
   expect(skill.includes('O nome do colírio que o paciente JÁ USA não é o nome do colírio novo')).toBe(true);
 });
 
@@ -6381,7 +6394,7 @@ test('[REPROC-4] sala de espera dirigida por storage.onChanged (uma fonte)', () 
 // das regras críticas existem em AMBOS os arquivos.
 // ──────────────────────────────────────────────────────────────────────────────
 
-const condutaSkillSource = readSrcNormalized('skills', 'user', 'conduta-tratamento-oftalmologia', 'SKILL.md');
+const condutaSkillSource = readSkillCompleta('conduta-tratamento-oftalmologia');
 
 // Cada entrada: [id do teste, frase-âncora que deve existir nos dois arquivos]
 const SKILL_PROMPT_ANCHORS = [
@@ -6539,7 +6552,7 @@ test('[SKILL-SYNC-REFS] tudo o que as skills citam existe: arquivos, guards, fun
 
   const faltando = [];
   for (const s of skills) {
-    const txt = fsMod.readFileSync(pathMod.join(skillsDir, s, 'SKILL.md'), 'utf8');
+    const txt = readSkillCompleta(s);
     for (const c of new Set([...txt.matchAll(/`((?:src|config|scripts|utils|vault|skills)\/[A-Za-z0-9_./-]*\.(?:js|md|json|html|css))`/g)].map(m => m[1]))) {
       if (!fsMod.existsSync(pathMod.join(raiz, c))) faltando.push(`${s}: arquivo ${c}`);
     }
@@ -6563,7 +6576,7 @@ test('[SKILL-SYNC-REFS] o detector enxerga uma referência morta (regressão do 
 });
 
 test('[SKILL-SYNC] regras de 2026-11-10/12 estão na skill E no código (texto padrão, guard 5c, verificador, resgate de S.E.)', () => {
-  const skill = (nome) => readSrcNormalized('skills', 'user', nome, 'SKILL.md');
+  const skill = (nome) => readSkillCompleta(nome);
   const conduta = skill('conduta-tratamento-oftalmologia');
   const de = readSrcNormalized('src', 'DecisionEngine.js');
   // texto padrão do tratamento

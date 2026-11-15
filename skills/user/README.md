@@ -30,13 +30,14 @@ Editar uma skill **não muda** o comportamento da extensão.
 O que não deve conter:
 
 - Cópia de listas inteiras do código (gatilhos, léxico). Use exemplos e aponte o arquivo.
-- Histórico longo de erros. Ele vai para `vault/memorias/`, com um link curto na skill.
+- Histórico longo de erros. Ele vai para um `HISTORICO.md` na pasta da skill (ou para `vault/memorias/`), com um link curto na skill. O `SKILL.md` traz só a regra vigente.
+- Texto que já tem fonte única no código (textos-padrão, frequências, produtos, nomes de remédio, a redação literal de uma regra do prompt). Cite o resultado uma vez, na skill dona do assunto, e aponte a fonte; as outras skills remetem a ela.
 
 ## Testes de sincronia
 
 | Skill | Teste |
 |---|---|
-| `conduta-tratamento-oftalmologia` | `SKILL_PROMPT_ANCHORS` |
+| `conduta-tratamento-oftalmologia` (`SKILL.md` + `TRATAMENTO.md`) | `SKILL_PROMPT_ANCHORS` |
 | `transcricao-consulta-oftalmologia` | `SKILL_PROMPT_ANCHORS_ENTREVISTA` |
 | `biomicroscopia-oftalmologia` | `SKILL_PROMPT_ANCHORS_BIOMICRO` |
 | `fundoscopia-oftalmologia` | verificação pontual + `[SKILL-SYNC-AUTORIDADE]` |
@@ -45,6 +46,18 @@ O que não deve conter:
 | `ocr-topcon-oftalmologia` | `SKILL_PROMPT_ANCHORS_OCR` |
 
 Toda skill clínica abre com a seção "Onde isso REALMENTE roda (autoridade)", e um teste confere que ela existe e que não cita número de linha.
+
+## Skill com mais de um arquivo
+
+Uma skill pode dividir as regras em mais de um arquivo da própria pasta. Hoje só a de conduta faz isso:
+
+| Arquivo | Conteúdo |
+|---|---|
+| `conduta-tratamento-oftalmologia/SKILL.md` | campo `conduta` (óculos, retornos, exames, orientações) |
+| `conduta-tratamento-oftalmologia/TRATAMENTO.md` | campo `tratamento` e nomes de remédio. É o **único** lugar das skills que descreve o tratamento da blefarite, o lubrificante, a hierarquia de nomeação e o texto `Nega uso de tratamentos`; as demais skills remetem a ele |
+| `conduta-tratamento-oftalmologia/HISTORICO.md` | registro datado de erros e decisões |
+
+Os testes de sincronia leem `SKILL.md` e `TRATAMENTO.md` juntos (`ARQUIVOS_DE_REGRA_DA_SKILL`, em `utils/integration-test.js`). Ao reenviar a skill ao claude.ai, envie a pasta inteira.
 
 ## Revisão final (todas as skills)
 

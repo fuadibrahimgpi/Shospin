@@ -10,7 +10,7 @@ aliases: ["conduta-tratamento-oftalmologia"]
 
 **Skill** · arquivo-fonte: `skills/user/conduta-tratamento-oftalmologia/SKILL.md`
 
-Skill do projeto (fonte de verdade das regras clínicas deste domínio), em `skills/user/conduta-tratamento-oftalmologia/SKILL.md` (805 linhas).
+Skill do projeto que documenta as regras clínicas deste domínio (a autoridade é o código), em `skills/user/conduta-tratamento-oftalmologia/`. Desde 2026-11-15 a pasta tem três arquivos: `SKILL.md` (campo conduta: óculos, retornos, exames, orientações), `TRATAMENTO.md` (campo tratamento e nomes de remédio: nomeação, antibiótico × corticoide, lubrificante, blefarite, medicação de outra pessoa, tratamento vazio) e `HISTORICO.md` (registro datado de erros e decisões).
 
 > Extrai, normaliza e valida o campo conduta em consultas oftalmológicas. Use quando o usuário apresentar transcrição de consulta, resumo clínico ou saída estruturada e precisar separar conduta de tratamento, registrar retornos, encaminhamentos, prescrição de óculos, solicitação de exames, orientações verbais, suspensão de medicação e descartar logística operacional. Também use para evitar expressões proibidas como atualização de grau e para marcar revisão manual quando a conduta estiver ambígua.
 

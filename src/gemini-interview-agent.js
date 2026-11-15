@@ -681,6 +681,13 @@ CAMPOS:
     ❌ ERRADO: retorno = "Dificuldade para leitura há ~2 anos. Nega dor, coceira ou ardência."
     ✅ CERTO: retorno = "Dificuldade para leitura há ~2 anos."
 - medicacoes_em_uso: APENAS medicamentos OFTALMOLÓGICOS que o paciente já usava antes desta consulta
+  ⛔ MEDICAÇÃO DE OUTRA PESSOA NUNCA ENTRA (regra do médico, 2026-11-15): remédio que é de mãe, pai,
+     marido, filho, amigo etc. ("minha mãe pinga Xalatan") não vai em medicacoes_em_uso, nem em
+     tratamento, nem em lugar nenhum da consulta. A DOENÇA de um familiar continua indo em
+     antecedentes_familiares ("Mãe com glaucoma"), sem o remédio.
+  ★ MEDICAÇÃO ANTERIOR (já abandonada): só se for OFTALMOLÓGICA, e vai em antecedentes_oftalmologicos
+     ("Uso prévio de tobramicina (Tobrex)"), NUNCA em medicacoes_em_uso nem em tratamento. Remédio
+     anterior NÃO oftalmológico (oral, sistêmico) não é registrado.
   * Inclui: colírios, pomadas oculares, gel ocular — somente uso ocular
   * FONTES — capture de qualquer uma destas situações:
     a) Paciente relata espontaneamente: "eu uso Xalatan todo dia"

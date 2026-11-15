@@ -940,6 +940,43 @@ test('[REV-I4] classe de colírio sem apoio na fala é rebaixada (corticoide, an
   expect(_decTrat('colirio para a pressao uma vez a noite', 'Colírio hipotensor ocular 1x/noite').clonedAIResponse.dados.tratamento).toBe('Colírio hipotensor ocular 1x/noite');
 });
 
+test('[OUTRA-1] medicação de outra pessoa não entra em uso nem em tratamento', () => {
+  const d = _decTrat('minha mae pinga xalatan todo dia. o senhor vem por causa de coceira, vou passar um colirio de lubrificante',
+    'Latanoprosta (Xalatan)\nLubrificante ocular', { medicacoes_em_uso: 'Latanoprosta (Xalatan) 1x/dia' });
+  const dados = d.clonedAIResponse.dados;
+  expect(dados.medicacoes_em_uso).toBe('Nega uso de medicações oculares');
+  expect(String(dados.tratamento).includes('Latanoprosta')).toBe(false);
+  expect(String(dados.tratamento).includes('Carmelose') || String(dados.tratamento).includes('ubrificante')).toBe(true);
+});
+
+test('[OUTRA-2] medicação ANTERIOR oftalmológica vai para antecedentes_oftalmologicos', () => {
+  const d = _decTrat('ano passado usei tobrex numa conjuntivite. hoje vim pelo grau, vou pedir exames',
+    null, { medicacoes_em_uso: 'Tobramicina (Tobrex)', antecedentes_oftalmologicos: null });
+  const dados = d.clonedAIResponse.dados;
+  expect(dados.medicacoes_em_uso).toBe('Nega uso de medicações oculares');
+  expect(dados.antecedentes_oftalmologicos).toBe('Uso prévio de Tobramicina (Tobrex)');
+});
+
+test('[OUTRA-3] uso atual continua intacto (inclusive "eu uso" depois de citar a mãe)', () => {
+  const d = _decTrat('minha mae me trouxe, eu uso xalatan todo dia a noite', null,
+    { medicacoes_em_uso: 'Latanoprosta (Xalatan) 1x/noite', antecedentes_oftalmologicos: null });
+  expect(d.clonedAIResponse.dados.medicacoes_em_uso).toBe('Latanoprosta (Xalatan) 1x/noite');
+  expect(d.clonedAIResponse.dados.antecedentes_oftalmologicos).toBe(null);
+  // usava no passado e continua: não é "anterior"
+  const e = _decTrat('a senhora usava bimato a prostata com timol ela precisa continuar usando colirio uma vez por dia', null,
+    { medicacoes_em_uso: 'Colírio hipotensor ocular 1x/dia' });
+  expect(e.clonedAIResponse.dados.medicacoes_em_uso.includes('Nega')).toBe(false);
+});
+
+test('[OUTRA-4] retorno: medicação anterior sai de uso, mas não cria antecedente', () => {
+  const d = DecisionEngine.buildDecision({
+    tipo_consulta: 'retorno',
+    dados: { retorno: 'Melhora', medicacoes_em_uso: 'Tobramicina (Tobrex)', tratamento: null, conduta: 'Retorno 1 mes' },
+  }, { transcribedText: 'ja usei tobrex ha anos atras, melhorou', hookFlags: {} });
+  expect(d.clonedAIResponse.dados.antecedentes_oftalmologicos).toBe(undefined);
+  expect(d.clonedAIResponse.dados.medicacoes_em_uso).toBe('Nega uso de medicações oculares');
+});
+
 test('[REV-I5] "o colírio continua normal" não sustenta a Tobramicina inventada', () => {
   const t = _decTrat('blefarite, faz compressa e lava os cilios com shampoo. o colirio continua normal', 'Compressa morna\nHigiene palpebral\nTobramicina + dexametasona')
     .clonedAIResponse.dados.tratamento;

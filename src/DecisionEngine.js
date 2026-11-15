@@ -645,6 +645,76 @@
   }
 
   /**
+   * Guard 2h (regra do médico, 2026-11-15): MEDICAÇÃO DE OUTRA PESSOA não entra na consulta, e
+   * medicação ANTERIOR (já abandonada) é só oftalmológica e vai para `antecedentes_oftalmologicos`.
+   *
+   *  • Remédio citado SÓ como de terceiro ("minha mãe pinga Xalatan", "meu pai usa timolol") →
+   *    as linhas desse remédio saem de `medicacoes_em_uso` e de `tratamento`. Nada é movido.
+   *  • Remédio oftalmológico citado SÓ como passado explícito ("ano passado usei Tobrex",
+   *    "já usei dexametasona") → sai de `medicacoes_em_uso`/`tratamento` e entra em
+   *    `antecedentes_oftalmologicos` como "Uso prévio de <nome dito>" (nome e lastro vêm da fala).
+   *  • Se QUALQUER citação do remédio é atual (em uso, prescrição, manutenção), nada é mexido.
+   * Subtrativo: só remove linhas que NOMEIAM o remédio; nunca inventa nome.
+   */
+  const _TERCEIRO_RE = /\b(?:mae|pai|avo|avos|marido|esposa|filho|filha|irmao|irma|tia|tio|primo|prima|vizinh\w*|amig\w*|sogr\w*|cunhad\w*|namorad\w*)\b/g;
+  const _EU_ENTRE_RE = /\b(?:eu|uso|usando|estou|tomo|pingo|minha\s+vez|comigo)\b/;
+  const _PASSADO_EXPLICITO_RE = /ano\s+passado|anos\s+atras|meses\s+atras|tempo\s+atras|antigamente|\bja\s+(?:us|tom|ping)\w+|\busei\b.*\bantes\b/;
+  const _INICIO_DE_USO_RE = /comec|inici|passei\s+a|voltei|voltar|retom/;
+
+  function _classificarCitacao(a, t) {
+    const antes = t.slice(Math.max(0, a.indice - 80), a.indice).trim().split(/\s+/).slice(-7);
+    const depois = t.slice(a.indice + a.termo.length, a.indice + a.termo.length + 70).trim().split(/\s+/).slice(0, 7);
+    const janela = antes.join(' ');
+    // Terceiro: marcador de pessoa antes, sem "eu/uso/estou…" entre o marcador e o remédio.
+    let ult = -1;
+    antes.forEach((w, i) => { _TERCEIRO_RE.lastIndex = 0; if (_TERCEIRO_RE.test(w)) ult = i; });
+    if (ult >= 0 && !_EU_ENTRE_RE.test(antes.slice(ult + 1).join(' '))) return 'terceiro';
+    if (_PASSADO_EXPLICITO_RE.test(janela + ' ' + depois.join(' ')) && !_INICIO_DE_USO_RE.test(janela + ' ' + depois.join(' '))) return 'passado';
+    return 'atual';
+  }
+
+  function _guardMedicacaoDeOutraPessoa(cloned, ctx, log) {
+    const d = cloned.dados;
+    const Lexico = typeof globalThis !== 'undefined' ? globalThis.MedicamentosLexico : null;
+    if (!d || !Lexico || !ctx.transcribedText) return;
+    const t = Lexico.normalizarLexico(ctx.transcribedText);
+    const porId = new Map();
+    for (const a of Lexico.encontrarMedicamentos(ctx.transcribedText)) {
+      const r = porId.get(a.id) || { a, tipos: [] };
+      r.tipos.push(_classificarCitacao(a, t));
+      porId.set(a.id, r);
+    }
+    const removiveis = [...porId.values()].filter(r => r.tipos.length && r.tipos.every(x => x !== 'atual'));
+    if (!removiveis.length) return;
+
+    const tokensDe = (a) => Lexico.normalizarLexico(a.principio).split(/\s*\+\s*/).map(x => x.split(' ')[0]).filter(Boolean);
+    const linhaTem = (linha, a) => { const n = Lexico.normalizarLexico(linha); return tokensDe(a).some(tk => n.includes(tk)); };
+    const previos = [];
+    for (const r of removiveis) {
+      let tirou = false;
+      for (const campo of ['medicacoes_em_uso', 'tratamento']) {
+        if (typeof d[campo] !== 'string' || !d[campo].trim()) continue;
+        const linhas = d[campo].split('\n');
+        const resto = linhas.filter(l => !linhaTem(l, r.a));
+        if (resto.length !== linhas.length) {
+          // medicacoes_em_uso nunca fica vazio (contrato do prompt): o padrão do campo.
+          d[campo] = resto.join('\n').trim() || (campo === 'medicacoes_em_uso' ? 'Nega uso de medicações oculares' : null);
+          tirou = true;
+        }
+      }
+      const soPassado = r.tipos.every(x => x === 'passado');
+      if (soPassado && cloned.tipo_consulta !== 'retorno') previos.push(Lexico.nomeRegistrado(r.a));
+      if (tirou) log.push(`Guard 2h: ${r.a.principio} citado como ${soPassado ? 'uso anterior' : 'medicação de outra pessoa'} — fora de uso/tratamento`);
+    }
+    if (previos.length) {
+      const novo = 'Uso prévio de ' + previos.join(' + ');
+      const atual = typeof d.antecedentes_oftalmologicos === 'string' ? d.antecedentes_oftalmologicos.trim() : '';
+      if (!atual) d.antecedentes_oftalmologicos = novo;
+      else if (!_normalizeForGuard(atual).includes(_normalizeForGuard(previos[0]).split(' ')[0])) d.antecedentes_oftalmologicos = atual + '\n' + novo;
+    }
+  }
+
+  /**
    * Guard 2g (log 2026-11-09): remédio NOMEADO na fala não pode sair como classe.
    *
    * Regra do médico: havendo nome (comercial ou princípio ativo), o prontuário leva o
@@ -2524,6 +2594,7 @@
       rodar('_guardClasseAntibioticoSemFala', () => _guardClasseAntibioticoSemFala(cloned, ctx, guardsApplied));
       // Antes do 2e: ele copia linhas de medicacoes_em_uso para o tratamento, e a
       // cópia tem que levar o nome, não a classe (log 2026-11-09).
+      rodar('_guardMedicacaoDeOutraPessoa', () => _guardMedicacaoDeOutraPessoa(cloned, ctx, guardsApplied));
       rodar('_guardMedicamentoNomeadoNaFala', () => _guardMedicamentoNomeadoNaFala(cloned, ctx, guardsApplied));
       rodar('_guardColirioMantidoSemTratamento', () => _guardColirioMantidoSemTratamento(cloned, ctx, guardsApplied));
       // Depois do rebaixamento da "Associação": promove o colírio genérico da

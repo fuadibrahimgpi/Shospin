@@ -953,3 +953,10 @@ Antes de executá-lo, rodar a skill `revisao-final` sobre o resultado pronto: el
 - **I5** — "o colírio continua normal" / "pode parar o colírio" não sustentam a Tobramicina do protocolo.
 - **Pendente (depende do médico):** frequências padrão quando não ditas; calázio/terçol com pacote próprio; "lágrima artificial" como lubrificante; colírio contínuo sem menção; "mantido" genérico em retorno.
 - **Testes:** `[REV-C1..C4]`, `[REV-I1..I5]`.
+
+### 2026-11-15 — Medicação de outra pessoa e medicação anterior
+
+- **Pedido do usuário**: não usar medicação de outras pessoas na consulta; medicação anterior, somente oftalmológica, vai nos antecedentes oculares.
+- **Regra**: remédio de familiar/terceiro ("minha mãe pinga Xalatan") não entra em `medicacoes_em_uso`, `tratamento` nem em lugar nenhum (a doença do familiar segue em `antecedentes_familiares`, sem o remédio). Remédio oftalmológico **anterior** ("ano passado usei Tobrex") sai de uso/tratamento e vai em `antecedentes_oftalmologicos` como `Uso prévio de <nome dito>`. Anterior não oftalmológico não é registrado. Se qualquer citação do remédio é atual (em uso, prescrição, manutenção), nada é mexido.
+- **Implementação**: prompt (`gemini-interview-agent.js`, regra junto de `medicacoes_em_uso`) + guard `_guardMedicacaoDeOutraPessoa` (`DecisionEngine.js`). O guard só remove linhas que nomeiam o remédio; `medicacoes_em_uso` esvaziado volta ao padrão "Nega uso de medicações oculares" (contrato do prompt). Em retorno não há antecedente a criar: só sai de uso.
+- **Testes**: `[OUTRA-1..4]`.

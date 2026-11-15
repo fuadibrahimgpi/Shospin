@@ -241,7 +241,8 @@ test('[C4] Comentário "// Biomicroscopia" não aparece duplicado consecutivamen
 // CORREÇÃO 5 — dilatacaoDetectada é resetada no clearAll
 // ──────────────────────────────────────────────────────────────────────────────
 
-const injectionJsSource = readSrcNormalized('scripts', 'sidepanel-injection.js');
+// Módulo dividido em vários arquivos: os testes de texto olham o conjunto.
+const injectionJsSource = ['injection', 'cid', 'clear', 'direct-inject'].map(n => readSrcNormalized('scripts', `sidepanel-${n}.js`)).join('\n');
 
 test('[C5] clearAll reseta dilatacaoDetectada no bloco de clearAudio', () => {
   expect(injectionJsSource).toContain("StateManager.setHookFlag('dilatacaoDetectada', false);");
@@ -274,7 +275,7 @@ test('[C6] manualCaptureBtn é reabilitado no bloco finally', () => {
 // CORREÇÃO 7 — speechRecognition.onend verifica stopCommandTimeout
 // ──────────────────────────────────────────────────────────────────────────────
 
-const audioJsSource = readSrcNormalized('scripts', 'sidepanel-audio.js');
+const audioJsSource = ['audio', 'audio-processing', 'speech', 'audio-results'].map(n => readSrcNormalized('scripts', `sidepanel-${n}.js`)).join('\n');
 const initJsSource = readSrcNormalized('scripts', 'sidepanel-init.js');
 
 test('[C7] onend verifica !stopCommandTimeout antes de reiniciar speech', () => {

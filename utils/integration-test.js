@@ -301,7 +301,7 @@ test('[C7] A guarda !stopCommandTimeout está no bloco onend', () => {
 
 // Modularização 2026-07-02: CONDUTA_VALIDA_RE, MED_POSOLOGIA_RE e o prompt
 // clínico vivem em gemini-interview-agent.js (geminiService.js é só a fachada).
-const geminiJsSource = readSrcNormalized('src', 'gemini-interview-agent.js');
+const geminiJsSource = readSrcNormalized('src', 'gemini-interview-agent.js') + '\n' + readSrcNormalized('src', 'prompts', 'consultation-prompt.js');
 
 // Extrair e avaliar as regexes do arquivo real
 const MED_POSOLOGIA_RE = /\b\w[\w\s]{1,30}?\b\s*(?:\d+\s*(?:gota[s]?|mg|mcg|ml|UI|comp(?:rimido)?|cp)\b|\d+\s*x\s*[\/\s]?\s*(?:dia|semana|noite|manha|manhã)|\d+\/\d+\s*h|\b(?:4x|6x|8x|12x|2x|3x|1x)\/dia)/i;
@@ -1031,7 +1031,8 @@ test('[PRES-8] Injeta Presbiopia se multifocal é prescrito E há menção de ó
 // 2026-05-14 — _sanitizeCondutaTratamento corrigida (sem inversão compressa/higiene)
 // ──────────────────────────────────────────────────────────────────────────────
 
-const geminiSrcFull = readSrcNormalized('src', 'gemini-interview-agent.js');
+// Agente + prompt extraído (src/prompts/consultation-prompt.js): regras clínicas vivem nos dois.
+const geminiSrcFull = readSrcNormalized('src', 'gemini-interview-agent.js') + '\n' + readSrcNormalized('src', 'prompts', 'consultation-prompt.js');
 
 test('[SAN-1] CONDUTA_VALIDA_RE não contém "compressa" (compressa pertence ao tratamento)', () => {
   // Extrair a linha com CONDUTA_VALIDA_RE e verificar ausência de compressa

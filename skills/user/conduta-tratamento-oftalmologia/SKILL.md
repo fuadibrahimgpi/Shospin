@@ -159,6 +159,27 @@ Ao registrar um medicamento que o médico **prescreve**, use o nível mais espec
 
 Registrar a classe (`colírio hipotensor`) ou o genérico (`Medicação ocular prescrita`) **não** viola a regra anti-invenção de nomes: essas formas descrevem sem afirmar um princípio ativo que não foi dito.
 
+### Tratamento padrão da blefarite (regra do médico, 2026-11-15)
+
+A blefarite é recorrente e conduzida sempre com o mesmo pacote. O **gatilho são as orientações dadas ao paciente** na fala (evidência de blefarite + o item orientado) — não existe frase-gatilho. O sistema **padroniza o texto de cada item orientado**; nunca cria item que o médico não orientou.
+
+| Versão | Itens (cada um só se foi orientado) |
+|---|---|
+| Sem colírio | Compressa morna → higiene palpebral → lubrificante → ômega 3 oral |
+| Com colírio | o mesmo pacote + `Tobramicina + dexametasona` após a higiene |
+
+Texto padrão de cada item (posologia dita vence o padrão):
+
+- `Compressa morna por 2 min antes da higiene palpebral — 2x/dia`
+- `Higiene palpebral com <produto> — 3x/dia`
+- `Tobramicina + dexametasona 3x/dia após higiene palpebral`
+- `Carmelose sódica ou hialuronato de sódio em cada olho ao longo do dia` (lubrificante genérico; marca ou posologia dita é preservada)
+- `Ômega 3 (EPA+DHA) 1000 mg — 1 comprimido no almoço e 1 no jantar por 30 dias` (ômega 3 genérico; dose dita é preservada)
+
+**Produto da higiene — vem da fala:** `xampu infantil`; `gel de higiene palpebral (Hialurop)`; `gel de higiene palpebral (Blephagel)`; "gel" sem marca → `gel de higiene palpebral`. Higiene orientada sem produto dito → `xampu infantil` (padrão do consultório).
+
+Implementação: guard `_guardBlefaritePadrao` (`src/DecisionEngine.js`), depois de `_guardLubrificanteGenerico`. Ordem do resultado: compressa, higiene, colírio, lubrificante, ômega 3, demais linhas.
+
 ### Medicação da blefarite (aplicação do nível 1.5)
 
 O tratamento de blefarite deste consultório é: **compressa morna → higiene palpebral → colírio**. Quando o médico prescreve esse conjunto sem nomear o colírio, o colírio é `Tobramicina + dexametasona`.
@@ -912,3 +933,9 @@ Antes de executá-lo, rodar a skill `revisao-final` sobre o resultado pronto: el
 - **Comportamento anterior**: o `hasMention` do `_guardAssociacaoATB` era um OR — bastava a fala citar antibiótico **ou** corticoide para a linha `Associação (ATB + corticoide ocular)` sobreviver, afirmando a classe que não foi dita.
 - **Correção aplicada**: o guard agora separa a fala em `falaAntibiotico` e `falaCorticoide` (novo, em `_listasDoLexico`). Os dois ditos → mantém a associação; só antibiótico → `Colírio antibiótico`; só corticoide → `Colírio corticoide`; nenhum → `Medicação ocular prescrita`. Posologia preservada. Prompt (`gemini-interview-agent.js`) e esta skill ganharam a tabela das três situações.
 - **Testes**: `[DE-3e]` (só antibiótico), `[DE-3f]` (só corticoide) e `[DE-3g]` (os dois mantêm a associação) em `utils/integration-test.js`.
+
+### 2026-11-15 — Tratamento padrão da blefarite (pacote recorrente)
+
+- **Pedido do usuário**: criar injeção padrão para a blefarite — compressa morna, higiene (com xampu infantil ou gel de higiene palpebral: Hialurop ou Blephagel), lubrificante e ômega 3 oral; e a mesma versão acrescida de tobramicina + dexametasona. O gatilho deve ser pautado pelas orientações dadas ao paciente.
+- **Correção aplicada**: novo guard `_guardBlefaritePadrao` (ver seção "Tratamento padrão da blefarite"). Promove e padroniza, nunca cria. Produto da higiene lido da fala. Testes `[BLEF-PAD-1..5]`; testes `[DE-PROT-*]` e `[LUB-10]` atualizados para o texto padronizado; vault ganhou o passo.
+- **Decisão assumida (não confirmada)**: higiene orientada sem produto dito → xampu infantil; frequências padrão (compressa 2x/dia, higiene 3x/dia, colírio 3x/dia após a higiene) vêm do padrão já existente do consultório.

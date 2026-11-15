@@ -800,6 +800,54 @@ test('[DE-3g] Antibiótico E corticoide ditos → associação mantida', () => {
   expect(trat).toContain('Associação (ATB + corticoide ocular)');
 });
 
+function _blefPadrao(fala, tratamento) {
+  return DecisionEngine.buildDecision({
+    tipo_consulta: 'primeira_consulta',
+    dados: { hda: 'queixa', conduta: 'Retorno 1 mes', tratamento },
+    injectBlefarite: true,
+  }, { transcribedText: fala, hookFlags: {} }).clonedAIResponse.dados.tratamento;
+}
+
+test('[BLEF-PAD-1] sem colírio: compressa + higiene (xampu infantil) + lubrificante + ômega 3 padronizados', () => {
+  const t = _blefPadrao('blefarite, faz compressa morna, lava com shampoo, usa lubrificante e ômega 3',
+    'Compressa morna\nHigiene palpebral com shampoo infantil\nLubrificante ocular\nÔmega 3');
+  expect(t).toBe([
+    'Compressa morna por 2 min antes da higiene palpebral — 2x/dia',
+    'Higiene palpebral com xampu infantil — 3x/dia',
+    'Carmelose sódica ou hialuronato de sódio em cada olho ao longo do dia',
+    'Ômega 3 (EPA+DHA) 1000 mg — 1 comprimido no almoço e 1 no jantar por 30 dias',
+  ].join('\n'));
+  expect(t.includes('Tobramicina')).toBe(false);
+});
+
+test('[BLEF-PAD-2] com colírio: mesmo pacote + tobramicina + dexametasona após a higiene', () => {
+  const t = _blefPadrao('blefarite, compressa morna, lava com shampoo e depois pinga o colírio de antibiótico com corticoide, pode usar lubrificante e ômega 3',
+    'Compressa morna\nHigiene palpebral com shampoo infantil\nTobramicina + dexametasona\nLubrificante ocular\nÔmega 3');
+  expect(t).toContain('Tobramicina + dexametasona 3x/dia após higiene palpebral');
+  expect(t.split('\n').length).toBe(5);
+  expect(t.indexOf('Higiene') < t.indexOf('Tobramicina')).toBe(true);
+});
+
+test('[BLEF-PAD-3] higiene com gel: Blephagel e Hialurop vêm da fala', () => {
+  const base = 'Compressa morna\nHigiene palpebral com shampoo infantil';
+  expect(_blefPadrao('blefarite, compressa morna e higiene com o blephagel', base)).toContain('Higiene palpebral com gel de higiene palpebral (Blephagel)');
+  expect(_blefPadrao('blefarite, compressa morna e higiene com o hialurop', base)).toContain('Higiene palpebral com gel de higiene palpebral (Hialurop)');
+  expect(_blefPadrao('blefarite, compressa morna e higiene com um gel', base)).toContain('Higiene palpebral com gel de higiene palpebral —');
+});
+
+test('[BLEF-PAD-4] promove, nunca cria: item não orientado não aparece; posologia dita vence o padrão', () => {
+  const t = _blefPadrao('blefarite, faz a compressa morna 3 vezes ao dia', 'Compressa morna 3x/dia');
+  expect(t).toBe('Compressa morna por 2 min antes da higiene palpebral — 3x/dia');
+  expect(t.includes('Ômega')).toBe(false);
+  expect(t.includes('Higiene')).toBe(false);
+  expect(t.includes('Tobramicina')).toBe(false);
+});
+
+test('[BLEF-PAD-5] sem blefarite na fala o tratamento não é mexido', () => {
+  const t = _blefPadrao('olho seco, usa lubrificante e compressa morna', 'Compressa morna\nLubrificante ocular');
+  expect(t.includes('por 2 min antes da higiene palpebral')).toBe(false);
+});
+
 test('[DE-3b2] Na blefarite, "Associação ATB+corticoide" é PROMOVIDA ao protocolo declarado', () => {
   const raw = {
     tipo_consulta: 'primeira_consulta',
@@ -882,7 +930,7 @@ test('[DE-PROT-1] Combo compressa+shampoo+colírio: linha genérica vira "Tobram
   expect(trat.includes('Medicação ocular prescrita')).toBe(false);
   // Compressa e higiene não são o colírio — permanecem intactas.
   expect(trat.includes('Compressa morna')).toBe(true);
-  expect(trat.includes('Higiene palpebral com shampoo infantil')).toBe(true);
+  expect(trat.includes('Higiene palpebral com xampu infantil')).toBe(true);
   expect(raw.dados.tratamento.includes('Medicação ocular prescrita')).toBe(true);
 });
 
@@ -937,7 +985,7 @@ test('[DE-PROT-4] PROMOVE, nunca CRIA: sem colírio prescrito, nenhuma linha é 
     hookFlags: {},
   });
   const trat = decision.clonedAIResponse.dados.tratamento;
-  expect(trat).toBe('Compressa morna 2x/dia\nHigiene palpebral com shampoo infantil');
+  expect(trat).toBe('Compressa morna por 2 min antes da higiene palpebral — 2x/dia\nHigiene palpebral com xampu infantil — 3x/dia');
   expect(trat.includes('Tobramicina')).toBe(false);
 });
 
@@ -981,8 +1029,8 @@ test('[DE-PROT-7] A posologia canônica ("após higiene palpebral") não impede 
     hookFlags: {},
   });
   const linhas = decision.clonedAIResponse.dados.tratamento.split('\n');
-  expect(linhas[0]).toBe('Compressa morna 2 min — 2x/dia');
-  expect(linhas[1]).toBe('Higiene palpebral com shampoo infantil');
+  expect(linhas[0]).toBe('Compressa morna por 2 min antes da higiene palpebral — 2x/dia');
+  expect(linhas[1]).toBe('Higiene palpebral com xampu infantil — 3x/dia');
   expect(linhas[2]).toBe('Tobramicina + dexametasona 3x/dia após higiene palpebral');
   expect(linhas[3]).toBe('Tobramicina + dexametasona após a compressa');
 });
@@ -1099,7 +1147,7 @@ test('[DE-PROT-12] Pingar do lubrificante não PROMOVE a linha genérica ao prot
   // Igualdade exata, não só "sem Tobramicina": se a promoção disparasse, o guard 2c
   // apagaria a linha promovida e um includes() seguiria verde sem guardar o 2b.
   expect(decision.clonedAIResponse.dados.tratamento)
-    .toBe('Compressa morna\nMedicação ocular prescrita\nCarmelose sódica ou hialuronato de sódio');
+    .toBe('Compressa morna por 2 min antes da higiene palpebral — 2x/dia\nCarmelose sódica ou hialuronato de sódio em cada olho ao longo do dia\nMedicação ocular prescrita');
 });
 
 test('[DE-PROT-14] "pinga esse aqui depois da limpeza" com lubrificante logo depois continua sendo o colírio', () => {
@@ -2297,7 +2345,7 @@ test('[LUB-9] o registro novo escrito pelo modelo na conduta ainda vai para o tr
 test('[LUB-10] a linha do lubrificante nunca é promovida ao protocolo da blefarite', () => {
   const d = _lubDecision(`Compressa morna\nMedicação ocular prescrita\n${LUB_PADRAO}`,
     'a blefarite deixa a palpebra inflamada, faz compressa morna e lava os cilios com shampoo, e um lubrificante que pode pingar');
-  expect(d.clonedAIResponse.dados.tratamento).toBe(`Compressa morna\nMedicação ocular prescrita\n${LUB_PADRAO}`);
+  expect(d.clonedAIResponse.dados.tratamento).toBe(`Compressa morna por 2 min antes da higiene palpebral — 2x/dia\n${LUB_PADRAO} em cada olho ao longo do dia\nMedicação ocular prescrita`);
 });
 
 test('[GCC-4] _guardCondutaContaminada move ômega 3 de conduta para tratamento', () => {

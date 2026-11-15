@@ -29,22 +29,23 @@ Lista tirada do código em 2026-11-11. Inclui a normalização de tipos, os guar
 11. `_guardColirioBlefariteSemPrescricao`
 12. `_guardCondutaContaminada`
 13. `_guardLubrificanteGenerico`
-14. `_avisoTratamentoSemNomeRemedioEmUso`
-15. `_guardMultifocalSemEvidencia`
-16. `_guardManutencaoOculos`
-17. `_guardAntecedentesNegativaFabricada`
-18. `_guardComorbidadesNegativaFabricada`
-19. `_guardPseudofaciaSemEvidencia`
-20. `_guardNervoOpticoSemEvidencia`
-21. `_guardOculosNaConduta`
-22. `_guardPresbiopiaObrigatoria`
-23. `_ordenaOlhosODPrimeiro`
-24. `_guardTratamentoVazioComMedicacao`
-25. `_sombraMedicamentos`
-26. `_sombraItensMedicamentos`
-27. `_reconcileInjectFlags`
-28. `_avisoBiomicroscopiaOrfa`
-29. `_avisoFundoscopiaInterpretativa`
+14. `_guardBlefaritePadrao`
+15. `_avisoTratamentoSemNomeRemedioEmUso`
+16. `_guardMultifocalSemEvidencia`
+17. `_guardManutencaoOculos`
+18. `_guardAntecedentesNegativaFabricada`
+19. `_guardComorbidadesNegativaFabricada`
+20. `_guardPseudofaciaSemEvidencia`
+21. `_guardNervoOpticoSemEvidencia`
+22. `_guardOculosNaConduta`
+23. `_guardPresbiopiaObrigatoria`
+24. `_ordenaOlhosODPrimeiro`
+25. `_guardTratamentoVazioComMedicacao`
+26. `_sombraMedicamentos`
+27. `_sombraItensMedicamentos`
+28. `_reconcileInjectFlags`
+29. `_avisoBiomicroscopiaOrfa`
+30. `_avisoFundoscopiaInterpretativa`
 
 ## Modo sombra dos itens de medicação (2026-11-11)
 

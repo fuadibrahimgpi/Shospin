@@ -430,6 +430,93 @@
     log.push(`Colírio da blefarite promovido para "${listas.protocoloNome}" — protocolo declarado do médico (nível 1.5), ${promovidas} linha(s)`);
   }
 
+
+  /**
+   * Guard 2m: TRATAMENTO PADRÃO DA BLEFARITE (regra do médico, 2026-11-15).
+   *
+   * A blefarite é recorrente; o médico a conduz sempre com o mesmo pacote:
+   *   compressa morna → higiene palpebral → (tobramicina + dexametasona, na versão com
+   *   colírio) → lubrificante → ômega 3 oral.
+   * O GATILHO são as ORIENTAÇÕES DADAS AO PACIENTE na fala (evidência de blefarite + o item
+   * orientado), nunca uma frase-gatilho. Este guard PADRONIZA o texto de cada item que o
+   * médico orientou — promove, nunca cria (a regra anti-invenção continua valendo; foi o bug
+   * de 2026-09-15). Posologia dita ou já presente na linha sempre vence o padrão.
+   *
+   * Higiene: o produto vem da fala — xampu infantil, ou gel de higiene palpebral
+   * (Hialurop ou Blephagel). Sem produto dito → xampu infantil (padrão do consultório).
+   */
+  const _BLEF_PAD = {
+    compressa: 'Compressa morna por 2 min antes da higiene palpebral',
+    compressaPosologiaPadrao: ' — 2x/dia',
+    higienePosologiaPadrao: ' — 3x/dia',
+    tobraDexaPosologiaPadrao: ' 3x/dia após higiene palpebral',
+    lubrificante: 'Carmelose sódica ou hialuronato de sódio em cada olho ao longo do dia',
+    omega3: 'Ômega 3 (EPA+DHA) 1000 mg — 1 comprimido no almoço e 1 no jantar por 30 dias',
+  };
+
+  function _produtoHigieneDaFala(fala) {
+    if (/blephagel|blefagel|blefa\s*gel/.test(fala)) return 'gel de higiene palpebral (Blephagel)';
+    if (/hialurop/.test(fala)) return 'gel de higiene palpebral (Hialurop)';
+    if (/\bgel\b/.test(fala) && !/xampu|shampoo|shampu/.test(fala)) return 'gel de higiene palpebral';
+    return 'xampu infantil';
+  }
+
+  function _guardBlefaritePadrao(cloned, ctx, log) {
+    const tratamento = cloned.dados && cloned.dados.tratamento;
+    if (!tratamento) return;
+    if (!_detectBlefariteEvidencia(ctx.transcribedText).qualquer) return;
+    const fala = _normalizeForGuard(ctx.transcribedText || '');
+
+    // Cada linha do tratamento cai em UMA categoria; o resto passa intacto.
+    const cat = { compressa: null, higiene: null, tobra: null, lubrificante: null, omega: null };
+    const outras = [];
+    const posologia = (l) => {
+      const m = l.match(/\s[—-]\s.*$|\s\d+\s*x\s*\/?\s*(?:dia|ao dia)\b.*$|\s\d+x\/dia.*$/i);
+      return m ? m[0] : '';
+    };
+    for (const linha of tratamento.split('\n')) {
+      const t = linha.trim();
+      if (!t) continue;
+      const n = _normalizeForGuard(t);
+      if (/^(?:[-•*]\s*)?compressa/.test(n)) { if (!cat.compressa) cat.compressa = t; else outras.push(t); }
+      else if (/^(?:[-•*]\s*)?higiene/.test(n)) { if (!cat.higiene) cat.higiene = t; else outras.push(t); }
+      else if (/^(?:[-•*]\s*)?tobramicina\s*\+\s*dexametasona/.test(n)) { if (!cat.tobra) cat.tobra = t; else outras.push(t); }
+      else if (/^(?:[-•*]\s*)?(?:carmelose|hialuronato|lubrificante)/.test(n)) { if (!cat.lubrificante) cat.lubrificante = t; else outras.push(t); }
+      else if (/^(?:[-•*]\s*)?omega/.test(n)) { if (!cat.omega) cat.omega = t; else outras.push(t); }
+      else outras.push(t);
+    }
+    // Nada do pacote da blefarite no tratamento → não há o que padronizar.
+    if (!cat.compressa && !cat.higiene && !cat.tobra) return;
+
+    const novas = [];
+    if (cat.compressa) {
+      const p = posologia(cat.compressa);
+      novas.push(_BLEF_PAD.compressa + (p ? (/^\s*\d/.test(p) ? ' — ' + p.trim() : p) : _BLEF_PAD.compressaPosologiaPadrao));
+    }
+    if (cat.higiene) {
+      const p = posologia(cat.higiene);
+      novas.push('Higiene palpebral com ' + _produtoHigieneDaFala(fala) + (p ? (/^\s*\d/.test(p) ? ' — ' + p.trim() : p) : _BLEF_PAD.higienePosologiaPadrao));
+    }
+    if (cat.tobra) {
+      // A linha já é nomeada (marca, posologia ou "até acabar" ditos): só completa quando é o nome puro.
+      novas.push(/^(?:[-•*]\s*)?tobramicina\s*\+\s*dexametasona\s*$/i.test(cat.tobra) ? cat.tobra + _BLEF_PAD.tobraDexaPosologiaPadrao : cat.tobra);
+    }
+    if (cat.lubrificante) {
+      // Lubrificante já nomeado (marca/princípio) ou com posologia dita é preservado.
+      const generico = /^(?:[-•*]\s*)?(?:carmelose s[óo]dica ou hialuronato de s[óo]dio|lubrificante(?: ocular)?)\s*$/i.test(cat.lubrificante);
+      novas.push(generico ? _BLEF_PAD.lubrificante : cat.lubrificante);
+    }
+    if (cat.omega) {
+      const generico = /^(?:[-•*]\s*)?[ôo]mega\s*3\s*$/i.test(cat.omega);
+      novas.push(generico ? _BLEF_PAD.omega3 : cat.omega);
+    }
+    const final = novas.concat(outras).join('\n');
+    if (final !== tratamento) {
+      cloned.dados.tratamento = final;
+      log.push('Tratamento da blefarite padronizado (higiene: ' + _produtoHigieneDaFala(fala) + ')');
+    }
+  }
+
   /**
    * Guard 2c: o protocolo NOMEIA o colírio, nunca o CRIA — o inverso do Guard 2b.
    *
@@ -2373,6 +2460,7 @@
       // Depois da contaminada (traz o lubrificante da conduta) e do protocolo da
       // blefarite (que ainda lê "Lubrificante ocular" como não-colírio).
       rodar('_guardLubrificanteGenerico', () => _guardLubrificanteGenerico(cloned, ctx, guardsApplied));
+      rodar('_guardBlefaritePadrao', () => _guardBlefaritePadrao(cloned, ctx, guardsApplied));
       // Depois de TODOS os guards de medicação: só avisa da linha que ninguém nomeou.
       rodar('_avisoTratamentoSemNomeRemedioEmUso', () => _avisoTratamentoSemNomeRemedioEmUso(cloned, ctx, guardsApplied));
       // Antes do guard de presbiopia: PADRAO_MULTIFOCAL lê a conduta, e uma
